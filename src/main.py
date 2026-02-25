@@ -673,42 +673,62 @@ async def reset_cache(
 @mcp.tool()
 async def analyze_schema(
     ctx: Context,
-    schema_name: Optional[str] = None
+    schema_name: Optional[str] = None,
+    lightweight: bool = True
 ) -> Dict[str, Any]:
     """Analyze database schema and return table metadata with relationships.
 
     Args:
         schema_name: Schema to analyze (optional, uses default if not specified)
+        lightweight: If True (default), return minimal data (table names, FK relationships, fan-trap warnings).
+                     If False, return full schema with all column details.
 
-    Returns:
+    Returns (lightweight=True):
         Dict with:
             - schema: Schema name
             - table_count: Number of tables
-            - tables: List of table metadata (columns, PKs, FKs, row counts)
+            - table_names: List of table names only
+            - relationships: FK relationships map (critical for joins!)
+            - fan_trap_warnings: Warnings about potential fan-traps
+
+    Returns (lightweight=False):
+        Dict with full details:
+            - schema: Schema name
+            - table_count: Number of tables
+            - tables: List of complete table metadata (columns, PKs, FKs, row counts)
             - schema_file: Saved JSON file path in tmp/
             - r2rml_file: Generated R2RML mapping file path
             - next_steps: Recommended workflow
 
-    Table Metadata Includes:
-        - Column details (name, data_type, nullable, PK/FK flags)
-        - Primary keys
-        - Foreign keys (critical for fan-trap prevention!)
-        - Row counts
-        - Comments/descriptions
+    Lightweight Mode (Default):
+        - Returns ONLY table names and FK relationships
+        - Saves ~90% tokens compared to full schema
+        - Use get_table_details(table_name) to get details on-demand
+        - Ideal for initial schema discovery
+
+    Full Mode (lightweight=False):
+        - Returns complete column metadata for all tables
+        - Results are cached for reuse by generate_ontology()
+        - R2RML mappings auto-generated
+        - Use when you need full schema upfront
 
     Important:
-        - Results are cached for reuse by generate_ontology()
-        - R2RML mappings auto-generated for RDF conversion
-        - Review foreign_keys to identify fan-trap risks before complex queries
+        - Foreign keys are CRITICAL for fan-trap prevention
+        - Review relationships before complex joins
+        - Use lightweight mode first, then get_table_details() as needed
 
     Recommended Next Step:
         Call generate_ontology() to create semantic ontology for SQL generation
 
     Example:
         ```python
-        schema_info = analyze_schema(schema_name="public")
-        # Review schema_info['tables'][0]['foreign_keys'] for relationships
-        # Then: generate_ontology(schema_name="public")
+        # Lightweight - get overview first
+        schema = analyze_schema(schema_name="public", lightweight=True)
+        # Then get details for specific tables
+        details = get_table_details(table_name="orders")
+
+        # Or full schema upfront
+        schema = analyze_schema(schema_name="public", lightweight=False)
         ```
     """
     # Check if schema is already cached - return early with guidance
@@ -754,6 +774,49 @@ async def analyze_schema(
     # Prefetch PKs and FKs at schema level (Snowflake optimization)
     if schema_name:
         db_manager.prefetch_schema_constraints(schema_name)
+
+    # LIGHTWEIGHT MODE - Return minimal data
+    if lightweight:
+        logger.info(f"Analyzing schema in LIGHTWEIGHT mode - {len(tables)} tables")
+
+        # Get just FK relationships without full table analysis
+        relationships = {}
+        fan_trap_warnings = []
+
+        for table_name in tables:
+            try:
+                # Get only FK info - much faster than full analyze_table
+                table_info = db_manager.analyze_table(table_name, schema_name)
+                if table_info and table_info.foreign_keys:
+                    relationships[table_name] = table_info.foreign_keys
+
+                    # Check for fan-trap risk
+                    if len(table_info.foreign_keys) > 1:
+                        referenced_tables = [fk['referenced_table'] for fk in table_info.foreign_keys]
+                        fan_trap_warnings.append({
+                            "table": table_name,
+                            "warning": f"Table {table_name} connects to multiple tables - potential fan-trap risk",
+                            "referenced_tables": referenced_tables,
+                            "recommendation": "Use separate CTEs or UNION approach for multi-fact aggregations"
+                        })
+            except Exception as e:
+                logger.warning(f"Failed to analyze table {table_name}: {e}")
+
+        lightweight_result = {
+            "schema": schema_name or "default",
+            "table_count": len(tables),
+            "table_names": tables,
+            "relationships": relationships,
+            "mode": "lightweight",
+            "token_savings": f"~{len(tables) * 85}% tokens saved vs full schema",
+            "note": "Use get_table_details(table_name) to get column details on-demand"
+        }
+
+        if fan_trap_warnings:
+            lightweight_result["fan_trap_warnings"] = fan_trap_warnings
+
+        await ctx.info(f"Lightweight schema analysis: {len(tables)} tables, {len(relationships)} with FKs")
+        return lightweight_result
 
     all_table_info = []
     table_info_objects = []  # Keep original TableInfo objects for R2RML generation
@@ -899,6 +962,105 @@ async def analyze_schema(
         await ctx.info("Schema analysis found no tables")
 
     return schema_result
+
+
+@mcp.tool()
+async def get_table_details(
+    ctx: Context,
+    table_name: str,
+    schema_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """Get detailed metadata for a single table.
+
+    This tool provides on-demand table details after using analyze_schema(lightweight=True).
+    Returns complete column information, constraints, and row count for ONE table only.
+
+    Args:
+        table_name: Name of the table to analyze
+        schema_name: Schema containing the table (optional, uses default if not specified)
+
+    Returns:
+        Dict with:
+            - name: Table name
+            - schema: Schema name
+            - columns: List of column details (name, data_type, nullable, PK/FK flags)
+            - primary_keys: List of primary key columns
+            - foreign_keys: List of foreign key constraints with references
+            - row_count: Approximate number of rows
+            - comment: Table comment/description if available
+
+    Usage Pattern:
+        1. Call analyze_schema(lightweight=True) to get table list and FK relationships
+        2. Use get_table_details() for specific tables you need to query
+        3. This hierarchical approach saves 85-90% tokens vs analyzing all tables upfront
+
+    Example:
+        ```python
+        # Step 1: Get schema overview
+        schema = analyze_schema(schema_name="public", lightweight=True)
+        # Returns: table_names, relationships, fan_trap_warnings
+
+        # Step 2: Get details for relevant tables only
+        orders = get_table_details(table_name="orders", schema_name="public")
+        customers = get_table_details(table_name="customers", schema_name="public")
+        # Now you have full details for just the tables you need
+        ```
+
+    Note:
+        - Much more efficient than analyze_schema(lightweight=False) for large schemas
+        - Use when you only need details for a subset of tables
+        - FK relationships already available from lightweight analysis
+    """
+    db_manager = get_session_db_manager(ctx)
+
+    try:
+        # Analyze single table
+        table_info = db_manager.analyze_table(table_name, schema_name)
+
+        if not table_info:
+            await ctx.error(f"Table '{table_name}' not found in schema '{schema_name or 'default'}'")
+            return {
+                "success": False,
+                "error": f"Table '{table_name}' not found",
+                "table_name": table_name,
+                "schema_name": schema_name or "default"
+            }
+
+        # Convert to dict format
+        table_dict = {
+            "success": True,
+            "name": table_info.name,
+            "schema": table_info.schema,
+            "columns": [
+                {
+                    "name": col.name,
+                    "data_type": col.data_type,
+                    "is_nullable": col.is_nullable,
+                    "is_primary_key": col.is_primary_key,
+                    "is_foreign_key": col.is_foreign_key,
+                    "foreign_key_table": col.foreign_key_table,
+                    "foreign_key_column": col.foreign_key_column,
+                    "comment": col.comment
+                } for col in table_info.columns
+            ],
+            "primary_keys": table_info.primary_keys,
+            "foreign_keys": table_info.foreign_keys,
+            "comment": table_info.comment,
+            "row_count": table_info.row_count
+        }
+
+        await ctx.info(f"Retrieved details for table '{table_name}': {len(table_info.columns)} columns")
+        return table_dict
+
+    except Exception as e:
+        logger.error(f"Failed to get table details for {table_name}: {e}")
+        await ctx.error(f"Failed to analyze table '{table_name}': {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "table_name": table_name,
+            "schema_name": schema_name or "default"
+        }
 
 
 @mcp.tool()

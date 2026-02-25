@@ -58,15 +58,14 @@ def get_analysis_context(
             tables = db_manager.get_tables(schema_name)
             logger.debug(f"Found {len(tables)} tables in schema '{schema_name or 'default'}'")
             
-            # Sequential table analysis 
+            # Sequential table analysis
             all_table_info = []
-            sample_data_dict = {}
             for table_name in tables:
                 try:
                     table_info = db_manager.analyze_table(table_name, schema_name)
                     if table_info:
                         # Convert dataclass to dict for JSON serialization
-                        # Separate schema structure from sample data
+                        # Schema structure only - no sample data
                         schema_table = {
                             "name": table_info.name,
                             "schema": table_info.schema,
@@ -88,10 +87,6 @@ def get_analysis_context(
                             "row_count": table_info.row_count
                         }
                         all_table_info.append(schema_table)
-                        
-                        # Store sample data separately if available
-                        if table_info.sample_data:
-                            sample_data_dict[table_info.name] = table_info.sample_data
                 except Exception as e:
                     logger.warning(f"Failed to analyze table {table_name}: {e}")
             
@@ -119,7 +114,6 @@ def get_analysis_context(
             
         result = {
             "schema_analysis": schema_data,
-            "sample_data": sample_data_dict,
             "relationships": relationships,
             "sql_hints": {
                 "workflow": [
@@ -130,11 +124,7 @@ def get_analysis_context(
                     "5. Validate SQL syntax before execution",
                     "6. Execute queries with appropriate limits"
                 ],
-                "data_separation": [
-                    "schema_analysis: Pure schema structure (for generate_semantic_descriptions)",
-                    "sample_data: Actual data samples (optional for additional context)",
-                    "Use schema_analysis for semantic analysis, sample_data only if needed"
-                ]
+                "note": "Sample data removed for token efficiency. Use sample_table_data() for specific tables if needed."
             }
         }
         
