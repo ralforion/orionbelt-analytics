@@ -100,12 +100,11 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 5. `execute_sql_query()` → Run validated SQL with fan-trap protection
 6. `generate_chart()` → Visualize results
 
-## Detailed Guides Available
+## Critical Guides (Claude Skills)
 
-For complete reference with examples, invoke these prompts from Claude Desktop:
-- **fan_trap_guide** - Fan-trap prevention patterns and solutions
-- **sql_patterns** - SQL best practices and identifier qualification
-- **chart_guide** - Chart generation examples for all types
+- **Fan-trap prevention:** `/fan-trap-prevention` - Prevent data multiplication in multi-table queries
+- **SQL best practices:** `/sql-best-practices` - Identifier qualification and safe patterns
+- **Chart examples:** `/chart-examples` - Visualization guide for all chart types
 
 ## Key Features
 
@@ -124,6 +123,13 @@ For complete reference with examples, invoke these prompts from Claude Desktop:
 - Connection pooling
 - Parallel schema analysis
 - Cached ontology and schema data
+
+## Important Notes
+
+- Always fully qualify identifiers: `schema.table.column`
+- Review foreign_keys from analyze_schema() before complex JOINs
+- Use validate_sql_syntax() before executing queries
+- For multi-fact aggregation, use UNION ALL pattern (see /fan-trap-prevention)
 
 Version: {__version__}
 Supported Databases: PostgreSQL, Snowflake, Dremio
@@ -177,56 +183,6 @@ def chart_examples_skill() -> str:
     if skills_path.exists():
         return skills_path.read_text()
     return "Chart examples skill not found. Please ensure .claude/skills/chart-examples.md exists."
-
-
-# --- MCP Prompts: Detailed Guides ---
-# These appear in Claude Desktop's prompt picker for on-demand reference
-
-@mcp.prompt()
-async def fan_trap_guide() -> str:
-    """Complete fan-trap prevention guide with patterns and examples.
-
-    Use this for detailed fan-trap solutions including:
-    - 4 safe query patterns (UNION ALL, separate aggregation, window functions)
-    - Detection checklist
-    - Common problematic combinations
-    - Validation steps
-    """
-    skills_path = Path(__file__).parent.parent / ".claude" / "skills" / "fan-trap-prevention.md"
-    if skills_path.exists():
-        return skills_path.read_text()
-    return "Fan-trap guide not found."
-
-@mcp.prompt()
-async def sql_patterns() -> str:
-    """SQL best practices and common query patterns.
-
-    Includes:
-    - Identifier qualification examples
-    - Common patterns (JOINs, CTEs, subqueries, window functions)
-    - Cross-schema queries
-    - Best practices checklist
-    """
-    skills_path = Path(__file__).parent.parent / ".claude" / "skills" / "sql-best-practices.md"
-    if skills_path.exists():
-        return skills_path.read_text()
-    return "SQL patterns guide not found."
-
-@mcp.prompt()
-async def chart_guide() -> str:
-    """Complete chart generation guide with 9 examples.
-
-    Covers all chart types:
-    - Bar charts (simple, stacked, grouped)
-    - Line charts (single and multi-measure)
-    - Scatter plots
-    - Heatmaps
-    - Styling and error handling
-    """
-    skills_path = Path(__file__).parent.parent / ".claude" / "skills" / "chart-examples.md"
-    if skills_path.exists():
-        return skills_path.read_text()
-    return "Chart examples guide not found."
 
 
 # --- Dependency Management ---
