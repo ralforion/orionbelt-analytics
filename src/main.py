@@ -157,6 +157,34 @@ def chart_viewer_resource() -> str:
     return CHART_VIEWER_HTML
 
 
+# --- MCP Resources: Skills ---
+# Serve skill documentation as MCP resources for HTTP transport compatibility
+
+@mcp.resource("skill://fan-trap-prevention")
+def fan_trap_prevention_skill() -> str:
+    """Fan-trap prevention guide - comprehensive patterns and solutions."""
+    skills_path = Path(__file__).parent.parent / ".claude" / "skills" / "fan-trap-prevention.md"
+    if skills_path.exists():
+        return skills_path.read_text()
+    return "Fan-trap prevention skill not found. Please ensure .claude/skills/fan-trap-prevention.md exists."
+
+@mcp.resource("skill://sql-best-practices")
+def sql_best_practices_skill() -> str:
+    """SQL best practices - identifier qualification and common patterns."""
+    skills_path = Path(__file__).parent.parent / ".claude" / "skills" / "sql-best-practices.md"
+    if skills_path.exists():
+        return skills_path.read_text()
+    return "SQL best practices skill not found. Please ensure .claude/skills/sql-best-practices.md exists."
+
+@mcp.resource("skill://chart-examples")
+def chart_examples_skill() -> str:
+    """Chart generation examples - all chart types with complete examples."""
+    skills_path = Path(__file__).parent.parent / ".claude" / "skills" / "chart-examples.md"
+    if skills_path.exists():
+        return skills_path.read_text()
+    return "Chart examples skill not found. Please ensure .claude/skills/chart-examples.md exists."
+
+
 # --- Dependency Management ---
 
 class SessionData:
