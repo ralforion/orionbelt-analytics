@@ -81,274 +81,59 @@ mcp = FastMCP(
     instructions="""
 # OrionBelt Analytics - Database Ontology MCP Server
 
-A sophisticated MCP server that provides **semantic database understanding** through ontology generation,
-enabling accurate Text-to-SQL with automatic fan-trap prevention and relationship-aware query construction.
+Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 
-## 🎯 PURPOSE
+## Core Capabilities
 
-This server transforms raw database schemas into **semantic ontologies** that provide:
-- **Database schema linking** via RDF/OWL ontologies with db: namespace annotations
-- **Relationship-aware SQL generation** with automatic JOIN condition inference
-- **Fan-trap prevention** through relationship analysis and safe query patterns
-- **Secure query execution** with syntax validation and injection prevention
-- **Interactive data visualization** for analytical insights
+- **Database Connectivity:** PostgreSQL, Snowflake, Dremio
+- **Schema Intelligence:** Table/column analysis with relationship mapping
+- **Ontology Generation:** RDF/OWL with db: namespace linking to SQL tables
+- **Safe SQL Execution:** Fan-trap detection, injection prevention, query validation
+- **Data Visualization:** Interactive charts (Matplotlib, Plotly)
 
-## 🔧 CORE CAPABILITIES
+## Recommended Workflow
 
-### 1. Database Connectivity
-- **PostgreSQL** - Full support with connection pooling
-- **Snowflake** - Cloud data warehouse integration
-- **Dremio** - Distributed query engine support (REST API)
+1. `connect_database()` → Establish secure connection
+2. `list_schemas()` → Discover available schemas
+3. `analyze_schema()` → Get schema structure with relationships
+4. `generate_ontology()` → Create semantic ontology with db: annotations
+5. `execute_sql_query()` → Run validated SQL with fan-trap protection
+6. `generate_chart()` → Visualize results
 
-### 2. Schema Intelligence
-- Comprehensive table/column analysis with metadata
-- Foreign key relationship mapping (critical for preventing data corruption)
-- Primary key constraint identification
-- Data type mapping and validation
-- Row count statistics per table
+## Critical Guides (Claude Skills)
 
-### 3. Ontology Generation (Key Differentiator)
-- **RDF/OWL ontology** creation from database schemas
-- **db: namespace annotations** linking ontology classes to SQL tables/columns
-- **Relationship preservation** capturing 1:1, 1:many, and many:many patterns
-- **XSD type mapping** for proper data type handling
-- Output in Turtle (.ttl) format with human-readable structure
+- **Fan-trap prevention:** `/fan-trap-prevention` - Prevent data multiplication in multi-table queries
+- **SQL best practices:** `/sql-best-practices` - Identifier qualification and safe patterns
+- **Chart examples:** `/chart-examples` - Visualization guide for all chart types
 
-### 4. Safe SQL Execution
-- **Fan-trap detection** and prevention guidance
-- **SQL injection protection** with pattern validation
-- **Query validation** before execution
-- **Controlled result limits** to prevent memory exhaustion
-- **Execution monitoring** with performance metrics
+## Key Features
 
-### 5. Data Visualization
-- Interactive and static chart generation (Matplotlib, Plotly)
-- Bar charts, line plots, scatter plots, and heatmaps
-- Direct integration with SQL query results
-- Memory-efficient rendering without base64 encoding
+**Ontology-Enhanced SQL:**
+- db: namespace annotations link ontology classes to SQL tables
+- Automatic JOIN condition generation from relationships
+- Business-friendly semantic layer over technical schemas
 
-## 📋 RECOMMENDED WORKFLOWS
+**Security:**
+- SQL injection prevention
+- Read-only enforcement
+- Query timeout protection
+- Result size limits (max 10,000 rows)
 
-### Workflow 1: Complete Schema Analysis → Ontology → SQL (RECOMMENDED)
+**Performance:**
+- Connection pooling
+- Parallel schema analysis
+- Cached ontology and schema data
 
-**Purpose:** Generate accurate SQL with semantic context and fan-trap prevention
+## Important Notes
 
-**Tool Chain:**
-```
-1. connect_database(db_type="postgresql")
-   → Establish secure database connection
+- Always fully qualify identifiers: `schema.table.column`
+- Review foreign_keys from analyze_schema() before complex JOINs
+- Use validate_sql_syntax() before executing queries
+- For multi-fact aggregation, use UNION ALL pattern (see /fan-trap-prevention)
 
-2. list_schemas()
-   → Discover available schemas in the database
-
-3. analyze_schema(schema_name="public")
-   → Get complete schema structure with relationships
-   → CRITICAL: Review foreign_keys for each table (fan-trap analysis)
-   → Output includes: tables, columns, PKs, FKs, row counts
-
-4. generate_ontology(schema_name="public")
-   → Create RDF ontology with db: namespace linking
-   → Ontology maps business concepts to SQL tables/columns
-   → Preserves relationships for accurate JOIN generation
-   → Saved to tmp/ directory for reference
-
-5. execute_sql_query(sql_query="...", limit=1000)
-   → Execute validated SQL with ontology context
-   → Automatic fan-trap prevention guidance
-   → Returns structured results with metadata
-```
-
-**Why This Order:**
-- Schema analysis **must come before ontology** to capture relationships
-- Ontology provides **semantic context** for accurate SQL generation
-- Foreign key analysis **prevents fan-trap data corruption**
-- Validation ensures **query safety** before execution
-
-### Workflow 2: Quick Data Exploration
-
-**Purpose:** Rapid data sampling and analysis without ontology
-
-**Tool Chain:**
-```
-1. connect_database(db_type="snowflake")
-2. list_schemas()
-3. sample_table_data(table_name="customers", limit=10)
-   → Quick data preview without full schema analysis
-4. execute_sql_query(sql_query="SELECT COUNT(*) FROM public.customers")
-```
-
-### Workflow 3: SQL Validation → Execution → Visualization
-
-**Purpose:** Validate, execute, and visualize analytical queries
-
-**Tool Chain:**
-```
-1. validate_sql_syntax(sql_query="SELECT public.orders.category, SUM(public.orders.sales) FROM public.orders GROUP BY public.orders.category")
-   → Syntax checking, security validation, performance analysis
-   → Returns: is_valid, warnings, suggestions, security_analysis
-
-2. execute_sql_query(sql_query="...", limit=500)
-   → Execute if validation passes
-   → Returns: data, columns, row_count, execution_time_ms
-
-3. generate_chart(
-     data_source=result['data'],
-     chart_type='bar',
-     x_column='category',
-     y_column='sales'
-   )
-   → Create visualization from query results
-   → Saved to tmp/ directory
-```
-
-### Workflow 4: Relationship Analysis for Complex Queries
-
-**Purpose:** Prevent fan-traps when joining multiple fact tables
-
-**Tool Chain:**
-```
-1. analyze_schema(schema_name="analytics")
-   → EXAMINE foreign_keys field for EACH table
-   → Identify 1:many relationships
-
-2. ANALYZE for fan-traps:
-   - Look for tables on "many" side of multiple relationships
-   - Example: orders → order_items (1:many) + orders → shipments (1:many)
-   - This is a FAN-TRAP: joining both will inflate aggregations
-
-3. Use UNION ALL pattern (recommended):
-   WITH unified_facts AS (
-       SELECT ... FROM public.order_items
-       UNION ALL
-       SELECT ... FROM public.shipments
-   )
-   SELECT ... FROM unified_facts GROUP BY ...
-
-4. execute_sql_query(sql_query="...")
-   → Execute fan-trap-safe query
-```
-
-## ⚠️ CRITICAL: Fan-Trap Prevention
-
-**What is a Fan-Trap?**
-When a parent table has multiple 1:many relationships and you JOIN them with aggregation:
-```
-orders (1) → order_items (many)
-orders (1) → shipments (many)
-
-❌ WRONG: SELECT SUM(public.order_items.amount) FROM public.orders
-          JOIN public.order_items ... JOIN public.shipments ...
-          Result: Inflated totals due to Cartesian product
-
-✅ RIGHT: Use UNION ALL to combine facts, then aggregate
-```
-
-**Always:**
-1. Review `foreign_keys` from analyze_schema() FIRST
-2. Use validate_sql_syntax() before execution
-3. Use UNION ALL pattern for multi-fact queries
-4. Validate results against source tables
-
-## 🔐 SECURITY FEATURES
-
-- **SQL injection prevention** - Pattern-based validation and parameterized queries
-- **Query timeout protection** - Prevents runaway queries
-- **Result size limits** - Configurable row limits (max 10,000)
-- **Read-only enforcement** - No DML/DDL operations allowed
-- **Credential encryption** - Secure password handling
-- **Audit logging** - Security event tracking
-
-## 🎓 ONTOLOGY-ENHANCED SQL GENERATION
-
-**Key Advantage:** The generated ontology includes **db: namespace annotations** that map:
-- Ontology classes → SQL table names
-- Ontology properties → SQL column names
-- Ontology relationships → SQL JOIN conditions
-
-**Example Ontology Output:**
-```turtle
-:Customer a owl:Class ;
-    rdfs:label "Customer" ;
-    db:tableName "customers" ;          # Links to SQL table
-    db:primaryKey "customer_id" .
-
-:hasOrder a owl:ObjectProperty ;
-    rdfs:domain :Customer ;
-    rdfs:range :Order ;
-    db:joinCondition "public.customers.customer_id = public.orders.customer_id" .  # JOIN hint
-```
-
-**This enables:**
-- More accurate Text-to-SQL generation
-- Automatic JOIN path discovery
-- Relationship-aware query planning
-- Prevention of incorrect table combinations
-
-## 📊 SUPPORTED QUERY TYPES
-
-- **SELECT** - Data retrieval with JOINs, aggregations, window functions
-- **WITH (CTE)** - Common Table Expressions for complex queries
-- **UNION/UNION ALL** - Combining result sets (recommended for fan-trap prevention)
-- **Metadata queries** - DESCRIBE, SHOW, EXPLAIN
-- **Analytical functions** - GROUP BY, HAVING, ORDER BY, LIMIT
-- **Window functions** - OVER, PARTITION BY, ROW_NUMBER, RANK
-
-## 💡 BEST PRACTICES
-
-1. **Always start with schema analysis** - Understanding relationships prevents errors
-2. **Generate ontology for semantic context** - Improves SQL accuracy significantly
-3. **Validate before execution** - Catch errors early
-4. **Use UNION ALL for multi-fact aggregation** - Prevents fan-trap inflation
-5. **Check foreign_keys in schema output** - Critical for relationship understanding
-6. **Apply sensible LIMIT values** - Start small, increase as needed
-7. **Visualize results** - Charts reveal data patterns quickly
-
-## 🚀 GETTING STARTED
-
-**Minimal Example:**
-```
-1. connect_database(db_type="postgresql")
-2. analyze_schema(schema_name="public")
-3. generate_ontology(schema_name="public")
-4. execute_sql_query(sql_query="SELECT * FROM public.customers LIMIT 10")
-```
-
-**Full Analytical Workflow:**
-```
-1. connect_database(db_type="snowflake")
-2. list_schemas()
-3. analyze_schema(schema_name="analytics")
-4. generate_ontology(schema_name="analytics")
-5. validate_sql_syntax(sql_query="...")
-6. execute_sql_query(sql_query="...", limit=1000)
-7. generate_chart(data_source=result['data'], chart_type='bar', ...)
-```
-
-## 📝 OUTPUT LOCATIONS
-
-- **Ontologies**: Saved to `tmp/ontology_{{schema}}_{{timestamp}}.ttl`
-- **Charts**: Saved to `tmp/chart_{{timestamp}}.png`
-- **Logs**: Console output with INFO/WARNING/ERROR levels
-
-## 🔗 TOOL CHAINING EXAMPLES
-
-**Example 1 - Complete Analysis Pipeline:**
-analyze_schema → generate_ontology → validate_sql_syntax → execute_sql_query → generate_chart
-
-**Example 2 - Quick Exploration:**
-connect_database → list_schemas → sample_table_data
-
-**Example 3 - Query Optimization:**
-analyze_schema → validate_sql_syntax (review warnings) → execute_sql_query
-
-**Example 4 - Fan-Trap Safe Aggregation:**
-analyze_schema (check FKs) → validate_sql_syntax (UNION pattern) → execute_sql_query
-
----
-
-**Server Version**: {__version__}
-**Supported Databases**: PostgreSQL, Snowflake, Dremio
-**Primary Use Case**: Semantic database analysis with ontology-enhanced Text-to-SQL generation
+Version: {__version__}
+Supported Databases: PostgreSQL, Snowflake, Dremio
+Primary Use Case: Semantic database analysis with ontology-enhanced Text-to-SQL
 """.format(__version__=__version__)
 )
 
@@ -862,85 +647,41 @@ async def analyze_schema(
     ctx: Context,
     schema_name: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Analyze a database schema and return comprehensive table information including relationships.
-
-    This tool provides complete schema analysis including:
-    - Table structure (columns, data types, nullability)
-    - Primary key constraints
-    - Foreign key relationships (critical for preventing fan-traps)
-    - Table comments and metadata
-    - Row counts for each table
-
-    The analysis is automatically saved as a JSON file in the tmp/ folder for later use.
-
-    R2RML MAPPING GENERATION:
-    This tool automatically generates an R2RML (RDB to RDF Mapping Language) mapping file.
-    R2RML is a W3C standard for expressing customized mappings from relational databases
-    to RDF datasets. The generated mapping includes:
-    - TriplesMap definitions for each table
-    - Subject templates based on primary keys
-    - Predicate-object maps for all columns with proper XSD datatypes
-    - Foreign key relationships mapped as IRI references
-
-    The base IRI for R2RML mappings is configured via the R2RML_BASE_IRI environment variable
-    (default: http://mycompany.com/). The schema name is automatically appended to form
-    the complete base IRI (e.g., http://mycompany.com/public/).
-
-    The R2RML mapping enables:
-    - Converting relational data to RDF format
-    - SPARQL querying over relational databases via R2RML processors
-    - Linked Data publication from databases
-    - Semantic integration with other RDF datasets
-
-    RELATIONSHIP ANALYSIS:
-    The foreign_keys field for each table contains all relationships, which is CRITICAL for:
-    - Identifying 1:many relationships that can cause fan-traps
-    - Understanding table dependencies for proper JOIN ordering
-    - Detecting potential Cartesian product multiplications
-    - Planning UNION ALL strategies for multiple fact tables
-
-    IMPORTANT: This tool identifies schema relationships. When relationships include
-    1:many patterns (e.g., sales → shipments), multi-fact queries MUST use UNION_ALL
-    pattern to avoid data multiplication. See execute_sql_query() documentation for
-    safe patterns.
+    """Analyze database schema and return table metadata with relationships.
 
     Args:
-        schema_name: Name of the schema to analyze (optional)
+        schema_name: Schema to analyze (optional, uses default if not specified)
 
     Returns:
-        Dictionary containing:
-        - schema: Schema name
-        - table_count: Number of tables
-        - tables: List of table dictionaries, each containing:
-            - name: Table name
+        Dict with:
             - schema: Schema name
-            - columns: List of column details (name, type, nullable, FK info)
-            - primary_keys: List of primary key column names
-            - foreign_keys: List of FK relationships (CRITICAL for fan-trap prevention)
-                Each FK contains: column, referenced_table, referenced_column
-            - comment: Table description
-            - row_count: Number of rows in table
-        - file_path: Path to the saved JSON file in tmp/ folder
-        - r2rml_file_path: Path to the saved R2RML mapping file in tmp/ folder
-        - r2rml_base_iri: Base IRI used for R2RML generation
-        - next_steps: Recommended workflow guidance
-        - analytical_guidance: Instructions for next step
+            - table_count: Number of tables
+            - tables: List of table metadata (columns, PKs, FKs, row counts)
+            - schema_file: Saved JSON file path in tmp/
+            - r2rml_file: Generated R2RML mapping file path
+            - next_steps: Recommended workflow
 
-    RECOMMENDED WORKFLOW:
-    After analyzing schema, run generate_ontology() next for optimal SQL generation.
+    Table Metadata Includes:
+        - Column details (name, data_type, nullable, PK/FK flags)
+        - Primary keys
+        - Foreign keys (critical for fan-trap prevention!)
+        - Row counts
+        - Comments/descriptions
 
-    Standard analytical workflow:
-    1. analyze_schema() - Get schema structure and relationships
-    2. generate_ontology() - Create ontology with database schema linking
-    3. execute_sql_query() - Generate SQL with ontology context
+    Important:
+        - Results are cached for reuse by generate_ontology()
+        - R2RML mappings auto-generated for RDF conversion
+        - Review foreign_keys to identify fan-trap risks before complex queries
 
-    The ontology provides:
-    - Database schema linking (db: namespace annotations)
-    - SQL column references (table.column format)
-    - JOIN conditions for safe relationship traversal
-    - Metadata for preventing fan-trap issues
+    Recommended Next Step:
+        Call generate_ontology() to create semantic ontology for SQL generation
 
-    Ontology context improves SQL accuracy and helps prevent data corruption.
+    Example:
+        ```python
+        schema_info = analyze_schema(schema_name="public")
+        # Review schema_info['tables'][0]['foreign_keys'] for relationships
+        # Then: generate_ontology(schema_name="public")
+        ```
     """
     # Check if schema is already cached - return early with guidance
     session = get_session_data(ctx)
@@ -1871,95 +1612,36 @@ async def sample_table_data(
 
 @mcp.tool()
 async def validate_sql_syntax(ctx: Context, sql_query: str) -> Dict[str, Any]:
-    """Validate SQL query syntax without executing it, providing comprehensive analysis and suggestions.
+    """Validate SQL syntax, security, and fan-trap risks before execution.
 
-    This tool performs thorough SQL syntax validation and analysis before query execution,
-    helping prevent errors and optimize query performance across different database platforms.
-
-    VALIDATION FEATURES:
-    • Multi-database syntax checking (PostgreSQL, Snowflake, Dremio dialects)
-    • Reserved keyword detection and escaping recommendations
-    • Table and column existence verification against connected database schema
-    • JOIN condition analysis and optimization suggestions
-    • Subquery and CTE (Common Table Expression) validation
-    • Aggregate function usage verification
-    • Window function syntax checking
-
-    ONTOLOGY-BASED QUERY CHECK (OBQC):
-    When an ontology is loaded (via generate_ontology or load_my_ontology), this tool
-    performs deterministic semantic validation without using LLM:
-    • Schema validation - verifies tables/columns exist in the ontology
-    • Type compatibility - checks type matching in WHERE/ON comparisons
-    • Join validation - ensures joins use declared foreign key relationships
-    • Fan-trap detection - warns when aggregating across multiple 1:many joins
-    • GROUP BY validation - checks completeness for aggregation queries
-
-    SECURITY ANALYSIS:
-    • SQL injection pattern detection
-    • Potentially dangerous operation identification
-    • Parameter binding recommendations
-    • Access pattern analysis for sensitive tables
-    
-    PERFORMANCE OPTIMIZATION:
-    • Index usage recommendations based on WHERE clauses
-    • JOIN order optimization suggestions
-    • Query complexity analysis and simplification recommendations
-    • Estimated execution cost analysis
-    • Memory usage predictions for large result sets
-    
-    COMPLIANCE CHECKING:
-    • Read-only operation verification (no DML/DDL operations)
-    • Column-level access permission validation
-    • Data classification compliance (PII, sensitive data handling)
-    • Query audit trail preparation
-    
     Args:
-        sql_query: The SQL query to validate. Can be any SELECT statement or
-                  schema introspection query (SHOW, DESCRIBE, EXPLAIN).
-    
-    Returns:
-        Dictionary containing:
-        - is_valid: Boolean indicating if the query syntax is valid
-        - database_dialect: Detected or assumed database dialect
-        - validation_results: Detailed analysis of query components
-        - suggestions: List of optimization and improvement recommendations
-        - warnings: Potential issues or performance concerns
-        - errors: Specific syntax errors with line/column information
-        - estimated_complexity: Query complexity rating (low/medium/high)
-        - security_analysis: Security-related findings and recommendations
-        - table_references: List of tables and columns referenced in the query
-        - required_permissions: Database permissions needed to execute the query
-    
-    Example Usage:
-        # Validate a simple query
-        validate_sql_syntax("SELECT * FROM public.customers WHERE public.customers.age > 25")
+        sql_query: SQL SELECT statement to validate
 
-        # Validate a complex analytical query
-        validate_sql_syntax(\"\"\"
-            WITH monthly_sales AS (
-                SELECT
-                    DATE_TRUNC('month', public.orders.order_date) as month,
-                    SUM(public.orders.amount) as total_sales
-                FROM public.orders
-                WHERE public.orders.order_date >= '2023-01-01'
-                GROUP BY DATE_TRUNC('month', public.orders.order_date)
-            )
-            SELECT
-                monthly_sales.month,
-                monthly_sales.total_sales,
-                LAG(monthly_sales.total_sales) OVER (ORDER BY monthly_sales.month) as prev_month_sales,
-                ROUND((monthly_sales.total_sales - LAG(monthly_sales.total_sales) OVER (ORDER BY monthly_sales.month)) /
-                      LAG(monthly_sales.total_sales) OVER (ORDER BY monthly_sales.month) * 100, 2) as growth_rate
-            FROM monthly_sales
-            ORDER BY monthly_sales.month
-        \"\"\")
-    
-    Validation Categories:
-        - SYNTAX: Basic SQL syntax compliance
-        - SEMANTICS: Logical query structure and table/column references
-        - SECURITY: Potential security vulnerabilities or risky patterns
-        - PERFORMANCE: Query optimization opportunities
-        - COMPLIANCE: Adherence to organizational data access policies
+    Returns:
+        Dict with:
+            - is_valid (bool): Whether query passes validation
+            - warnings (list): Potential issues (fan-traps, missing schema qualifiers)
+            - suggestions (list): Optimization recommendations
+            - security_analysis: Injection risk assessment
+
+    Validation Checks:
+        - SQL syntax correctness
+        - Identifier qualification (schema.table.column)
+        - Fan-trap detection in multi-table JOINs
+        - Security pattern validation (injection prevention)
+        - Performance analysis (LIMIT recommendations)
+        - OBQC ontology-based query correctness (if ontology available)
+
+    Example:
+        ```python
+        validation = validate_sql_syntax(
+            "SELECT public.customers.name, SUM(public.orders.total) FROM public.customers JOIN public.orders ON public.customers.id = public.orders.customer_id GROUP BY public.customers.name"
+        )
+        if validation['is_valid']:
+            result = execute_sql_query(...)
+        ```
+
+    Note: OBQC validation requires generate_ontology() to be called first.
     """
     try:
         db_manager = get_session_db_manager(ctx)
@@ -2075,356 +1757,54 @@ async def execute_sql_query(
     limit: int = 1000,
     checklist_completed: bool = False
 ) -> Dict[str, Any]:
-    """Execute a validated SQL query against the connected database with comprehensive safety features.
-    
-    ## SQL TRAP PREVENTION
+    """Execute SQL query with validation and fan-trap protection.
 
-    ### REQUIRED: PRE-EXECUTION CHECKLIST
+    **CRITICAL:** Always fully qualify identifiers as `schema.table.column` to avoid ambiguity.
 
-    You MUST complete these steps before calling this tool:
-
-    1. ✓ RELATIONSHIP ANALYSIS - REQUIRED
-        - Call analyze_schema() first
-        - Examine the foreign_keys output
-        - Identify all 1:many relationships
-        - If you detect multiple 1:many relatione in the data model graph of the query, proceed to STEP 2
-
-    2. ✓ FAN-TRAP DETECTION - REQUIRED
-        - Pattern detected: multiple 1:many + aggregation?
-        - If YES: You MUST use UNION_ALL (see PATTERN 1)
-        - If NO: You may use other patterns
-
-    3. ✓ SAFE PATTERN SELECTION - REQUIRED
-        - Multiple fact tables? → Use UNION_ALL
-        - Single fact table? → Use JOIN
-        - Declare your pattern in the function call
-
-    ## IDENTIFIER QUALIFICATION - CRITICAL
-
-    **ALWAYS fully qualify table and column identifiers with schema prefix to avoid ambiguity and errors:**
-
-    ✅ CORRECT:
-    ```sql
-    SELECT
-        public.customers.customer_id,
-        public.customers.name,
-        public.orders.order_date
-    FROM public.customers
-    JOIN public.orders ON public.customers.customer_id = public.orders.customer_id
-    ```
-
-    ❌ WRONG:
-    ```sql
-    SELECT customer_id, name, order_date
-    FROM customers
-    JOIN orders ON customers.customer_id = orders.customer_id
-    ```
-
-    **Why this matters:**
-    - Prevents ambiguous column references in JOINs
-    - Avoids schema search path issues across different database systems
-    - Ensures queries work consistently regardless of current schema context
-    - Makes queries more maintainable and self-documenting
-    - Required for cross-schema queries
-
-    **Best practices:**
-    - Use format: `schema_name.table_name.column_name` in SELECT clauses
-    - Use format: `schema_name.table_name` in FROM and JOIN clauses
-    - Qualify ALL identifiers, even when querying a single table
-    - Use table aliases with qualified names for readability:
-      ```sql
-      SELECT c.customer_id, o.order_date
-      FROM public.customers AS c
-      JOIN public.orders AS o ON c.customer_id = o.customer_id
-      ```
-
-    ## SAFE QUERY PATTERNS
-
-    ### PATTERN 1 - UNION APPROACH (RECOMMENDED FOR MULTI-FACT)
-
-        - Always use UNION ALL for multi-fact table queries to prevent fan-traps
-        - Prefer UNION approach over complex JOINs for dimensional analysis
-
-    **Best for:** Multiple fact tables (sales, shipments, returns, etc.)
-
-    ```sql
-    WITH unified_facts AS (
-        -- Sales facts
-        SELECT
-            public.sales.client_id,
-            public.sales.product_id,
-            public.sales.sales_amount as amount,
-            0 as shipment_qty,
-            0 as return_qty,
-            'SALES' as fact_type
-        FROM public.sales
-
-        UNION ALL
-
-        -- Shipment facts
-        SELECT
-            public.sales.client_id,
-            public.sales.product_id,
-            0 as amount,
-            public.shipments.shipment_quantity,
-            0 as return_qty,
-            'SHIPMENT' as fact_type
-        FROM public.shipments
-        JOIN public.sales ON public.shipments.sales_id = public.sales.id
-
-        UNION ALL
-
-        -- Return facts
-        SELECT
-            public.sales.client_id,
-            public.sales.product_id,
-            0 as amount,
-            0 as shipment_qty,
-            public.returns.return_quantity,
-            'RETURN' as fact_type
-        FROM public.returns
-        JOIN public.sales ON public.returns.sales_id = public.sales.id
-    )
-    SELECT
-        unified_facts.client_id,
-        unified_facts.product_id,
-        SUM(unified_facts.amount) as total_sales,
-        SUM(unified_facts.shipment_qty) as total_shipped,
-        SUM(unified_facts.return_qty) as total_returned
-    FROM unified_facts
-    GROUP BY unified_facts.client_id, unified_facts.product_id;
-    ```
-
-    **Advantages:**
-    - Natural fan-trap immunity by design
-    - Unified data model for consistent aggregation
-    - Easy to extend with additional fact types
-    - Single aggregation logic for all measures
-    - Better performance with fewer table scans
-
-    ### PATTERN 2 - SEPARATE AGGREGATION (LEGACY APPROACH)
-
-    **Use when:** UNION approach is not suitable or not needed (single fact)
-
-    ```sql
-    WITH fact1_totals AS (
-        SELECT
-            public.fact1.key,
-            SUM(public.fact1.amount) as total_amount
-        FROM public.fact1
-        GROUP BY public.fact1.key
-    ),
-    fact2_totals AS (
-        SELECT
-            public.fact2.key,
-            SUM(public.fact2.quantity) as total_quantity
-        FROM public.fact2
-        GROUP BY public.fact2.key
-    )
-    SELECT
-        f1.key,
-        f1.total_amount,
-        COALESCE(f2.total_quantity, 0) as total_quantity
-    FROM fact1_totals f1
-    LEFT JOIN fact2_totals f2 ON f1.key = f2.key;
-    ```
-
-    ### PATTERN 3 - DISTINCT AGGREGATION (USE CAREFULLY)
-
-    **Warning:** Only use when you fully understand the data relationships
-
-    ```sql
-    SELECT
-        public.fact1.key,
-        SUM(DISTINCT public.fact1.amount) as total_amount,
-        SUM(public.fact2.quantity) as total_quantity
-    FROM public.fact1
-    LEFT JOIN public.fact2 ON public.fact1.id = public.fact2.fact1_id
-    GROUP BY public.fact1.key;
-    ```
-
-    ### PATTERN 4 - WINDOW FUNCTIONS
-
-    **For:** Complex analytical queries with preserved granularity
-
-    ```sql
-    SELECT DISTINCT
-        public.fact1.key,
-        SUM(public.fact1.amount) OVER (PARTITION BY public.fact1.key) as total_amount,
-        f2.pre_aggregated_quantity
-    FROM public.fact1
-    LEFT JOIN (
-        SELECT
-            public.fact2.key,
-            SUM(public.fact2.qty) as pre_aggregated_quantity
-        FROM public.fact2
-        GROUP BY public.fact2.key
-    ) f2 ON public.fact1.key = f2.key;
-    ```
-
-    ## RESULT VALIDATION
-
-    **Verify results make business sense:**
-    - Compare totals with business expectations
-    - Cross-check: `SELECT SUM(public.base_table.amount) FROM public.base_table` vs your query result
-    - Ensure row counts are reasonable
-    - High results may indicate fan-trap multiplication
-
-    ## COMMON PROBLEMATIC COMBINATIONS
-
-    **Patterns requiring careful review:**
-    - `public.sales LEFT JOIN public.shipments + SUM(public.sales.amount)`
-    - `public.orders LEFT JOIN public.order_items LEFT JOIN public.products + SUM(public.orders.total)`
-    - `public.customers LEFT JOIN public.transactions LEFT JOIN public.transaction_items + aggregation`
-    - Queries joining parent→child1 + parent→child2 with SUM/COUNT
-
-    ## RELATIONSHIP EXAMPLES
-
-    **Safe (1:1 relationships):**
-    ```
-    customers → customer_profiles (1:1)
-    ```
-
-    **Requires care (1:many):**
-    ```
-    customers → orders (1:many)
-    ```
-
-    **High risk (fan-trap potential):**
-    ```
-    orders → order_items (1:many) + orders → shipments (1:many)
-    ```
-
-    **For high-risk patterns:** Use UNION approach or separate aggregation CTEs
-
-    ## FAN-TRAP SOLUTIONS
-
-    If you suspect fan-trap in existing query:
-    1. Split into UNION approach (recommended)
-    2. Use separate aggregations  
-    3. Add DISTINCT in SUM() as temporary fix
-    4. Validate results against source tables
-    5. Aggregate fact tables separately before joining
-
-    **Note:** Fan-traps cause silent data corruption - queries execute successfully but return inflated results.
-
-    ## VALIDATION CHECKLIST
-
-    For queries with 2+ tables and aggregation:
-    - Schema analyzed
-    - Relationships reviewed
-    - Fan-trap patterns checked
-    - Syntax validated
-    - Safe aggregation pattern used
-    - Results validated
-    
-    This tool provides enterprise-grade SQL execution with multiple layers of protection:
-    
-    SECURITY FEATURES:
-    • SQL injection prevention through parameterized queries and input sanitization
-    • Query timeout protection to prevent runaway queries
-    • Result set size limits to prevent memory exhaustion
-    • Connection state validation before execution
-    • Comprehensive error handling and logging
-    
-    QUERY VALIDATION:
-    • Automatic syntax validation before execution
-    • Database-specific dialect checking (PostgreSQL, Snowflake, Dremio)
-    • Reserved keyword detection and escaping
-    • Schema and table existence verification
-    
-    PERFORMANCE OPTIMIZATION:
-    • Configurable result limits to control memory usage
-    • Query execution time tracking
-    • Connection pooling for optimal resource utilization
-    • Structured result formatting for efficient data transfer
-    
-    OBSERVABILITY:
-    • Detailed execution logging with query fingerprints
-    • Performance metrics (execution time, rows affected, data transferred)
-    • Error classification with diagnostic information
-    • Query history tracking for audit purposes
-    
-    SUPPORTED QUERY TYPES:
-    • SELECT statements (data retrieval with joins, aggregations, window functions)
-    • Data exploration queries (DESCRIBE, SHOW, EXPLAIN)
-    • Schema introspection (information_schema queries)
-    • CTE (Common Table Expression) queries
-    • Complex analytical queries with multiple joins
-    
-    RESULT FORMATTING:
-    • JSON-structured response with metadata
-    • Column type information and nullability
-    • Row count and execution statistics
-    • Error details with suggested fixes
-    • Query fingerprint for caching and optimization
-    
-    ENTERPRISE SAFETY:
-    • Read-only execution mode (no DML/DDL operations)
-    • Resource consumption monitoring
-    • Graceful degradation on connection issues
-    • Detailed audit trail for compliance
-    
     Args:
-        sql_query: The SQL query to execute. Must be a valid SELECT or introspection query.
-                  DML operations (INSERT, UPDATE, DELETE) and DDL operations (CREATE, DROP, ALTER)
-                  are not permitted for security reasons.
-        limit: Maximum number of rows to return (default: 1000, max: 10000).
-              This prevents memory exhaustion from large result sets while allowing
-              comprehensive data analysis.
-        checklist_completed: Boolean flag (true/false, NOT "True"/"False" strings) confirming
-                           that the pre-execution checklist has been completed (default: false).
-                           This includes relationship analysis, fan-trap detection, and safe
-                           pattern selection. Must be set to true to execute queries.
-                           Type: boolean (not string)
+        sql_query: SQL SELECT statement (fully qualified identifiers required)
+        limit: Maximum rows to return (default: 1000, max: 10,000)
 
     Returns:
-        Dictionary containing:
-        - success: Boolean indicating if query executed successfully
-        - data: List of dictionaries representing query results (if successful)
-        - columns: List of column metadata with names, types, and constraints
-        - row_count: Number of rows returned
-        - execution_time_ms: Query execution time in milliseconds
-        - query_fingerprint: Unique identifier for the executed query
-        - metadata: Additional query and connection information
-        - error: Detailed error message (if unsuccessful)
-        - error_type: Classification of error for programmatic handling
-        - suggestions: Helpful suggestions for fixing query issues
-    
-    Example Usage:
-        # Simple data retrieval
-        execute_sql_query("SELECT * FROM public.customers WHERE public.customers.country = 'USA'", 100)
+        Dict with: data (list of dicts), columns (list), row_count, execution_time_ms
 
-        # Complex analytical query
-        execute_sql_query(\"\"\"
-            SELECT
-                public.products.category,
-                COUNT(*) as product_count,
-                AVG(public.products.price) as avg_price,
-                SUM(public.sales.revenue) as total_revenue
-            FROM public.products p
-            JOIN public.sales s ON p.id = s.product_id
-            WHERE s.date >= '2023-01-01'
-            GROUP BY public.products.category
-            ORDER BY total_revenue DESC
-        \"\"\", 500)
+    Security:
+        - Read-only queries only (no DML/DDL)
+        - SQL injection prevention via pattern validation
+        - Query timeout protection
+        - Automatic result size limiting
 
-        # Schema introspection
-        execute_sql_query("SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public'")
-    
-    Error Handling:
-        Returns structured error information for:
-        - Syntax errors with specific line/column information
-        - Permission errors with detailed explanations
-        - Connection timeouts with retry suggestions
-        - Resource exhaustion with optimization recommendations
-        - Data type conflicts with conversion suggestions
-    
-    Performance Notes:
-        - Queries are automatically optimized based on database dialect
-        - Result sets are streamed for memory efficiency
-        - Connection pooling reduces overhead for multiple queries
-        - Query plans are cached for repeated similar queries
+    Fan-Trap Prevention:
+        For multi-fact queries (parent with multiple 1:many relationships):
+        - Use /fan-trap-prevention skill for patterns and solutions
+        - Recommended: UNION ALL approach or separate aggregation CTEs
+        - Always review foreign_keys from analyze_schema() first
+
+    Best Practices:
+        - Use /sql-best-practices for identifier qualification examples
+        - Call validate_sql_syntax() before execution
+        - Start with small LIMIT values for testing
+        - Verify results against source tables
+
+    Example:
+        ```python
+        result = execute_sql_query(
+            sql_query='''
+                SELECT
+                    public.customers.customer_id,
+                    public.customers.name,
+                    COUNT(public.orders.order_id) as order_count
+                FROM public.customers
+                LEFT JOIN public.orders
+                    ON public.customers.customer_id = public.orders.customer_id
+                GROUP BY public.customers.customer_id, public.customers.name
+                LIMIT 100
+            ''',
+            limit=100
+        )
+        ```
+
+    Note: Fan-traps cause silent data corruption! Always validate multi-table aggregations.
     """
     try:
         # Handle string "True"/"False" from LLMs that send strings instead of booleans
@@ -2507,170 +1887,40 @@ async def generate_chart(
     sort_order: Optional[str] = None,
     output_format: str = "image"
 ) -> Union[List[UIResource], Image]:
-    """Generate interactive charts from SQL query results or data analysis.
-
-    ⚠️ IMPORTANT: data_source parameter MUST be valid JSON (array of objects with double quotes)
-    NOT a string representation with single quotes. See Args section for correct format.
-
-    📊 VISUALIZATION CAPABILITIES:
-    This tool creates professional data visualizations directly in Claude Desktop.
-    By default, it generates **interactive Plotly charts** that render via MCP Apps,
-    with full zoom, pan, hover tooltips, and export functionality.
-
-    OUTPUT MODES:
-    • **interactive** (default): Returns Plotly JSON data for MCP Apps rendering
-      - Full interactivity: zoom, pan, hover, export to PNG
-      - Renders directly in Claude Desktop chat via MCP Apps
-      - Requires Claude Desktop with MCP Apps support
-    • **image**: Returns static PNG image
-      - Compatible with all MCP clients
-      - Use when MCP Apps is not available
-
-    CHART TYPES:
-    • **bar**: Bar charts for categorical comparisons
-      - Grouped bars for multi-series data (use color_column with chart_style='grouped')
-      - Stacked bars for part-to-whole relationships (use color_column with chart_style='stacked')
-      - ⚠️ y_column must contain numeric values
-      - Default sorting: by measure (y_column) descending
-    • **line**: Line charts for trends over time
-      - Single measure with optional color grouping
-      - Multiple measures for comparison (pass y_column as list of column names)
-      - Automatic time series detection
-      - ⚠️ y_column(s) must contain numeric values
-      - Default sorting: by dimension (x_column) ascending
-    • **scatter**: Scatter plots for correlations
-      - Color coding by category
-      - ⚠️ Both x_column and y_column must contain numeric values
-    • **heatmap**: Heat maps for matrix data
-      - Correlation matrices
-      - Pivot table visualizations
-      - Default sorting: x_column ascending, y_column descending
-
-    DATA PREPARATION:
-    The tool automatically handles:
-    - SQL query results from execute_sql_query
-    - JSON data structures
-    - Pandas DataFrame conversion
-    - Missing value handling
-    - Automatic type detection
+    """Generate interactive or static charts from query results.
 
     Args:
-        data_source: **MUST BE VALID JSON** - Array of objects containing the data to visualize.
-                    ⚠️ CRITICAL: Send as actual JSON array with double quotes, NOT a string representation.
-
-                    ✅ CORRECT FORMAT (JSON):
-                    [
-                      {"country": "USA", "customer_count": 5},
-                      {"country": "Germany", "customer_count": 3},
-                      {"country": "UK", "customer_count": 4}
-                    ]
-
-                    ❌ WRONG FORMAT (String with single quotes):
-                    "[{'country': 'USA', 'customer_count': 5}, ...]"
-
-                    Typically the 'data' field from execute_sql_query results.
-        chart_type: Type of chart - 'bar', 'line', 'scatter', or 'heatmap'
-        x_column: Column name for X-axis (required)
-        y_column: Column name(s) for Y-axis. Can be:
-                  - String: single measure (all chart types)
-                  - List of strings: multiple measures (line charts only - creates multi-line comparison)
-                  ⚠️ IMPORTANT: Measure columns must contain numeric values (integers or floats)
-        color_column: Column for color grouping/legend (optional)
-                     - For bar charts: creates grouped or stacked bars based on chart_style
-                     - For line/scatter: creates separate series with different colors
-        title: Chart title (auto-generated if not provided)
-        chart_style: 'grouped' or 'stacked' for bar charts (default: grouped)
-                    - 'grouped': bars side-by-side for comparison
-                    - 'stacked': bars stacked on top of each other (requires color_column)
-        width: Chart width in pixels (default: 800)
-        height: Chart height in pixels (default: 600)
-        sort_by: Column to sort by (optional). If not specified, uses automatic sorting:
-                 - Bar/grouped/stacked: sorts by measure (y_column) descending
-                 - Line: sorts by dimension (x_column) ascending
-                 - Heatmap: sorts x_column ascending, y_column descending
-        sort_order: 'ascending' or 'descending' (optional). If not specified, uses automatic order based on chart type.
-        output_format: 'image' (default) returns static PNG that displays directly in Claude Desktop.
-                      'interactive' returns UIResource for MCP Apps rendering (requires remote HTTPS connector).
+        data_source: List of dicts from execute_sql_query()['data']
+        chart_type: 'bar', 'line', 'scatter', or 'heatmap'
+        x_column: Column name for X-axis
+        y_column: Column name(s) for Y-axis (str or list of str for multi-line)
+        color_column: Optional column for grouping/coloring
+        chart_style: 'default', 'stacked', or 'grouped' (for bar charts)
+        title: Chart title (recommended)
 
     Returns:
-        For output_format='interactive': JSON string with Plotly chart data (renders via MCP Apps)
-        For output_format='image': Image object that can be displayed in Claude Desktop
+        Interactive chart via MCP Apps or PNG file path
 
-    Example Usage:
-        # 1. Simple bar chart from query results
+    Chart Types:
+        - bar: Compare categories (use color_column for stacked/grouped)
+        - line: Show trends (supports multi-measure with list y_column)
+        - scatter: Show relationships (use color_column for categories)
+        - heatmap: Show correlations (auto-generates from numeric columns)
+
+    Examples:
+        See /chart-examples skill for comprehensive guide with 9 examples
+
+    Quick Example:
+        ```python
         result = execute_sql_query("SELECT public.orders.category, SUM(public.orders.sales) as total FROM public.orders GROUP BY public.orders.category")
-        generate_chart(result['data'], 'bar', 'category', 'total')
+        generate_chart(result['data'], 'bar', 'category', 'total', title='Sales by Category')
+        ```
 
-        # Example with explicit JSON format (what data_source should look like):
-        generate_chart(
-            data_source=[
-                {"country": "USA", "customer_count": 5},
-                {"country": "Germany", "customer_count": 3},
-                {"country": "UK", "customer_count": 4},
-                {"country": "France", "customer_count": 2},
-                {"country": "Japan", "customer_count": 1}
-            ],
-            chart_type="bar",
-            x_column="country",
-            y_column="customer_count"
-        )
+    Output:
+        - Interactive mode: JSON data for MCP Apps rendering
+        - Image mode: PNG saved to tmp/ directory
 
-        # 2. Stacked bar chart with two dimensions
-        result = execute_sql_query(\"\"\"
-            SELECT
-                public.sales.region,
-                public.sales.product_type,
-                SUM(public.sales.revenue) as total
-            FROM public.sales
-            GROUP BY public.sales.region, public.sales.product_type
-        \"\"\")
-        generate_chart(result['data'], 'bar', 'region', 'total', 'product_type', chart_style='stacked')
-
-        # 3. Time series line chart with single measure
-        result = execute_sql_query("SELECT public.daily_sales.date, public.daily_sales.revenue FROM public.daily_sales ORDER BY public.daily_sales.date")
-        generate_chart(result['data'], 'line', 'date', 'revenue', title='Revenue Trend')
-
-        # 4. Multi-measure line chart for comparison (NEW!)
-        result = execute_sql_query("SELECT public.monthly_data.month, public.monthly_data.revenue, public.monthly_data.expenses, public.monthly_data.profit FROM public.monthly_data ORDER BY public.monthly_data.month")
-        generate_chart(result['data'], 'line', 'month', ['revenue', 'expenses', 'profit'],
-                      title='Financial Metrics Comparison')
-
-        # 5. Grouped bar chart
-        result = execute_sql_query(\"\"\"
-            SELECT
-                public.sales.region,
-                public.sales.product,
-                SUM(public.sales.quantity) as units
-            FROM public.sales
-            GROUP BY public.sales.region, public.sales.product
-        \"\"\")
-        generate_chart(result['data'], 'bar', 'region', 'units', 'product', chart_style='grouped')
-
-        # 6. Correlation heatmap
-        result = execute_sql_query("SELECT * FROM public.metrics")
-        generate_chart(result['data'], 'heatmap', x_column='metric1')
-
-        # 7. Scatter plot with categories
-        result = execute_sql_query("SELECT public.products.price, public.products.quality, public.products.brand FROM public.products")
-        generate_chart(result['data'], 'scatter', 'price', 'quality', 'brand')
-
-    STYLING NOTES:
-    - Long labels are automatically rotated for readability
-    - Colors are chosen from professional palettes
-    - Legends appear when color_column is specified
-    - Grid lines and axes are optimized for clarity
-
-    PERFORMANCE:
-    - Interactive mode: Returns JSON data, rendered client-side via MCP Apps
-    - Image mode: Charts rendered as PNG and saved to tmp/ directory
-    - Memory is properly managed (figures closed after rendering)
-    - Large datasets are automatically sampled if needed
-
-    ERROR HANDLING:
-    - Missing libraries trigger helpful installation instructions
-    - Invalid column names show available columns
-    - Data type mismatches are automatically corrected
-    - Fallback from Plotly to Matplotlib if dependencies missing (image mode)
+    Note: Data should be pre-aggregated in SQL for best performance.
     """
     # Import the implementation from tools module
     from .tools.chart import generate_chart as generate_chart_impl
