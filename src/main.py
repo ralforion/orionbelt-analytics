@@ -779,28 +779,37 @@ async def analyze_schema(
     if lightweight:
         logger.info(f"Analyzing schema in LIGHTWEIGHT mode - {len(tables)} tables")
 
-        # Get just FK relationships without full table analysis
+        # Get full table analysis but only return minimal data
+        # IMPORTANT: We must cache full TableInfo objects for generate_ontology() to use later
+        table_info_objects = []
         relationships = {}
         fan_trap_warnings = []
 
         for table_name in tables:
             try:
-                # Get only FK info - much faster than full analyze_table
+                # Get full table analysis for caching
                 table_info = db_manager.analyze_table(table_name, schema_name)
-                if table_info and table_info.foreign_keys:
-                    relationships[table_name] = table_info.foreign_keys
+                if table_info:
+                    table_info_objects.append(table_info)  # Cache for generate_ontology()
 
-                    # Check for fan-trap risk
-                    if len(table_info.foreign_keys) > 1:
-                        referenced_tables = [fk['referenced_table'] for fk in table_info.foreign_keys]
-                        fan_trap_warnings.append({
-                            "table": table_name,
-                            "warning": f"Table {table_name} connects to multiple tables - potential fan-trap risk",
-                            "referenced_tables": referenced_tables,
-                            "recommendation": "Use separate CTEs or UNION approach for multi-fact aggregations"
-                        })
+                    if table_info.foreign_keys:
+                        relationships[table_name] = table_info.foreign_keys
+
+                        # Check for fan-trap risk
+                        if len(table_info.foreign_keys) > 1:
+                            referenced_tables = [fk['referenced_table'] for fk in table_info.foreign_keys]
+                            fan_trap_warnings.append({
+                                "table": table_name,
+                                "warning": f"Table {table_name} connects to multiple tables - potential fan-trap risk",
+                                "referenced_tables": referenced_tables,
+                                "recommendation": "Use separate CTEs or UNION approach for multi-fact aggregations"
+                            })
             except Exception as e:
                 logger.warning(f"Failed to analyze table {table_name}: {e}")
+
+        # Cache the full TableInfo objects for generate_ontology() to use later
+        session.cache_schema_analysis(schema_name or "", table_info_objects)
+        logger.info(f"Cached {len(table_info_objects)} tables for generate_ontology() reuse")
 
         lightweight_result = {
             "schema": schema_name or "default",
@@ -809,13 +818,15 @@ async def analyze_schema(
             "relationships": relationships,
             "mode": "lightweight",
             "token_savings": f"~{len(tables) * 85}% tokens saved vs full schema",
-            "note": "Use get_table_details(table_name) to get column details on-demand"
+            "note": "Use get_table_details(table_name) to get column details on-demand",
+            "next_step": "generate_ontology",
+            "cache_hint": "Schema is now CACHED. Call generate_ontology() next - it will use cached data automatically."
         }
 
         if fan_trap_warnings:
             lightweight_result["fan_trap_warnings"] = fan_trap_warnings
 
-        await ctx.info(f"Lightweight schema analysis: {len(tables)} tables, {len(relationships)} with FKs")
+        await ctx.info(f"Lightweight schema analysis: {len(tables)} tables cached, {len(relationships)} with FKs. Next: generate_ontology()")
         return lightweight_result
 
     all_table_info = []
