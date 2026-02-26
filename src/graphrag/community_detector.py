@@ -1,0 +1,258 @@
+"""
+Community Detector - Identifies logical groupings in database schemas
+
+Uses graph algorithms to detect communities (logical clusters) of related tables,
+helping organize large schemas into understandable domains.
+"""
+
+import logging
+from typing import List, Dict, Any, Set
+import networkx as nx
+from collections import defaultdict
+
+logger = logging.getLogger(__name__)
+
+
+class CommunityDetector:
+    """Detects logical communities/clusters in database schemas."""
+
+    def __init__(self, graph: nx.DiGraph):
+        """
+        Initialize community detector.
+
+        Args:
+            graph: NetworkX graph of schema relationships
+        """
+        self.graph = graph
+        self.communities: Dict[int, Set[str]] = {}
+        self.table_to_community: Dict[str, int] = {}
+
+    def detect_communities(self, method: str = "louvain") -> Dict[int, Set[str]]:
+        """
+        Detect communities in the schema graph.
+
+        Args:
+            method: Detection method ("louvain", "connected_components", "label_propagation")
+
+        Returns:
+            Dictionary mapping community_id to set of table names
+        """
+        if method == "louvain":
+            return self._detect_louvain()
+        elif method == "connected_components":
+            return self._detect_connected_components()
+        elif method == "label_propagation":
+            return self._detect_label_propagation()
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+    def _detect_louvain(self) -> Dict[int, Set[str]]:
+        """
+        Detect communities using Louvain method.
+
+        Returns:
+            Dictionary of communities
+        """
+        try:
+            import community as community_louvain
+
+            # Convert to undirected for community detection
+            undirected = self.graph.to_undirected()
+
+            # Apply Louvain algorithm
+            partition = community_louvain.best_partition(undirected)
+
+            # Organize into communities
+            communities = defaultdict(set)
+            for table, community_id in partition.items():
+                communities[community_id].add(table)
+                self.table_to_community[table] = community_id
+
+            self.communities = dict(communities)
+            logger.info(f"Detected {len(self.communities)} communities using Louvain method")
+
+            return self.communities
+
+        except ImportError:
+            logger.warning("python-louvain not installed, falling back to connected components")
+            return self._detect_connected_components()
+
+    def _detect_connected_components(self) -> Dict[int, Set[str]]:
+        """
+        Detect communities using connected components.
+
+        Returns:
+            Dictionary of communities
+        """
+        # Convert to undirected
+        undirected = self.graph.to_undirected()
+
+        # Find connected components
+        components = list(nx.connected_components(undirected))
+
+        communities = {}
+        for idx, component in enumerate(components):
+            communities[idx] = component
+            for table in component:
+                self.table_to_community[table] = idx
+
+        self.communities = communities
+        logger.info(f"Detected {len(self.communities)} communities using connected components")
+
+        return self.communities
+
+    def _detect_label_propagation(self) -> Dict[int, Set[str]]:
+        """
+        Detect communities using label propagation.
+
+        Returns:
+            Dictionary of communities
+        """
+        # Convert to undirected
+        undirected = self.graph.to_undirected()
+
+        # Apply label propagation
+        communities_gen = nx.community.label_propagation_communities(undirected)
+        communities_list = list(communities_gen)
+
+        communities = {}
+        for idx, community in enumerate(communities_list):
+            communities[idx] = community
+            for table in community:
+                self.table_to_community[table] = idx
+
+        self.communities = communities
+        logger.info(f"Detected {len(self.communities)} communities using label propagation")
+
+        return self.communities
+
+    def get_community(self, table_name: str) -> Optional[int]:
+        """
+        Get community ID for a table.
+
+        Args:
+            table_name: Table name
+
+        Returns:
+            Community ID or None if not found
+        """
+        return self.table_to_community.get(table_name)
+
+    def get_community_tables(self, community_id: int) -> Set[str]:
+        """
+        Get all tables in a community.
+
+        Args:
+            community_id: Community identifier
+
+        Returns:
+            Set of table names
+        """
+        return self.communities.get(community_id, set())
+
+    def get_community_summary(self, community_id: int) -> Dict[str, Any]:
+        """
+        Get summary information about a community.
+
+        Args:
+            community_id: Community identifier
+
+        Returns:
+            Summary dictionary
+        """
+        tables = self.communities.get(community_id, set())
+
+        if not tables:
+            return {}
+
+        # Calculate subgraph for this community
+        subgraph = self.graph.subgraph(tables)
+
+        # Find most connected table (potential "central" table)
+        degrees = dict(subgraph.degree())
+        central_table = max(degrees.items(), key=lambda x: x[1])[0] if degrees else None
+
+        # Count relationships within community
+        internal_edges = subgraph.number_of_edges()
+
+        return {
+            "community_id": community_id,
+            "table_count": len(tables),
+            "tables": sorted(list(tables)),
+            "internal_relationships": internal_edges,
+            "central_table": central_table,
+            "avg_connections": sum(degrees.values()) / len(degrees) if degrees else 0
+        }
+
+    def get_all_summaries(self) -> List[Dict[str, Any]]:
+        """
+        Get summaries for all communities.
+
+        Returns:
+            List of community summaries
+        """
+        summaries = []
+        for community_id in sorted(self.communities.keys()):
+            summary = self.get_community_summary(community_id)
+            summaries.append(summary)
+
+        return summaries
+
+    def suggest_domain_names(self) -> Dict[int, str]:
+        """
+        Suggest domain names for communities based on table names.
+
+        Returns:
+            Dictionary mapping community_id to suggested domain name
+        """
+        domain_names = {}
+
+        for community_id, tables in self.communities.items():
+            # Extract common prefixes/suffixes
+            table_names = list(tables)
+
+            if len(table_names) == 1:
+                domain_names[community_id] = table_names[0].replace('_', ' ').title()
+                continue
+
+            # Find common words in table names
+            word_counts = defaultdict(int)
+            for table in table_names:
+                words = table.lower().split('_')
+                for word in words:
+                    if len(word) > 2:  # Ignore very short words
+                        word_counts[word] += 1
+
+            # Find most common word
+            if word_counts:
+                common_word = max(word_counts.items(), key=lambda x: x[1])[0]
+                domain_names[community_id] = common_word.title() + " Domain"
+            else:
+                domain_names[community_id] = f"Domain {community_id + 1}"
+
+        return domain_names
+
+    def get_inter_community_connections(self) -> List[Dict[str, Any]]:
+        """
+        Find connections between communities.
+
+        Returns:
+            List of inter-community edges
+        """
+        connections = []
+
+        for edge in self.graph.edges(data=True):
+            from_table, to_table = edge[0], edge[1]
+            from_comm = self.table_to_community.get(from_table)
+            to_comm = self.table_to_community.get(to_table)
+
+            if from_comm is not None and to_comm is not None and from_comm != to_comm:
+                connections.append({
+                    "from_community": from_comm,
+                    "to_community": to_comm,
+                    "from_table": from_table,
+                    "to_table": to_table,
+                    "relationship": edge[2]
+                })
+
+        return connections
