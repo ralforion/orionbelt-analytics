@@ -1096,7 +1096,9 @@ async def generate_ontology(
     ctx: Context,
     schema_info: Optional[str] = None,
     schema_name: Optional[str] = None,
-    base_uri: str = "http://example.com/ontology/"
+    base_uri: str = "http://example.com/ontology/",
+    auto_persist: bool = True,
+    graph_uri: Optional[str] = None
 ) -> str:
     """Generate an RDF ontology from database schema. AUTO-ANALYZES schema if needed!
 
@@ -1104,7 +1106,7 @@ async def generate_ontology(
 
     After connect_database(), just call:
     1. generate_ontology(schema_name="YOUR_SCHEMA") → Auto-analyzes AND generates ontology!
-    2. suggest_semantic_names(ontology_file="...") → For enrichment
+    2. suggest_semantic_names(ontology_file="...") → For enrichment (optional)
 
     You do NOT need to call analyze_schema separately - this tool does it automatically!
 
@@ -1112,9 +1114,13 @@ async def generate_ontology(
         schema_name: Name of the schema to analyze and generate ontology for
         schema_info: Optional pre-analyzed schema JSON (usually not needed)
         base_uri: Base URI for the ontology (default: http://example.com/ontology/)
+        auto_persist: If True (default), automatically store in Oxigraph RDF database.
+                     If False, return full ontology TTL (legacy behavior, uses more tokens).
+        graph_uri: Optional custom graph URI for RDF storage (only used if auto_persist=True)
 
     Returns:
-        RDF ontology in Turtle format with ontology_file name for enrichment tools
+        If auto_persist=True: Success message with stats (saves 23k-94k tokens!)
+        If auto_persist=False: Full RDF ontology in Turtle format
     """
     # Check if ontology is already generated - return early with guidance
     session = get_session_data(ctx)
@@ -1274,15 +1280,67 @@ async def generate_ontology(
         generator.graph.bind("db", generator.db_ns)
         name_analysis = generator.extract_names_for_review()
 
-        # Build result with guidance
-        result = ontology_ttl
-        result += f"\n\n# Ontology file: {ontology_filename}"
-
-        # Add semantic name resolution guidance if cryptic names detected
+        # Analyze the ontology for cryptic names
         cryptic_count = (name_analysis["summary"]["classes_needing_review"] +
                         name_analysis["summary"]["properties_needing_review"] +
                         name_analysis["summary"]["relationships_needing_review"])
 
+        # Auto-persist to RDF store (default behavior - saves tokens!)
+        if auto_persist and OXIGRAPH_AVAILABLE:
+            try:
+                store = get_oxigraph_store(ctx)
+                if store:
+                    # Generate graph URI if not provided
+                    if not graph_uri:
+                        schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
+                        graph_uri = f"http://example.com/schema/{schema_safe}"
+
+                    # Store in Oxigraph
+                    triple_count = store.load_ontology(ontology_ttl, graph_uri, schema_name or "default")
+
+                    logger.info(f"Auto-persisted ontology to Oxigraph: {triple_count} triples in graph <{graph_uri}>")
+
+                    # Return concise success message (massive token savings!)
+                    result = f"""✅ Ontology generated and stored successfully!
+
+Schema: {schema_name or "default"}
+Tables: {len(tables_info)}
+Ontology file: {ontology_filename} (saved to tmp/ folder)
+Graph URI: <{graph_uri}>
+Triples stored: {triple_count:,}
+
+💾 Ontology is now persistent in Oxigraph RDF database.
+📊 Use query_sparql() to explore the schema graph.
+📥 Use download_ontology(schema_name="{schema_name or "default"}") to get the TTL file.
+
+Token savings: ~{len(ontology_ttl)//4} tokens saved by auto-persisting to RDF store!"""
+
+                    # Add semantic name suggestions if needed
+                    if cryptic_count > 0:
+                        result += f"""
+
+⚠️ SEMANTIC NAME RESOLUTION RECOMMENDED
+Found {cryptic_count} names that may need review:
+  • Classes needing review: {name_analysis['summary']['classes_needing_review']}
+  • Properties needing review: {name_analysis['summary']['properties_needing_review']}
+  • Relationships needing review: {name_analysis['summary']['relationships_needing_review']}
+
+To improve ontology for business users:
+1. Call suggest_semantic_names() (ontology is CACHED)
+2. Review suggestions and provide alternatives
+3. Call apply_semantic_names() with your suggestions"""
+
+                    return result
+
+            except Exception as e:
+                logger.warning(f"Auto-persist to Oxigraph failed: {e}, falling back to full TTL return")
+                # Fall through to legacy behavior
+
+        # Legacy behavior: return full ontology TTL (uses more tokens)
+        result = ontology_ttl
+        result += f"\n\n# Ontology file: {ontology_filename}"
+
+        # Add semantic name resolution guidance if cryptic names detected
         if cryptic_count > 0:
             result += f"\n\n# ⚠️ SEMANTIC NAME RESOLUTION RECOMMENDED"
             result += f"\n# Found {cryptic_count} names that may be abbreviations or cryptic identifiers."
@@ -1611,13 +1669,15 @@ async def apply_semantic_names(
 @mcp.tool()
 async def load_my_ontology(
     ctx: Context,
-    import_folder: str = "./import"
+    import_folder: str = "./import",
+    auto_persist: bool = True,
+    graph_uri: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Load the newest .ttl ontology file from the import folder to use in context.
+    """Load the newest .ttl ontology file from the import folder.
 
     This tool allows you to load a custom ontology file instead of generating one
-    from the database schema. The loaded ontology will be used as the semantic
-    context for subsequent operations like SQL generation and validation.
+    from the database schema. The loaded ontology can be used for SQL generation
+    and validation.
 
     ## PURPOSE
 
@@ -1634,8 +1694,9 @@ async def load_my_ontology(
     1. Scan the specified import folder for .ttl (Turtle) files
     2. Select the newest file based on modification time
     3. Parse and validate the ontology
-    4. Store it in server state for use in subsequent operations
-    5. Return information about the loaded ontology
+    4. If auto_persist=True (default): Store in Oxigraph RDF database
+    5. If auto_persist=False: Store in session state for LLM context
+    6. Return information about the loaded ontology
 
     ## FILE FORMAT
 
@@ -1649,6 +1710,9 @@ async def load_my_ontology(
     Args:
         import_folder: Path to the folder containing .ttl files (default: "./import")
                       Can be relative or absolute path.
+        auto_persist: If True (default), store in Oxigraph RDF database (saves tokens).
+                     If False, store in session state for LLM context (legacy behavior).
+        graph_uri: Optional custom graph URI for RDF storage (only used if auto_persist=True)
 
     Returns:
         Dictionary containing:
@@ -1660,21 +1724,23 @@ async def load_my_ontology(
         - classes_count: Number of OWL classes found
         - properties_count: Number of properties found
         - relationships_count: Number of object properties found
-        - ontology_preview: First 2000 characters of the ontology
+        - stored_in_rdf: Boolean indicating if stored in Oxigraph
+        - (optional) ontology_preview: First 2000 characters (only if auto_persist=False)
         - next_steps: Guidance for what to do next
 
     Example Usage:
-        # Load ontology from default import folder
+        # Load ontology and store in RDF (recommended)
         load_my_ontology()
 
         # Load from custom folder
         load_my_ontology(import_folder="/path/to/my/ontologies")
 
+        # Load without auto-persist (legacy)
+        load_my_ontology(auto_persist=False)
+
     After Loading:
-        The loaded ontology is stored in server state and will be available
-        for reference during SQL generation and other semantic operations.
-        You can view the full ontology content from the returned preview
-        or by reading the file directly.
+        If auto_persist=True: Ontology is queryable via SPARQL
+        If auto_persist=False: Ontology is in session state for SQL generation
     """
     try:
         import glob
@@ -1743,7 +1809,7 @@ async def load_my_ontology(
         file_stat = newest_file.stat()
         modified_time = datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
 
-        # Store the loaded ontology in session state (not global, for isolation)
+        # Store the loaded ontology in session state
         session = get_session_data(ctx)
         session.loaded_ontology = ontology_content
         session.loaded_ontology_path = str(newest_file)
@@ -1752,14 +1818,38 @@ async def load_my_ontology(
         logger.info(f"Loaded ontology from: {newest_file}")
         logger.info(f"Ontology contains: {classes_count} classes, {datatype_props} data properties, {object_props} object properties")
 
-        await ctx.info(f"Ontology loaded successfully with {classes_count} classes; ready for SQL generation")
+        # Auto-persist to RDF store (default behavior - saves tokens!)
+        stored_in_rdf = False
+        triple_count = 0
+        used_graph_uri = None
 
-        # Prepare preview (first 2000 chars)
-        preview = ontology_content[:2000]
-        if len(ontology_content) > 2000:
-            preview += "\n\n... [truncated, full content available in file]"
+        if auto_persist and OXIGRAPH_AVAILABLE:
+            try:
+                store = get_oxigraph_store(ctx)
+                if store:
+                    # Extract schema name from filename (e.g., "ontology_public.ttl" -> "public")
+                    schema_name = newest_file.stem.replace("ontology_", "")
+                    if not graph_uri:
+                        graph_uri = f"http://example.com/schema/{schema_name}"
+                    used_graph_uri = graph_uri
 
-        return {
+                    # Store in Oxigraph
+                    triple_count = store.load_ontology(ontology_content, graph_uri, schema_name)
+                    stored_in_rdf = True
+
+                    logger.info(f"Auto-persisted ontology to Oxigraph: {triple_count} triples in graph <{graph_uri}>")
+                    await ctx.info(f"Ontology loaded and stored in RDF database with {triple_count:,} triples; ready for SPARQL queries")
+                else:
+                    logger.warning("Oxigraph store not available for auto-persist")
+                    await ctx.info(f"Ontology loaded with {classes_count} classes; ready for SQL generation")
+            except Exception as e:
+                logger.warning(f"Auto-persist to Oxigraph failed: {e}, ontology still available in session state")
+                await ctx.info(f"Ontology loaded with {classes_count} classes; ready for SQL generation")
+        else:
+            await ctx.info(f"Ontology loaded with {classes_count} classes; ready for SQL generation")
+
+        # Prepare response
+        response = {
             "success": True,
             "file_path": str(newest_file),
             "file_name": newest_file.name,
@@ -1770,8 +1860,29 @@ async def load_my_ontology(
             "relationships_count": object_props,
             "total_files_found": len(ttl_files),
             "other_files": [f.name for f in ttl_files[1:5]] if len(ttl_files) > 1 else [],
-            "ontology_preview": preview,
-            "next_steps": {
+            "stored_in_rdf": stored_in_rdf,
+        }
+
+        if stored_in_rdf:
+            response["graph_uri"] = used_graph_uri
+            response["triples_stored"] = triple_count
+            response["next_steps"] = {
+                "recommended": "query_sparql",
+                "reason": "The loaded ontology is now in Oxigraph RDF database",
+                "workflow": [
+                    "1. ✅ load_my_ontology (completed)",
+                    "2. ➡️  query_sparql (explore schema with SPARQL)",
+                    "3. ➡️  execute_sql_query (use ontology context for SQL generation)"
+                ]
+            }
+            response["note"] = f"Ontology stored in RDF database with {triple_count:,} triples. Token savings: ~{len(ontology_content)//4} tokens!"
+        else:
+            # Legacy mode: include preview
+            preview = ontology_content[:2000]
+            if len(ontology_content) > 2000:
+                preview += "\n\n... [truncated, full content available in file]"
+            response["ontology_preview"] = preview
+            response["next_steps"] = {
                 "recommended": "execute_sql_query",
                 "reason": "The loaded ontology provides semantic context for SQL generation",
                 "workflow": [
@@ -1779,15 +1890,349 @@ async def load_my_ontology(
                     "2. ➡️  connect_database (if not already connected)",
                     "3. ➡️  execute_sql_query (use ontology context for accurate SQL)"
                 ]
-            },
-            "note": "This ontology is now active and will be used instead of auto-generated ontologies"
-        }
+            }
+            response["note"] = "This ontology is now active and will be used instead of auto-generated ontologies"
+
+        return response
 
     except Exception as e:
         logger.error(f"Error loading ontology: {e}")
         return {
             "success": False,
             "error": f"Failed to load ontology: {str(e)}",
+            "error_type": "internal_error"
+        }
+
+
+@mcp.tool()
+async def download_ontology(
+    ctx: Context,
+    schema_name: Optional[str] = None,
+    source: str = "rdf"
+) -> Dict[str, Any]:
+    """Download ontology as TTL file from RDF store or tmp folder.
+
+    This tool allows you to download the ontology in Turtle format, even though
+    it's stored in the Oxigraph RDF database. Useful for:
+    - Backing up ontologies
+    - Sharing ontologies with other tools
+    - Importing into external RDF systems
+    - Version control
+    - Offline analysis
+
+    Args:
+        schema_name: Name of the schema (e.g., "public", "TPCDS").
+                    If not provided, uses the last analyzed/generated schema.
+        source: Where to get the ontology from:
+               - "rdf" (default): Export from Oxigraph RDF store
+               - "file": Read from tmp folder (uses cached .ttl file)
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - content: Full ontology in Turtle format
+        - file_path: Path where it's saved in tmp folder
+        - file_name: Name of the file
+        - file_size: Size in bytes
+        - triple_count: Number of triples (if from RDF)
+        - source: Where it was retrieved from
+
+    Example Usage:
+        # Download from RDF store (recommended)
+        download_ontology(schema_name="public")
+
+        # Download from cached file
+        download_ontology(schema_name="public", source="file")
+
+        # Download last generated ontology
+        download_ontology()
+
+    After Downloading:
+        You can:
+        - Save the content to a file
+        - Import into another RDF system
+        - Share with colleagues
+        - Version control with git
+    """
+    try:
+        session = get_session_data(ctx)
+
+        # Determine schema name
+        if not schema_name:
+            # Try to get from session
+            schema_name = session.get_last_analyzed_schema()
+            if not schema_name:
+                return {
+                    "success": False,
+                    "error": "No schema_name provided and no schema in session",
+                    "error_type": "parameter_error",
+                    "hint": "Provide schema_name parameter or generate/load an ontology first"
+                }
+
+        schema_safe = schema_name.replace(" ", "_").replace(".", "_")
+        output_dir = get_output_dir()
+
+        if source == "rdf" and OXIGRAPH_AVAILABLE:
+            # Export from Oxigraph RDF store
+            store = get_oxigraph_store(ctx)
+            if not store:
+                return {
+                    "success": False,
+                    "error": "Oxigraph RDF store not initialized",
+                    "error_type": "rdf_error",
+                    "hint": "Call store_ontology_in_rdf first or use source='file'"
+                }
+
+            graph_uri = f"http://example.com/schema/{schema_safe}"
+
+            try:
+                # Export the named graph
+                ontology_ttl = store.export_graph(graph_uri, format="turtle")
+
+                if not ontology_ttl or len(ontology_ttl) < 100:
+                    return {
+                        "success": False,
+                        "error": f"Graph <{graph_uri}> is empty or not found in RDF store",
+                        "error_type": "rdf_error",
+                        "hint": f"Call store_ontology_in_rdf(schema_name='{schema_name}') first"
+                    }
+
+                # Save to file
+                file_name = f"ontology_{schema_safe}_export.ttl"
+                file_path = output_dir / file_name
+
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(ontology_ttl)
+
+                # Count triples (approximate from lines)
+                triple_count = len([line for line in ontology_ttl.split('\n') if line.strip() and not line.strip().startswith('#') and not line.strip().startswith('@')])
+
+                logger.info(f"Exported ontology from RDF store <{graph_uri}> to {file_path}")
+
+                return {
+                    "success": True,
+                    "content": ontology_ttl,
+                    "file_path": str(file_path),
+                    "file_name": file_name,
+                    "file_size": len(ontology_ttl),
+                    "triple_count": triple_count,
+                    "graph_uri": graph_uri,
+                    "source": "rdf",
+                    "note": f"Ontology exported from Oxigraph RDF store. File saved to: {file_path}"
+                }
+
+            except Exception as e:
+                logger.error(f"Failed to export from RDF store: {e}")
+                return {
+                    "success": False,
+                    "error": f"Failed to export from RDF store: {str(e)}",
+                    "error_type": "rdf_error",
+                    "hint": "Try source='file' to read from tmp folder instead"
+                }
+
+        elif source == "file":
+            # Read from tmp folder
+            # Try to find the ontology file
+            ontology_filename = session.ontology_file
+            if not ontology_filename:
+                # Look for files matching pattern
+                pattern = f"ontology_{schema_safe}*.ttl"
+                matching_files = list(output_dir.glob(pattern))
+                if matching_files:
+                    # Use the newest
+                    matching_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                    ontology_file_path = matching_files[0]
+                else:
+                    return {
+                        "success": False,
+                        "error": f"No ontology file found for schema '{schema_name}' in tmp folder",
+                        "error_type": "file_not_found",
+                        "hint": "Generate ontology first with generate_ontology()"
+                    }
+            else:
+                ontology_file_path = output_dir / ontology_filename
+
+            if not ontology_file_path.exists():
+                return {
+                    "success": False,
+                    "error": f"Ontology file not found: {ontology_file_path}",
+                    "error_type": "file_not_found"
+                }
+
+            # Read the file
+            with open(ontology_file_path, 'r', encoding='utf-8') as f:
+                ontology_ttl = f.read()
+
+            file_stat = ontology_file_path.stat()
+
+            logger.info(f"Read ontology from file: {ontology_file_path}")
+
+            return {
+                "success": True,
+                "content": ontology_ttl,
+                "file_path": str(ontology_file_path),
+                "file_name": ontology_file_path.name,
+                "file_size": file_stat.st_size,
+                "source": "file",
+                "note": f"Ontology read from tmp folder: {ontology_file_path}"
+            }
+
+        else:
+            return {
+                "success": False,
+                "error": f"Invalid source: {source}. Must be 'rdf' or 'file'",
+                "error_type": "parameter_error"
+            }
+
+    except Exception as e:
+        logger.error(f"Error downloading ontology: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to download ontology: {str(e)}",
+            "error_type": "internal_error"
+        }
+
+
+@mcp.tool()
+async def download_r2rml(
+    ctx: Context,
+    schema_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """Download R2RML mapping file from tmp folder.
+
+    R2RML (RDB to RDF Mapping Language) files are automatically generated by
+    analyze_schema() and define how database tables/columns map to RDF ontology.
+    This tool allows you to download the R2RML file for:
+    - Backing up R2RML mappings
+    - Sharing with other RDF tools (D2RQ, Ontop, etc.)
+    - Importing into RDF triple stores
+    - Version control
+    - Documentation
+
+    ## What is R2RML?
+
+    R2RML is a W3C standard language for mapping relational databases to RDF.
+    It defines how to:
+    - Map database tables to RDF classes
+    - Map database columns to RDF properties
+    - Handle foreign key relationships
+    - Generate RDF URIs from database values
+
+    ## When is R2RML Generated?
+
+    R2RML files are automatically created when you call:
+    - analyze_schema() - Generates R2RML for the analyzed schema
+
+    Args:
+        schema_name: Name of the schema (e.g., "public", "TPCDS").
+                    If not provided, uses the last analyzed schema.
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - content: Full R2RML mapping in Turtle format
+        - file_path: Path where it's saved in tmp folder
+        - file_name: Name of the file
+        - file_size: Size in bytes
+        - base_iri: Base IRI used for RDF URI generation
+
+    Example Usage:
+        # Download R2RML for specific schema
+        download_r2rml(schema_name="public")
+
+        # Download last analyzed schema's R2RML
+        download_r2rml()
+
+    After Downloading:
+        You can:
+        - Use with D2RQ Server for virtual RDF views
+        - Import into Ontop for SPARQL-to-SQL translation
+        - Generate RDF dumps with R2RML processors
+        - Share mappings with data integration teams
+    """
+    try:
+        session = get_session_data(ctx)
+
+        # Determine schema name
+        if not schema_name:
+            # Try to get from session
+            schema_name = session.get_last_analyzed_schema()
+            if not schema_name:
+                return {
+                    "success": False,
+                    "error": "No schema_name provided and no schema in session",
+                    "error_type": "parameter_error",
+                    "hint": "Provide schema_name parameter or run analyze_schema() first"
+                }
+
+        schema_safe = schema_name.replace(" ", "_").replace(".", "_")
+        output_dir = get_output_dir()
+
+        # Try to find the R2RML file
+        r2rml_filename = session.r2rml_file
+        if not r2rml_filename:
+            # Look for files matching pattern
+            pattern = f"r2rml_{schema_safe}*.ttl"
+            matching_files = list(output_dir.glob(pattern))
+            if matching_files:
+                # Use the newest
+                matching_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                r2rml_file_path = matching_files[0]
+            else:
+                return {
+                    "success": False,
+                    "error": f"No R2RML file found for schema '{schema_name}' in tmp folder",
+                    "error_type": "file_not_found",
+                    "hint": "Run analyze_schema() first to generate R2RML mapping"
+                }
+        else:
+            r2rml_file_path = output_dir / r2rml_filename
+
+        if not r2rml_file_path.exists():
+            return {
+                "success": False,
+                "error": f"R2RML file not found: {r2rml_file_path}",
+                "error_type": "file_not_found",
+                "hint": "Run analyze_schema() to generate R2RML mapping"
+            }
+
+        # Read the file
+        with open(r2rml_file_path, 'r', encoding='utf-8') as f:
+            r2rml_content = f.read()
+
+        file_stat = r2rml_file_path.stat()
+
+        # Extract base IRI from content (it's in the rr:baseIRI triple)
+        base_iri = "http://example.com/r2rml/"  # default
+        if "rr:baseIRI" in r2rml_content:
+            import re
+            match = re.search(r'rr:baseIRI\s+"([^"]+)"', r2rml_content)
+            if match:
+                base_iri = match.group(1)
+
+        logger.info(f"Read R2RML mapping from file: {r2rml_file_path}")
+
+        return {
+            "success": True,
+            "content": r2rml_content,
+            "file_path": str(r2rml_file_path),
+            "file_name": r2rml_file_path.name,
+            "file_size": file_stat.st_size,
+            "base_iri": base_iri,
+            "schema_name": schema_name,
+            "note": f"R2RML mapping read from tmp folder: {r2rml_file_path}",
+            "usage_examples": [
+                "Use with D2RQ Server: d2r-server r2rml_mapping.ttl",
+                "Use with Ontop: ontop materialize -m r2rml_mapping.ttl",
+                "Convert to RDF: r2rml r2rml_mapping.ttl > data.ttl"
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"Error downloading R2RML: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to download R2RML: {str(e)}",
             "error_type": "internal_error"
         }
 
