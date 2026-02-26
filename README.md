@@ -91,27 +91,31 @@ execute_sql_query("SELECT customer_id, SUM(amount) FROM orders GROUP BY customer
 - **Environment variable fallback** for seamless configuration
 - **Automatic dependency management**
 
-### 🎯 25+ Powerful MCP Tools
+### 🎯 34 Powerful MCP Tools
 
 **Core Tools:**
 - Database connection and schema analysis
-- RDF/OWL ontology generation
+- RDF/OWL ontology generation with auto-persist
 - SQL query execution with validation
 - Interactive chart generation
 
-**GraphRAG Tools (NEW):**
+**GraphRAG Tools:**
 - `graphrag_search()` - Semantic schema search
 - `graphrag_query_context()` - Intelligent context retrieval (85-95% token reduction)
 - `graphrag_find_join_path()` - Automatic join discovery
 - `graphrag_overview()` - Schema intelligence & communities
 
-**SPARQL Tools (NEW):**
+**SPARQL Tools:**
 - `query_sparql()` - Full SPARQL 1.1 SELECT queries
 - `query_sparql_ask()` - Boolean SPARQL queries
 - `store_ontology_in_rdf()` - Persistent RDF storage
 - `add_rdf_knowledge()` - Knowledge accumulation
 - `list_tables_sparql()` - SPARQL-based table listing
 - `find_columns_by_type_sparql()` - Type-based column search
+
+**Download Tools (NEW - Phase 4):**
+- `download_ontology()` - Export ontology from RDF store or tmp folder
+- `download_r2rml()` - Download R2RML mapping files
 
 ### 🧠 GraphRAG Intelligence
 
