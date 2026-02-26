@@ -21,6 +21,7 @@ from .obqc_validator import OBQCValidator
 from .config import config_manager
 from . import __version__, __name__ as SERVER_NAME
 from .graphrag import GraphRAGManager
+from .oxigraph_store import OxigraphStoreManager, OXIGRAPH_AVAILABLE
 
 # Load environment variables from project root FIRST
 # Try multiple possible paths for .env file
@@ -57,10 +58,19 @@ from .constants import DEFAULT_OUTPUT_DIR
 OUTPUT_DIR = Path(__file__).parent.parent / os.getenv("OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# Oxigraph RDF store directory
+OXIGRAPH_STORE_DIR = OUTPUT_DIR / "oxigraph_store"
+OXIGRAPH_STORE_DIR.mkdir(exist_ok=True)
+
 def get_output_dir() -> Path:
     """Get the output directory for generated files."""
     OUTPUT_DIR.mkdir(exist_ok=True)
     return OUTPUT_DIR
+
+def get_oxigraph_store_dir() -> Path:
+    """Get the Oxigraph store directory."""
+    OXIGRAPH_STORE_DIR.mkdir(exist_ok=True)
+    return OXIGRAPH_STORE_DIR
 
 
 # --- MCP Apps: Load Chart Viewer HTML ---
@@ -206,6 +216,9 @@ class SessionData:
         # GraphRAG integration
         self.graphrag_manager: Optional[GraphRAGManager] = None
         self.graphrag_initialized: bool = False
+        # Oxigraph RDF store for SPARQL
+        self.oxigraph_store: Optional[OxigraphStoreManager] = None
+        self.oxigraph_initialized: bool = False
 
     def cache_schema_analysis(self, schema_name: str, tables_info: List[TableInfo]) -> None:
         """Cache schema analysis results for reuse."""
@@ -2771,6 +2784,523 @@ async def graphrag_overview(ctx: Context) -> Dict[str, Any]:
         return create_error_response(
             f"GraphRAG overview failed: {str(e)}",
             "graphrag_error"
+        )
+
+
+# --- Oxigraph RDF Store & SPARQL Tools ---
+
+def get_oxigraph_store(ctx: Context) -> Optional[OxigraphStoreManager]:
+    """Get or initialize Oxigraph store for the session."""
+    session = get_session_data(ctx)
+
+    if not OXIGRAPH_AVAILABLE:
+        logger.warning("pyoxigraph not available - SPARQL features disabled")
+        return None
+
+    if session.oxigraph_store is None:
+        try:
+            store_path = get_oxigraph_store_dir()
+            session.oxigraph_store = OxigraphStoreManager(store_path=store_path)
+            session.oxigraph_initialized = True
+            logger.info(f"Initialized Oxigraph store at: {store_path}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Oxigraph store: {e}")
+            return None
+
+    return session.oxigraph_store
+
+
+@mcp.tool()
+async def store_ontology_in_rdf(
+    ctx: Context,
+    schema_name: Optional[str] = None,
+    graph_uri: Optional[str] = None
+) -> str:
+    """Store current session ontology in persistent RDF store with SPARQL access.
+
+    Loads the most recent ontology (from generate_ontology) into Oxigraph for
+    persistent storage and SPARQL querying.
+
+    Args:
+        schema_name: Schema name (uses last analyzed if not specified)
+        graph_uri: Named graph URI (auto-generated if not specified)
+
+    Returns:
+        Status message with triple count
+
+    Workflow:
+        1. analyze_schema() - Analyze database schema
+        2. generate_ontology() - Generate RDF/OWL ontology
+        3. store_ontology_in_rdf() - Store in Oxigraph (THIS TOOL)
+        4. query_sparql() - Query using SPARQL
+
+    Example:
+        ```python
+        # Generate and store ontology
+        analyze_schema(schema_name="public")
+        generate_ontology(schema_name="public")
+        store_ontology_in_rdf(schema_name="public")
+
+        # Now query with SPARQL
+        query_sparql('SELECT ?table WHERE { ?table a db:Table }')
+        ```
+    """
+    if not OXIGRAPH_AVAILABLE:
+        return create_error_response(
+            "pyoxigraph not installed. Install with: pip install pyoxigraph",
+            "dependency_error"
+        )
+
+    store = get_oxigraph_store(ctx)
+    if store is None:
+        return create_error_response(
+            "Failed to initialize Oxigraph store",
+            "initialization_error"
+        )
+
+    session = get_session_data(ctx)
+
+    # Determine schema
+    effective_schema = schema_name or session.get_last_analyzed_schema() or "default"
+
+    # Get ontology file
+    if not session.ontology_file:
+        return create_error_response(
+            "No ontology generated. Please call generate_ontology() first.",
+            "ontology_not_found"
+        )
+
+    # Read ontology TTL file
+    try:
+        output_dir = get_output_dir()
+        ontology_path = output_dir / session.ontology_file
+
+        if not ontology_path.exists():
+            return create_error_response(
+                f"Ontology file not found: {session.ontology_file}",
+                "file_not_found"
+            )
+
+        ontology_ttl = ontology_path.read_text(encoding='utf-8')
+
+        # Generate graph URI
+        if not graph_uri:
+            graph_uri = f"http://example.com/ontology/{effective_schema}"
+
+        # Load into Oxigraph
+        triple_count = store.load_ontology(
+            ontology_ttl=ontology_ttl,
+            graph_uri=graph_uri,
+            schema_name=effective_schema
+        )
+
+        await ctx.info(f"Stored ontology for schema '{effective_schema}' in RDF store: {triple_count} triples")
+
+        return (
+            f"✅ Ontology stored successfully in RDF store!\n\n"
+            f"Schema: {effective_schema}\n"
+            f"Graph URI: <{graph_uri}>\n"
+            f"Triples loaded: {triple_count}\n\n"
+            f"You can now query using:\n"
+            f"- query_sparql() - Execute SPARQL SELECT queries\n"
+            f"- query_sparql_ask() - Execute SPARQL ASK queries\n"
+            f"- list_tables_sparql() - List tables via SPARQL\n"
+            f"- find_columns_by_type_sparql() - Find columns by data type"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to store ontology in RDF: {e}", exc_info=True)
+        return create_error_response(
+            f"Failed to store ontology: {str(e)}",
+            "storage_error"
+        )
+
+
+@mcp.tool()
+async def query_sparql(
+    ctx: Context,
+    sparql_query: str,
+    timeout_seconds: int = 30
+) -> Dict[str, Any]:
+    """Execute SPARQL SELECT query against stored ontologies.
+
+    Queries the persistent RDF store containing your database ontologies.
+    Supports full SPARQL 1.1 SELECT queries.
+
+    Args:
+        sparql_query: SPARQL SELECT query string
+        timeout_seconds: Query timeout (default: 30)
+
+    Returns:
+        Query results as list of bindings
+
+    SPARQL Prefixes Available:
+        - rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        - rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        - owl: <http://www.w3.org/2002/07/owl#>
+        - xsd: <http://www.w3.org/2001/XMLSchema#>
+        - db: <http://example.com/db#>
+
+    Example Queries:
+        ```sparql
+        # List all tables
+        PREFIX db: <http://example.com/db#>
+        SELECT ?tableName
+        WHERE {
+            ?table a db:Table .
+            ?table db:tableName ?tableName .
+        }
+
+        # Find integer columns
+        PREFIX db: <http://example.com/db#>
+        SELECT ?tableName ?columnName
+        WHERE {
+            ?column a db:Column .
+            ?column db:tableName ?tableName .
+            ?column db:columnName ?columnName .
+            ?column db:dataType "INTEGER" .
+        }
+
+        # Find foreign key relationships
+        PREFIX db: <http://example.com/db#>
+        SELECT ?fromTable ?toTable ?fromCol ?toCol
+        WHERE {
+            ?fk a db:ForeignKey .
+            ?fk db:fromTable ?fromTable .
+            ?fk db:toTable ?toTable .
+            ?fk db:fromColumn ?fromCol .
+            ?fk db:toColumn ?toCol .
+        }
+        ```
+    """
+    if not OXIGRAPH_AVAILABLE:
+        return create_error_response(
+            "pyoxigraph not installed",
+            "dependency_error"
+        )
+
+    store = get_oxigraph_store(ctx)
+    if store is None:
+        return create_error_response(
+            "Oxigraph store not initialized",
+            "store_not_initialized"
+        )
+
+    try:
+        results = store.query_sparql(sparql_query, timeout_seconds=timeout_seconds)
+
+        await ctx.info(f"SPARQL query returned {len(results)} results")
+
+        return {
+            "success": True,
+            "result_count": len(results),
+            "results": results,
+            "query": sparql_query
+        }
+
+    except Exception as e:
+        logger.error(f"SPARQL query failed: {e}", exc_info=True)
+        return create_error_response(
+            f"SPARQL query failed: {str(e)}",
+            "query_error"
+        )
+
+
+@mcp.tool()
+async def query_sparql_ask(
+    ctx: Context,
+    sparql_query: str
+) -> Dict[str, Any]:
+    """Execute SPARQL ASK query (returns true/false).
+
+    Args:
+        sparql_query: SPARQL ASK query
+
+    Returns:
+        Boolean result
+
+    Example:
+        ```sparql
+        # Check if any integer columns exist
+        PREFIX db: <http://example.com/db#>
+        ASK {
+            ?column a db:Column .
+            ?column db:dataType "INTEGER" .
+        }
+        ```
+    """
+    if not OXIGRAPH_AVAILABLE:
+        return create_error_response(
+            "pyoxigraph not installed",
+            "dependency_error"
+        )
+
+    store = get_oxigraph_store(ctx)
+    if store is None:
+        return create_error_response(
+            "Oxigraph store not initialized",
+            "store_not_initialized"
+        )
+
+    try:
+        result = store.query_sparql_ask(sparql_query)
+
+        return {
+            "success": True,
+            "result": result,
+            "query": sparql_query
+        }
+
+    except Exception as e:
+        logger.error(f"SPARQL ASK query failed: {e}", exc_info=True)
+        return create_error_response(
+            f"SPARQL ASK query failed: {str(e)}",
+            "query_error"
+        )
+
+
+@mcp.tool()
+async def add_rdf_knowledge(
+    ctx: Context,
+    subject: str,
+    predicate: str,
+    object: str,
+    metadata: Optional[Dict[str, Any]] = None
+) -> str:
+    """Add custom knowledge/metadata to the RDF store.
+
+    Allows you to document learned patterns, business rules, or semantic mappings.
+
+    Args:
+        subject: Subject URI
+        predicate: Predicate URI
+        object: Object value (literal or URI)
+        metadata: Optional metadata dict (added as additional triples)
+
+    Returns:
+        Confirmation message
+
+    Example:
+        ```python
+        # Document a learned query pattern
+        add_rdf_knowledge(
+            subject="http://example.com/pattern/sales_by_customer",
+            predicate="http://example.com/schema#hasSQL",
+            object="SELECT customer_id, SUM(amount) FROM orders GROUP BY customer_id",
+            metadata={
+                "learned_from": "user_query",
+                "timestamp": "2026-02-26T16:00:00Z",
+                "confidence": 0.95
+            }
+        )
+
+        # Document a business rule
+        add_rdf_knowledge(
+            subject="http://example.com/rule/order_validation",
+            predicate="http://www.w3.org/2000/01/rdf-schema#comment",
+            object="Orders must have a valid customer_id",
+            metadata={"priority": "high"}
+        )
+        ```
+    """
+    if not OXIGRAPH_AVAILABLE:
+        return create_error_response(
+            "pyoxigraph not installed",
+            "dependency_error"
+        )
+
+    store = get_oxigraph_store(ctx)
+    if store is None:
+        return create_error_response(
+            "Oxigraph store not initialized",
+            "store_not_initialized"
+        )
+
+    try:
+        store.add_knowledge(
+            subject=subject,
+            predicate=predicate,
+            object=object,
+            metadata=metadata
+        )
+
+        await ctx.info(f"Added knowledge triple: <{subject}> <{predicate}> {object}")
+
+        return f"✅ Knowledge added successfully!\n\nSubject: <{subject}>\nPredicate: <{predicate}>\nObject: {object}"
+
+    except Exception as e:
+        logger.error(f"Failed to add knowledge: {e}", exc_info=True)
+        return create_error_response(
+            f"Failed to add knowledge: {str(e)}",
+            "add_error"
+        )
+
+
+@mcp.tool()
+async def list_tables_sparql(
+    ctx: Context,
+    schema_graph: Optional[str] = None
+) -> Dict[str, Any]:
+    """List all tables from stored ontology using SPARQL.
+
+    Args:
+        schema_graph: Optional graph URI to query (auto-detected if not specified)
+
+    Returns:
+        List of table names
+
+    Example:
+        ```python
+        # List all tables
+        tables = list_tables_sparql()
+
+        # List tables from specific graph
+        tables = list_tables_sparql(
+            schema_graph="http://example.com/ontology/public"
+        )
+        ```
+    """
+    if not OXIGRAPH_AVAILABLE:
+        return create_error_response(
+            "pyoxigraph not installed",
+            "dependency_error"
+        )
+
+    store = get_oxigraph_store(ctx)
+    if store is None:
+        return create_error_response(
+            "Oxigraph store not initialized",
+            "store_not_initialized"
+        )
+
+    try:
+        # Auto-detect graph if not specified
+        if not schema_graph:
+            session = get_session_data(ctx)
+            schema_name = session.get_last_analyzed_schema() or "default"
+            schema_graph = f"http://example.com/ontology/{schema_name}"
+
+        tables = store.list_tables_sparql(schema_graph)
+
+        await ctx.info(f"Found {len(tables)} tables via SPARQL")
+
+        return {
+            "success": True,
+            "table_count": len(tables),
+            "tables": tables,
+            "graph": schema_graph
+        }
+
+    except Exception as e:
+        logger.error(f"SPARQL table listing failed: {e}", exc_info=True)
+        return create_error_response(
+            f"Failed to list tables: {str(e)}",
+            "query_error"
+        )
+
+
+@mcp.tool()
+async def find_columns_by_type_sparql(
+    ctx: Context,
+    data_type: str,
+    schema_graph: Optional[str] = None
+) -> Dict[str, Any]:
+    """Find columns by data type using SPARQL.
+
+    Args:
+        data_type: SQL data type (e.g., "INTEGER", "VARCHAR", "DATE")
+        schema_graph: Optional graph URI
+
+    Returns:
+        List of matching columns
+
+    Example:
+        ```python
+        # Find all integer columns
+        cols = find_columns_by_type_sparql("INTEGER")
+
+        # Find date columns
+        cols = find_columns_by_type_sparql("DATE")
+        ```
+    """
+    if not OXIGRAPH_AVAILABLE:
+        return create_error_response(
+            "pyoxigraph not installed",
+            "dependency_error"
+        )
+
+    store = get_oxigraph_store(ctx)
+    if store is None:
+        return create_error_response(
+            "Oxigraph store not initialized",
+            "store_not_initialized"
+        )
+
+    try:
+        columns = store.find_columns_by_type(data_type, schema_graph)
+
+        await ctx.info(f"Found {len(columns)} {data_type} columns via SPARQL")
+
+        return {
+            "success": True,
+            "data_type": data_type,
+            "column_count": len(columns),
+            "columns": columns
+        }
+
+    except Exception as e:
+        logger.error(f"SPARQL column search failed: {e}", exc_info=True)
+        return create_error_response(
+            f"Failed to find columns: {str(e)}",
+            "query_error"
+        )
+
+
+@mcp.tool()
+async def get_rdf_store_stats(ctx: Context) -> Dict[str, Any]:
+    """Get statistics about the persistent RDF store.
+
+    Returns:
+        Store statistics including triple counts, graphs, and loaded ontologies
+
+    Example:
+        ```python
+        stats = get_rdf_store_stats()
+        # Returns:
+        # {
+        #   "total_triples": 15420,
+        #   "named_graphs": 2,
+        #   "graphs": ["http://example.com/ontology/public", ...],
+        #   "loaded_ontologies": {"public": "http://example.com/ontology/public"}
+        # }
+        ```
+    """
+    if not OXIGRAPH_AVAILABLE:
+        return create_error_response(
+            "pyoxigraph not installed",
+            "dependency_error"
+        )
+
+    store = get_oxigraph_store(ctx)
+    if store is None:
+        return create_error_response(
+            "Oxigraph store not initialized",
+            "store_not_initialized"
+        )
+
+    try:
+        stats = store.get_ontology_stats()
+
+        return {
+            "success": True,
+            "stats": stats
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get store stats: {e}", exc_info=True)
+        return create_error_response(
+            f"Failed to get stats: {str(e)}",
+            "stats_error"
         )
 
 
