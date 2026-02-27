@@ -10,18 +10,33 @@ Verifies that:
 6. No functionality regression
 """
 
+import inspect
 import pytest
-import sys
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from typing import List
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+import src.main as main_module
+from src.main import mcp
+from src.tools.schema import get_analysis_context
+from src.database_manager import TableInfo, ColumnInfo
 
-from main import mcp
-from tools.schema import get_analysis_context
-from database_manager import TableInfo, ColumnInfo
+
+def _get_tool_fn(name):
+    """Get the underlying function for a tool, handling both FunctionTool and plain function.
+
+    Under coverage (--cov=src), @mcp.tool() decorated functions are imported as
+    FunctionTool objects. Without coverage, they are plain async functions.
+    This helper normalizes access.
+    """
+    obj = getattr(main_module, name)
+    return getattr(obj, 'fn', obj)
+
+
+def _get_tool_docstring(name):
+    """Get a tool's docstring, handling both FunctionTool and plain function."""
+    fn = _get_tool_fn(name)
+    return fn.__doc__
 
 
 class MockDatabaseManager:
@@ -179,7 +194,7 @@ class MockDatabaseManager:
 class TestPhase2SampleDataRemoval:
     """Test that sample data is removed from get_analysis_context()."""
 
-    @patch('tools.schema.get_db_manager')
+    @patch('src.tools.schema.get_db_manager')
     def test_get_analysis_context_no_sample_data(self, mock_get_db):
         """Verify get_analysis_context() does not return sample_data."""
         mock_get_db.return_value = MockDatabaseManager()
@@ -193,7 +208,7 @@ class TestPhase2SampleDataRemoval:
         # Should NOT have sample_data
         assert "sample_data" not in result
 
-    @patch('tools.schema.get_db_manager')
+    @patch('src.tools.schema.get_db_manager')
     def test_get_analysis_context_has_schema_structure(self, mock_get_db):
         """Verify get_analysis_context() still has complete schema structure."""
         mock_get_db.return_value = MockDatabaseManager()
@@ -214,7 +229,7 @@ class TestPhase2SampleDataRemoval:
         assert "foreign_keys" in table
         assert "row_count" in table
 
-    @patch('tools.schema.get_db_manager')
+    @patch('src.tools.schema.get_db_manager')
     def test_get_analysis_context_has_relationships(self, mock_get_db):
         """Verify relationships are still returned."""
         mock_get_db.return_value = MockDatabaseManager()
@@ -232,7 +247,7 @@ class TestPhase2SampleDataRemoval:
         assert "order_items" in relationships
         assert len(relationships["order_items"]) == 2
 
-    @patch('tools.schema.get_db_manager')
+    @patch('src.tools.schema.get_db_manager')
     def test_get_analysis_context_has_fan_trap_warnings(self, mock_get_db):
         """Verify fan-trap warnings are generated."""
         mock_get_db.return_value = MockDatabaseManager()
@@ -254,29 +269,27 @@ class TestPhase2LightweightMode:
 
     def test_analyze_schema_has_lightweight_parameter(self):
         """Verify analyze_schema has lightweight parameter."""
-        from main import analyze_schema
-        import inspect
-
-        sig = inspect.signature(analyze_schema)
+        fn = _get_tool_fn('analyze_schema')
+        sig = inspect.signature(fn)
         params = sig.parameters
 
         assert "lightweight" in params
         # Should default to True
         assert params["lightweight"].default is True
 
-    def test_get_table_details_exists(self):
+    @pytest.mark.asyncio
+    async def test_get_table_details_exists(self):
         """Verify get_table_details tool exists."""
-        tools = mcp.list_tools()
-        tool_names = [tool.name for tool in tools]
+        # get_tools() is async in FastMCP and returns dict[str, Tool]
+        tools = await mcp.get_tools()
+        tool_names = list(tools.keys())
 
         assert "get_table_details" in tool_names
 
     def test_get_table_details_has_required_params(self):
         """Verify get_table_details has required parameters."""
-        from main import get_table_details
-        import inspect
-
-        sig = inspect.signature(get_table_details)
+        fn = _get_tool_fn('get_table_details')
+        sig = inspect.signature(fn)
         params = sig.parameters
 
         assert "ctx" in params
@@ -285,9 +298,7 @@ class TestPhase2LightweightMode:
 
     def test_analyze_schema_docstring_mentions_lightweight(self):
         """Verify analyze_schema docstring explains lightweight mode."""
-        from main import analyze_schema
-
-        docstring = analyze_schema.__doc__
+        docstring = _get_tool_docstring('analyze_schema')
         assert docstring is not None
 
         # Should explain lightweight mode
@@ -297,9 +308,7 @@ class TestPhase2LightweightMode:
 
     def test_get_table_details_docstring_complete(self):
         """Verify get_table_details has complete docstring."""
-        from main import get_table_details
-
-        docstring = get_table_details.__doc__
+        docstring = _get_tool_docstring('get_table_details')
         assert docstring is not None
 
         # Should explain purpose and usage
@@ -311,7 +320,7 @@ class TestPhase2LightweightMode:
 class TestPhase2TokenSavings:
     """Test that token savings are achieved."""
 
-    @patch('tools.schema.get_db_manager')
+    @patch('src.tools.schema.get_db_manager')
     def test_get_analysis_context_token_reduction(self, mock_get_db):
         """Estimate token savings from removing sample data."""
         mock_get_db.return_value = MockDatabaseManager()
@@ -357,28 +366,31 @@ class TestPhase2FunctionalityPreserved:
 
     def test_analyze_schema_backward_compatible(self):
         """Verify analyze_schema defaults to lightweight=True."""
-        from main import analyze_schema
-        import inspect
-
-        sig = inspect.signature(analyze_schema)
+        fn = _get_tool_fn('analyze_schema')
+        sig = inspect.signature(fn)
         lightweight_param = sig.parameters["lightweight"]
 
         # Default should be True for token efficiency
         assert lightweight_param.default is True
 
-    def test_all_tools_still_registered(self):
+    @pytest.mark.asyncio
+    async def test_all_tools_still_registered(self):
         """Verify all MCP tools are still registered including new one."""
-        tools = mcp.list_tools()
-        tool_names = [tool.name for tool in tools]
+        # get_tools() is async in FastMCP and returns dict[str, Tool]
+        tools = await mcp.get_tools()
+        tool_names = list(tools.keys())
 
         expected_tools = [
             "connect_database",
             "list_schemas",
+            "reset_cache",
             "analyze_schema",
             "get_table_details",  # NEW in Phase 2
-            "get_analysis_context",
-            "sample_table_data",
             "generate_ontology",
+            "suggest_semantic_names",
+            "apply_semantic_names",
+            "load_my_ontology",
+            "sample_table_data",
             "validate_sql_syntax",
             "execute_sql_query",
             "generate_chart",
@@ -388,10 +400,12 @@ class TestPhase2FunctionalityPreserved:
         for tool in expected_tools:
             assert tool in tool_names, f"Tool not registered: {tool}"
 
-    def test_tool_order_preserved(self):
+    @pytest.mark.asyncio
+    async def test_tool_order_preserved(self):
         """Verify get_table_details is positioned after analyze_schema."""
-        tools = mcp.list_tools()
-        tool_names = [tool.name for tool in tools]
+        # get_tools() is async in FastMCP and returns dict[str, Tool]
+        tools = await mcp.get_tools()
+        tool_names = list(tools.keys())
 
         analyze_idx = tool_names.index("analyze_schema")
         get_details_idx = tool_names.index("get_table_details")
@@ -403,9 +417,9 @@ class TestPhase2FunctionalityPreserved:
     def test_imports_still_work(self):
         """Verify all imports still work after changes."""
         try:
-            from main import mcp, analyze_schema, get_table_details
-            from tools.schema import get_analysis_context
-            from database_manager import DatabaseManager, TableInfo, ColumnInfo
+            from src.main import mcp, analyze_schema, get_table_details
+            from src.tools.schema import get_analysis_context
+            from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
 
             assert all([mcp, analyze_schema, get_table_details,
                        get_analysis_context, DatabaseManager, TableInfo, ColumnInfo])
@@ -418,10 +432,8 @@ class TestPhase2HierarchicalWorkflow:
 
     def test_workflow_documentation_in_docstrings(self):
         """Verify hierarchical workflow is documented."""
-        from main import analyze_schema, get_table_details
-
-        analyze_doc = analyze_schema.__doc__
-        details_doc = get_table_details.__doc__
+        analyze_doc = _get_tool_docstring('analyze_schema')
+        details_doc = _get_tool_docstring('get_table_details')
 
         # analyze_schema should mention get_table_details
         assert "get_table_details" in analyze_doc
@@ -481,10 +493,8 @@ class TestPhase2EdgeCases:
 
     def test_get_table_details_without_schema(self):
         """Test get_table_details uses default schema."""
-        from main import get_table_details
-        import inspect
-
-        sig = inspect.signature(get_table_details)
+        fn = _get_tool_fn('get_table_details')
+        sig = inspect.signature(fn)
         schema_param = sig.parameters["schema_name"]
 
         # schema_name should be optional

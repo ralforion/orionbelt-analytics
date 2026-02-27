@@ -406,7 +406,7 @@ class TestMCPToolsAsync:
              patch('builtins.open', MagicMock()), \
              patch('json.dump'):
 
-            result = await main_module.analyze_schema.fn(mock_ctx, "public")
+            result = await main_module.analyze_schema.fn(mock_ctx, "public", lightweight=False)
 
         assert isinstance(result, dict)
         assert result["schema"] == "public"

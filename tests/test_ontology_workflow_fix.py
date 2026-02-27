@@ -7,17 +7,20 @@ TableInfo objects, causing generate_ontology() to fail or re-query the database.
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from pathlib import Path
-import sys
 
-# Add src to path
-src_path = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_path))
+import src.main as main_module
+from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
 
-from main import analyze_schema, generate_ontology
-from db.manager import DatabaseManager
-from db.models import TableInfo, ColumnInfo
+
+def create_mock_context():
+    """Create a mock MCP context with async methods."""
+    ctx = Mock()
+    ctx.info = AsyncMock()
+    ctx.warning = AsyncMock()
+    ctx.error = AsyncMock()
+    return ctx
 
 
 @pytest.fixture
@@ -129,20 +132,18 @@ def mock_db_manager():
 
 @pytest.fixture
 def mock_context():
-    """Create a mock MCP context."""
-    ctx = Mock()
-    ctx.info = MagicMock()
-    return ctx
+    """Create a mock MCP context with async methods."""
+    return create_mock_context()
 
 
 @pytest.mark.asyncio
 async def test_lightweight_caches_for_ontology(mock_context, mock_db_manager, tmp_path):
     """Test that lightweight mode caches full TableInfo for generate_ontology()."""
 
-    with patch('main.get_session_db_manager', return_value=mock_db_manager), \
-         patch('main.get_session_data') as mock_session_data, \
-         patch('main.get_output_dir', return_value=tmp_path), \
-         patch('main.get_session_safe_filename', return_value="test"):
+    with patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
+         patch('src.main.get_session_data') as mock_session_data, \
+         patch('src.main.get_output_dir', return_value=tmp_path), \
+         patch('src.main.get_session_safe_filename', return_value="test"):
 
         # Mock session data
         session = Mock()
@@ -158,7 +159,9 @@ async def test_lightweight_caches_for_ontology(mock_context, mock_db_manager, tm
         mock_session_data.return_value = session
 
         # Step 1: Call analyze_schema in lightweight mode
-        result = await analyze_schema(mock_context, schema_name="public", lightweight=True)
+        # Use .fn accessor to handle both FunctionTool (under coverage) and plain function
+        analyze_fn = getattr(main_module.analyze_schema, 'fn', main_module.analyze_schema)
+        result = await analyze_fn(mock_context, schema_name="public", lightweight=True)
 
         # Verify lightweight result structure
         assert result["mode"] == "lightweight"
@@ -182,18 +185,16 @@ async def test_lightweight_caches_for_ontology(mock_context, mock_db_manager, tm
         assert len(customers.columns) == 2
         assert customers.columns[0].name == "customer_id"
 
-        print("✓ Lightweight mode correctly cached full TableInfo objects")
-
 
 @pytest.mark.asyncio
 async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tmp_path):
     """Test that generate_ontology() works with data cached by lightweight mode."""
 
-    with patch('main.get_session_db_manager', return_value=mock_db_manager), \
-         patch('main.get_session_data') as mock_session_data, \
-         patch('main.get_output_dir', return_value=tmp_path), \
-         patch('main.get_session_safe_filename', return_value="test"), \
-         patch('main._server_state') as mock_server_state:
+    with patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
+         patch('src.main.get_session_data') as mock_session_data, \
+         patch('src.main.get_output_dir', return_value=tmp_path), \
+         patch('src.main.get_session_safe_filename', return_value="test"), \
+         patch('src.main._server_state') as mock_server_state:
 
         # Prepare cached tables (simulating what lightweight mode would cache)
         cached_tables = [
@@ -251,7 +252,9 @@ async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tm
         mock_server_state.get_ontology_generator.return_value = mock_generator
 
         # Step 2: Call generate_ontology WITHOUT schema_info parameter
-        result = await generate_ontology(mock_context)
+        # Use .fn accessor to handle both FunctionTool (under coverage) and plain function
+        generate_fn = getattr(main_module.generate_ontology, 'fn', main_module.generate_ontology)
+        result = await generate_fn(mock_context)
 
         # Verify it used the cached data
         mock_generator.generate_from_schema.assert_called_once()
@@ -262,18 +265,16 @@ async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tm
         # (analyze_table should not be called since we used cache)
         mock_db_manager.get_tables.assert_not_called()
 
-        print("✓ generate_ontology() successfully used cached data from lightweight mode")
-
 
 @pytest.mark.asyncio
 async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manager, tmp_path):
-    """Integration test: lightweight analyze → generate ontology."""
+    """Integration test: lightweight analyze -> generate ontology."""
 
-    with patch('main.get_session_db_manager', return_value=mock_db_manager), \
-         patch('main.get_session_data') as mock_session_data, \
-         patch('main.get_output_dir', return_value=tmp_path), \
-         patch('main.get_session_safe_filename', return_value="test"), \
-         patch('main._server_state') as mock_server_state:
+    with patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
+         patch('src.main.get_session_data') as mock_session_data, \
+         patch('src.main.get_output_dir', return_value=tmp_path), \
+         patch('src.main.get_session_safe_filename', return_value="test"), \
+         patch('src.main._server_state') as mock_server_state:
 
         # Real session-like behavior
         cached_data = {}
@@ -311,8 +312,12 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
         }
         mock_server_state.get_ontology_generator.return_value = mock_generator
 
+        # Use .fn accessor to handle both FunctionTool (under coverage) and plain function
+        analyze_fn = getattr(main_module.analyze_schema, 'fn', main_module.analyze_schema)
+        generate_fn = getattr(main_module.generate_ontology, 'fn', main_module.generate_ontology)
+
         # Step 1: analyze_schema(lightweight=True)
-        schema_result = await analyze_schema(mock_context, schema_name="public", lightweight=True)
+        schema_result = await analyze_fn(mock_context, schema_name="public", lightweight=True)
 
         assert schema_result["mode"] == "lightweight"
         assert schema_result["table_count"] == 3
@@ -320,7 +325,7 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
         assert len(cached_data["public"]) == 3
 
         # Step 2: generate_ontology() - should use cache
-        ontology_result = await generate_ontology(mock_context, schema_name="public")
+        ontology_result = await generate_fn(mock_context, schema_name="public")
 
         # Verify ontology was generated
         mock_generator.generate_from_schema.assert_called_once()
@@ -328,8 +333,6 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
         # Verify it used exactly the cached tables
         used_tables = mock_generator.generate_from_schema.call_args[0][0]
         assert used_tables == cached_data["public"]
-
-        print("✓ Full workflow: lightweight → ontology works correctly")
 
 
 if __name__ == "__main__":
