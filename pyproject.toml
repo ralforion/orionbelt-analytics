@@ -52,10 +52,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/database-ontology-mcp"
-Repository = "https://github.com/yourusername/database-ontology-mcp"
-Documentation = "https://github.com/yourusername/database-ontology-mcp#readme"
-Issues = "https://github.com/yourusername/database-ontology-mcp/issues"
+Homepage = "https://github.com/ralfbecher/orionbelt-analytics"
+Repository = "https://github.com/ralfbecher/orionbelt-analytics"
+Documentation = "https://github.com/ralfbecher/orionbelt-analytics#readme"
+Issues = "https://github.com/ralfbecher/orionbelt-analytics/issues"
 
 [build-system]
 requires = ["hatchling"]

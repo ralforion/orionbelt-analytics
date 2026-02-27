@@ -1,4 +1,4 @@
-"""Security tests for the Database Ontology MCP Server."""
+"""Security tests for the OrionBelt Analytics MCP Server."""
 
 import unittest
 from unittest.mock import patch, MagicMock

@@ -1,4 +1,4 @@
-"""Comprehensive tests for the enhanced database ontology MCP server."""
+"""Comprehensive tests for the OrionBelt Analytics MCP server."""
 
 import json
 import pytest

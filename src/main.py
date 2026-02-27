@@ -26,7 +26,7 @@ from . import __version__, __name__ as SERVER_NAME
 possible_env_paths = [
     os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'),  # relative to src
     os.path.join(os.getcwd(), '.env'),  # current working directory
-    '/Users/ralfbecher/Documents/GitHub/mcp-servers/database-ontology-mcp/.env'  # absolute path
+    '/Users/ralfbecher/Documents/GitHub/mcp-servers/orionbelt-analytics/.env'  # absolute path
 ]
 
 env_loaded = False
@@ -79,7 +79,7 @@ except FileNotFoundError:
 mcp = FastMCP(
     name=SERVER_NAME,
     instructions="""
-# OrionBelt Analytics - Database Ontology MCP Server
+# OrionBelt Analytics MCP Server
 
 Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 

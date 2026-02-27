@@ -1,6 +1,6 @@
-# Integrating Database Ontology MCP Server with Claude Desktop
+# Integrating OrionBelt Analytics MCP Server with Claude Desktop
 
-This guide explains how to integrate your Database Ontology MCP Server with Claude Desktop.
+This guide explains how to integrate your OrionBelt Analytics MCP Server with Claude Desktop.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ This guide explains how to integrate your Database Ontology MCP Server with Clau
 First, install the project dependencies using `uv`:
 
 ```bash
-cd /Users/ralfbecher/database-ontology-mcp
+cd /Users/ralfbecher/orionbelt-analytics
 /Users/ralfbecher/.local/bin/uv sync
 ```
 
@@ -78,17 +78,17 @@ Add this configuration to your Claude Desktop MCP servers settings:
 ```json
 {
   "mcpServers": {
-    "database-ontology": {
+    "orionbelt-analytics": {
       "command": "/Users/ralfbecher/.local/bin/uv",
       "args": [
         "run",
         "--project",
-        "/Users/ralfbecher/database-ontology-mcp",
+        "/Users/ralfbecher/orionbelt-analytics",
         "python",
         "run_server.py"
       ],
       "env": {
-        "PYTHONPATH": "/Users/ralfbecher/database-ontology-mcp"
+        "PYTHONPATH": "/Users/ralfbecher/orionbelt-analytics"
       }
     }
   }

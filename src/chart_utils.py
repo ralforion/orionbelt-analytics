@@ -1,4 +1,4 @@
-"""Chart generation utilities for the Database Ontology MCP Server."""
+"""Chart generation utilities for the OrionBelt Analytics MCP Server."""
 
 import logging
 import base64
