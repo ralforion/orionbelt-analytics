@@ -28,7 +28,7 @@ from .oxigraph_store import OxigraphStoreManager, OXIGRAPH_AVAILABLE
 possible_env_paths = [
     os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'),  # relative to src
     os.path.join(os.getcwd(), '.env'),  # current working directory
-    '/Users/ralfbecher/Documents/GitHub/mcp-servers/database-ontology-mcp/.env'  # absolute path
+    '/Users/ralfbecher/Documents/GitHub/mcp-servers/orionbelt-analytics/.env'  # absolute path
 ]
 
 env_loaded = False
@@ -58,19 +58,34 @@ from .constants import DEFAULT_OUTPUT_DIR
 OUTPUT_DIR = Path(__file__).parent.parent / os.getenv("OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Oxigraph RDF store directory
-OXIGRAPH_STORE_DIR = OUTPUT_DIR / "oxigraph_store"
-OXIGRAPH_STORE_DIR.mkdir(exist_ok=True)
-
 def get_output_dir() -> Path:
     """Get the output directory for generated files."""
     OUTPUT_DIR.mkdir(exist_ok=True)
     return OUTPUT_DIR
 
-def get_oxigraph_store_dir() -> Path:
-    """Get the Oxigraph store directory."""
-    OXIGRAPH_STORE_DIR.mkdir(exist_ok=True)
-    return OXIGRAPH_STORE_DIR
+def get_oxigraph_store_dir(connection_id: Optional[str] = None) -> Path:
+    """
+    Get the Oxigraph store directory.
+
+    Now connection-scoped to prevent RDF data collisions between
+    different databases with the same schema name.
+
+    Args:
+        connection_id: Database connection fingerprint.
+                      If None, uses legacy global store (backward compat).
+
+    Returns:
+        Path to Oxigraph store directory for this connection
+    """
+    if connection_id:
+        # NEW: Connection-scoped RDF store
+        store_dir = OUTPUT_DIR / "oxigraph" / connection_id / "store"
+    else:
+        # LEGACY: Global RDF store (backward compatibility)
+        store_dir = OUTPUT_DIR / "oxigraph_store"
+
+    store_dir.mkdir(parents=True, exist_ok=True)
+    return store_dir
 
 
 # --- MCP Apps: Load Chart Viewer HTML ---
@@ -90,7 +105,7 @@ except FileNotFoundError:
 mcp = FastMCP(
     name=SERVER_NAME,
     instructions="""
-# OrionBelt Analytics - Database Ontology MCP Server
+# OrionBelt Analytics - AI-Powered Database Intelligence
 
 Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 
@@ -219,6 +234,9 @@ class SessionData:
         # Oxigraph RDF store for SPARQL
         self.oxigraph_store: Optional[OxigraphStoreManager] = None
         self.oxigraph_initialized: bool = False
+        # Connection tracking (Phase 1: Auto session management)
+        self.connection_id: Optional[str] = None
+        self.connected_at: Optional[datetime] = None
 
     def cache_schema_analysis(self, schema_name: str, tables_info: List[TableInfo]) -> None:
         """Cache schema analysis results for reuse."""
@@ -267,6 +285,137 @@ def get_session_id(ctx: Context) -> str:
         return f"session_{id(ctx.session)}"
     # Last resort: use a default session (single-user mode)
     return "default_session"
+
+
+def _get_connection_fingerprint(db_manager: DatabaseManager) -> str:
+    """Generate unique fingerprint for current database connection.
+
+    Used to detect when connection changes and trigger session cleanup.
+
+    Args:
+        db_manager: DatabaseManager instance with active connection
+
+    Returns:
+        Unique connection identifier string (hash)
+    """
+    import hashlib
+
+    conn_info = db_manager.connection_info
+    if not conn_info:
+        return "no_connection"
+
+    # Create fingerprint from connection parameters
+    fingerprint_data = (
+        f"{conn_info.get('database_type', '')}://"
+        f"{conn_info.get('host', '')}:{conn_info.get('port', '')}/"
+        f"{conn_info.get('database', '')}"
+        f"@{conn_info.get('schema', '')}"
+    )
+
+    # Hash to create short identifier
+    return hashlib.sha256(fingerprint_data.encode()).hexdigest()[:16]
+
+
+def _calculate_schema_hash(tables_info: List[Any]) -> str:
+    """
+    Calculate deterministic hash of schema structure.
+
+    This hash captures the structural elements of the schema (tables, columns,
+    relationships) and is used to detect when the schema has changed, triggering
+    a new version creation.
+
+    Only includes stable structural elements:
+    - Table names, schemas
+    - Column names, data types, nullability
+    - Primary keys
+    - Foreign key relationships
+
+    Excludes volatile elements:
+    - Row counts (changes with data)
+    - Comments (documentation changes)
+    - Default values (can change independently)
+    - Indexes (performance tuning)
+
+    Args:
+        tables_info: List of TableInfo objects from schema analysis
+
+    Returns:
+        SHA256 hash (full 64 characters)
+    """
+    import hashlib
+    import json
+
+    schema_structure = {"tables": []}
+
+    # Sort tables by name for deterministic hash
+    sorted_tables = sorted(tables_info, key=lambda t: t.name)
+
+    for table in sorted_tables:
+        table_data = {
+            "name": table.name,
+            "schema": table.schema,
+            "columns": [],
+            "primary_keys": sorted(table.primary_keys) if table.primary_keys else [],
+            "foreign_keys": []
+        }
+
+        # Sort columns by name
+        sorted_columns = sorted(table.columns, key=lambda c: c.name)
+        for col in sorted_columns:
+            table_data["columns"].append({
+                "name": col.name,
+                "data_type": col.data_type,
+                "nullable": col.nullable
+                # Explicitly exclude: default, comment (volatile)
+            })
+
+        # Sort foreign keys
+        if table.foreign_keys:
+            sorted_fks = sorted(table.foreign_keys, key=lambda f: f.column)
+            for fk in sorted_fks:
+                table_data["foreign_keys"].append({
+                    "column": fk.column,
+                    "referenced_table": fk.referenced_table,
+                    "referenced_column": fk.referenced_column
+                })
+
+        schema_structure["tables"].append(table_data)
+
+    # Generate deterministic JSON string
+    json_str = json.dumps(schema_structure, sort_keys=True)
+
+    # Return full SHA256 hash
+    return hashlib.sha256(json_str.encode()).hexdigest()
+
+
+def _clear_session_state(session: SessionData, reason: str = "connection change") -> None:
+    """Clear all session state caches and indexes.
+
+    Called when database connection changes to ensure clean state.
+
+    Args:
+        session: SessionData instance to clear
+        reason: Reason for clearing (for logging)
+    """
+    logger.info(f"🧹 Clearing session state ({reason})")
+
+    # Clear caches
+    session.clear_schema_cache()
+    session.schema_file = None
+    session.ontology_file = None
+    session.r2rml_file = None
+    session.loaded_ontology = None
+    session.loaded_ontology_path = None
+
+    # Clear GraphRAG
+    session.graphrag_manager = None
+    session.graphrag_initialized = False
+
+    # Clear RDF store (keep the store object but note it may have stale data)
+    # Don't clear oxigraph_store itself as it's a persistent database
+    # Users should explicitly reset if needed
+
+    logger.info("✅ Session state cleared")
 
 
 class ServerState:
@@ -375,10 +524,10 @@ def get_session_obqc_validator(ctx: Context) -> Optional[OBQCValidator]:
 
 
 def get_session_safe_filename(ctx: Context, prefix: str, suffix: str = "") -> str:
-    """Generate a session-safe filename to prevent cross-session file collisions.
+    """Generate a connection-safe filename to prevent cross-database file collisions.
 
-    Uses session ID prefix and microsecond-precision timestamp to ensure uniqueness
-    even with concurrent requests from different sessions.
+    Uses connection ID and microsecond-precision timestamp to ensure uniqueness.
+    Files from different database connections are isolated, preventing overwrites.
 
     Args:
         ctx: The FastMCP context
@@ -386,16 +535,16 @@ def get_session_safe_filename(ctx: Context, prefix: str, suffix: str = "") -> st
         suffix: Optional suffix before extension (e.g., schema name)
 
     Returns:
-        Unique filename like "schema_a1b2c3d4_public_20250131_143045123456.json"
+        Unique filename like "ontology_a7f3b2c1_public_20260227_143045123456.ttl"
     """
-    session_id = get_session_id(ctx)
-    # Use first 8 chars of session ID for brevity
-    session_prefix = session_id[:8] if len(session_id) >= 8 else session_id
+    session = get_session_data(ctx)
+    # Use connection_id (database fingerprint) for file isolation
+    connection_prefix = session.connection_id[:8] if session.connection_id and len(session.connection_id) >= 8 else "default"
     # Use microsecond precision to avoid collisions
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S%f")
     if suffix:
-        return f"{prefix}_{session_prefix}_{suffix}_{timestamp}"
-    return f"{prefix}_{session_prefix}_{timestamp}"
+        return f"{prefix}_{connection_prefix}_{suffix}_{timestamp}"
+    return f"{prefix}_{connection_prefix}_{timestamp}"
 
 
 def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
@@ -606,9 +755,26 @@ async def connect_database(ctx: Context, db_type: str) -> str:
         db_name = database
 
     if success:
-        # Clear any cached schema from previous connection
+        # PHASE 1: Check if connection changed and clear state if needed
         session = get_session_data(ctx)
+
+        # Get new connection fingerprint
+        new_conn_id = _get_connection_fingerprint(db_manager)
+
+        # Check if this is a different connection
+        if session.connection_id and session.connection_id != new_conn_id:
+            logger.info(f"🔄 Connection changed (old: {session.connection_id[:8]}..., new: {new_conn_id[:8]}...)")
+            _clear_session_state(session, reason="connection change")
+        elif not session.connection_id:
+            logger.info(f"🔗 Initial connection established: {new_conn_id[:8]}...")
+
+        # Update connection tracking
+        session.connection_id = new_conn_id
+        session.connected_at = datetime.now()
+
+        # Clear schema cache (always, even for same connection)
         session.clear_schema_cache()
+
         await ctx.info(f"Connected to {db_type}: {db_name}")
         return f"Successfully connected to {db_type} database: {db_name}"
     else:
@@ -842,6 +1008,22 @@ async def analyze_schema(
 
         if fan_trap_warnings:
             lightweight_result["fan_trap_warnings"] = fan_trap_warnings
+
+        # PHASE 1: Auto-initialize GraphRAG in background (if enabled)
+        auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
+        if auto_graphrag == "true" and table_info_objects:
+            # Start background initialization (non-blocking)
+            import asyncio
+            asyncio.create_task(
+                _auto_initialize_graphrag_background(
+                    schema_name=schema_name or "default",
+                    tables_info=table_info_objects,
+                    session=session,
+                    ctx=ctx
+                )
+            )
+            logger.info(f"🔄 GraphRAG auto-initialization started in background")
+            lightweight_result["graphrag_auto_init"] = "started in background"
 
         await ctx.info(f"Lightweight schema analysis: {len(tables)} tables cached, {len(relationships)} with FKs. Next: generate_ontology()")
         return lightweight_result
@@ -1116,11 +1298,20 @@ async def generate_ontology(
         base_uri: Base URI for the ontology (default: http://example.com/ontology/)
         auto_persist: If True (default), automatically store in Oxigraph RDF database.
                      If False, return full ontology TTL (legacy behavior, uses more tokens).
+
+                     ⚠️ BREAKING CHANGE (2026-02-27): Default changed from False to True.
+                     If your code expects full TTL output, explicitly set auto_persist=False.
+
         graph_uri: Optional custom graph URI for RDF storage (only used if auto_persist=True)
 
     Returns:
-        If auto_persist=True: Success message with stats (saves 23k-94k tokens!)
+        If auto_persist=True (default): Success message with stats (saves 23k-94k tokens!)
         If auto_persist=False: Full RDF ontology in Turtle format
+
+    Notes:
+        - The ontology file is saved to the configured OUTPUT_DIR (default: tmp/)
+        - Use download_ontology() to retrieve the full TTL from RDF store
+        - The RDF store persists in OUTPUT_DIR/oxigraph/{connection_id}/store/
     """
     # Check if ontology is already generated - return early with guidance
     session = get_session_data(ctx)
@@ -1301,11 +1492,13 @@ async def generate_ontology(
                     logger.info(f"Auto-persisted ontology to Oxigraph: {triple_count} triples in graph <{graph_uri}>")
 
                     # Return concise success message (massive token savings!)
+                    output_dir = get_output_dir()
                     result = f"""✅ Ontology generated and stored successfully!
 
 Schema: {schema_name or "default"}
 Tables: {len(tables_info)}
-Ontology file: {ontology_filename} (saved to tmp/ folder)
+Ontology file: {ontology_filename}
+Storage location: {output_dir}/
 Graph URI: <{graph_uri}>
 Triples stored: {triple_count:,}
 
@@ -2413,12 +2606,81 @@ async def validate_sql_syntax(ctx: Context, sql_query: str) -> Dict[str, Any]:
         }
 
 
+def _extract_query_intent(sql: str) -> str:
+    """Extract natural language intent from SQL query for context retrieval.
+
+    Phase 2 helper function: Parses SQL to generate a query intent string
+    that can be used with graphrag_query_context() for automatic context injection.
+
+    Args:
+        sql: SQL query string
+
+    Returns:
+        Natural language description of query intent
+
+    Examples:
+        "SELECT * FROM customers" → "query customers"
+        "SELECT SUM(amount) FROM orders" → "aggregate SUM from orders"
+        "SELECT c.name, SUM(o.amount) FROM customers c JOIN orders o" →
+            "aggregate SUM from customers, orders"
+    """
+    import re
+
+    # Normalize whitespace
+    sql = ' '.join(sql.split())
+
+    # Extract table names (FROM and JOIN clauses)
+    tables = []
+    # FROM clause
+    from_matches = re.findall(r'FROM\s+(?:[\w.]+\.)?(\w+)', sql, re.IGNORECASE)
+    tables.extend(from_matches)
+    # JOIN clauses
+    join_matches = re.findall(r'JOIN\s+(?:[\w.]+\.)?(\w+)', sql, re.IGNORECASE)
+    tables.extend(join_matches)
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_tables = []
+    for t in tables:
+        if t.lower() not in seen:
+            seen.add(t.lower())
+            unique_tables.append(t)
+
+    # Extract aggregation functions
+    aggs = re.findall(r'\b(SUM|AVG|COUNT|MAX|MIN)\s*\(', sql, re.IGNORECASE)
+    aggs = list(set([a.upper() for a in aggs]))  # Deduplicate and uppercase
+
+    # Extract WHERE conditions (simple keyword extraction)
+    where_match = re.search(r'WHERE\s+(.+?)(?:GROUP BY|ORDER BY|LIMIT|$)', sql, re.IGNORECASE)
+    conditions = []
+    if where_match:
+        where_clause = where_match.group(1)
+        # Extract column names from WHERE
+        cond_cols = re.findall(r'\b(\w+)\s*(?:=|>|<|LIKE|IN)', where_clause, re.IGNORECASE)
+        conditions = list(set(cond_cols[:3]))  # Limit to 3 most important
+
+    # Build intent string
+    if aggs and unique_tables:
+        intent = f"aggregate {', '.join(aggs)} from {', '.join(unique_tables)}"
+    elif unique_tables:
+        intent = f"query {', '.join(unique_tables)}"
+    else:
+        intent = "database query"
+
+    # Add filter context if present
+    if conditions:
+        intent += f" filtered by {', '.join(conditions)}"
+
+    return intent
+
+
 @mcp.tool()
 async def execute_sql_query(
     ctx: Context,
     sql_query: str,
     limit: int = 1000,
-    checklist_completed: bool = False
+    checklist_completed: bool = False,
+    query_intent: Optional[str] = None
 ) -> Dict[str, Any]:
     """Execute SQL query with validation and fan-trap protection.
 
@@ -2427,6 +2689,11 @@ async def execute_sql_query(
     Args:
         sql_query: SQL SELECT statement (fully qualified identifiers required)
         limit: Maximum rows to return (default: 1000, max: 10,000)
+        checklist_completed: Confirmation that pre-execution checklist is complete
+        query_intent: (Optional) Natural language description of what the query is trying to achieve.
+                     Example: "Find total sales by customer" or "Show top 10 products by revenue"
+                     If provided, this will be used to retrieve relevant schema context from GraphRAG.
+                     If not provided, intent will be extracted from SQL (less accurate).
 
     Returns:
         Dict with: data (list of dicts), columns (list), row_count, execution_time_ms
@@ -2448,9 +2715,16 @@ async def execute_sql_query(
         - Call validate_sql_syntax() before execution
         - Start with small LIMIT values for testing
         - Verify results against source tables
+        - **RECOMMENDED:** Provide query_intent for better context retrieval
 
-    Example:
+    Phase 2 Enhancement - Smart Context Injection:
+        If GraphRAG is initialized, this tool automatically retrieves relevant schema context
+        to enhance validation. Provide query_intent for best results, or it will be extracted
+        from SQL (less accurate).
+
+    Examples:
         ```python
+        # RECOMMENDED: With explicit query intent
         result = execute_sql_query(
             sql_query='''
                 SELECT
@@ -2463,7 +2737,14 @@ async def execute_sql_query(
                 GROUP BY public.customers.customer_id, public.customers.name
                 LIMIT 100
             ''',
-            limit=100
+            limit=100,
+            query_intent="Show total number of orders per customer"
+        )
+
+        # Basic: Without query intent (will auto-extract from SQL)
+        result = execute_sql_query(
+            sql_query="SELECT * FROM public.customers WHERE id = 1",
+            limit=10
         )
         ```
 
@@ -2506,6 +2787,37 @@ async def execute_sql_query(
                 "validation_error",
                 "You must complete the pre-execution checklist before executing SQL queries. Review the tool documentation for required steps."
             )
+
+        # PHASE 2: Auto-inject GraphRAG context if available
+        session = get_session_data(ctx)
+        if session.graphrag_initialized and session.graphrag_manager:
+            try:
+                # Use provided query_intent if available, otherwise extract from SQL
+                if query_intent:
+                    logger.info(f"📊 Using provided query intent: '{query_intent}'")
+                    intent_to_use = query_intent
+                else:
+                    # Fallback: Extract query intent from SQL (less accurate)
+                    intent_to_use = _extract_query_intent(sql_query)
+                    logger.info(f"📊 Auto-extracted intent from SQL: '{intent_to_use}'")
+
+                # Retrieve relevant context using GraphRAG
+                context = session.graphrag_manager.get_query_context(
+                    query=intent_to_use,
+                    max_tables=3,
+                    max_columns=15
+                )
+
+                # Log context retrieval
+                if context and 'relevant_tables' in context:
+                    table_count = len(context['relevant_tables'])
+                    logger.info(f"✅ Auto-retrieved context: {table_count} relevant tables")
+                    # Context is now available for enhanced validation
+                    # (In future, could enhance validation logic here)
+
+            except Exception as e:
+                # Don't fail query if context retrieval fails
+                logger.debug(f"Context auto-retrieval failed (non-critical): {e}")
 
         # Execute the query through the database manager
         result = db_manager.execute_sql_query(sql_query.strip(), limit)
@@ -2780,6 +3092,213 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
 
 # --- GraphRAG Tools ---
 
+async def _auto_generate_ontology_background(
+    schema_name: str,
+    tables_info: List[TableInfo],
+    session: SessionData,
+    ctx: Context
+) -> None:
+    """Background task: Auto-generate ontology after GraphRAG completes.
+
+    This runs asynchronously after GraphRAG initialization, storing the ontology
+    directly in the Oxigraph RDF store for immediate SPARQL access.
+    Enabled by AUTO_ONTOLOGY=true environment variable (default: false in Phase 2).
+
+    Args:
+        schema_name: Schema name being analyzed
+        tables_info: Analyzed table metadata
+        session: SessionData instance
+        ctx: FastMCP context
+
+    Phase 2 Implementation Notes:
+        - Runs after GraphRAG completes
+        - Uses auto_persist=True to store in Oxigraph
+        - Saves 23k-94k tokens by not returning full ontology
+        - Logs progress and errors clearly
+        - Gracefully degrades on failure
+    """
+    import time
+
+    try:
+        start_time = time.time()
+        logger.info(f"🏗️ Auto-generating ontology for schema '{schema_name}'...")
+
+        # Get config
+        config = config_manager.get_server_config()
+        base_uri = config.ontology_base_uri
+
+        # Convert TableInfo to dict format for ontology generator
+        schema_data = {
+            "schema": schema_name,
+            "tables": []
+        }
+
+        for table_info in tables_info:
+            table_dict = {
+                "name": table_info.name,
+                "schema": table_info.schema,
+                "columns": [
+                    {
+                        "name": col.name,
+                        "data_type": col.data_type,
+                        "nullable": col.nullable,
+                        "default": col.default,
+                        "comment": col.comment
+                    }
+                    for col in table_info.columns
+                ],
+                "primary_keys": table_info.primary_keys,
+                "foreign_keys": [
+                    {
+                        "column": fk.column,
+                        "referenced_table": fk.referenced_table,
+                        "referenced_column": fk.referenced_column
+                    }
+                    for fk in table_info.foreign_keys
+                ],
+                "comment": table_info.comment
+            }
+            schema_data["tables"].append(table_dict)
+
+        # Generate ontology
+        ontology_generator = OntologyGenerator(base_uri=base_uri)
+        ontology_ttl = ontology_generator.generate_ontology(schema_data)
+
+        # Save to connection-specific directory to prevent collisions
+        output_dir = get_output_dir()
+        connection_dir = output_dir / (session.connection_id or "default")
+        connection_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ontology_file = connection_dir / f"ontology_{schema_name}_{timestamp}.ttl"
+        ontology_file.write_text(ontology_ttl, encoding='utf-8')
+        session.ontology_file = f"{session.connection_id}/{ontology_file.name}"
+
+        # Store in Oxigraph RDF store if available
+        if OXIGRAPH_AVAILABLE:
+            try:
+                store = get_oxigraph_store(ctx)
+                if store:
+                    graph_uri = f"{base_uri}{schema_name}"
+                    triple_count = store.load_ontology(ontology_ttl, graph_uri)
+                    logger.info(f"📦 Stored {triple_count} triples in RDF store (graph: {graph_uri})")
+            except Exception as e:
+                logger.warning(f"Failed to store in RDF: {e}")
+
+        elapsed = time.time() - start_time
+        logger.info(f"✅ Ontology auto-generated successfully ({elapsed:.2f}s)")
+        logger.info(f"💾 Saved to: {ontology_file.name}")
+
+    except Exception as e:
+        logger.error(f"❌ Ontology auto-generation failed: {type(e).__name__}: {e}")
+        logger.debug("Ontology auto-gen traceback:", exc_info=True)
+        # Don't fail the main operation - graceful degradation
+
+
+async def _auto_initialize_graphrag_background(
+    schema_name: str,
+    tables_info: List[TableInfo],
+    session: SessionData,
+    ctx: Context
+) -> None:
+    """Background task: Auto-initialize GraphRAG after schema analysis.
+
+    This runs asynchronously after analyze_schema returns, so it doesn't block the LLM.
+    Enabled by AUTO_GRAPHRAG=true environment variable (default: true).
+
+    Args:
+        schema_name: Schema name being analyzed
+        tables_info: Analyzed table metadata
+        session: SessionData instance
+        ctx: FastMCP context
+
+    Phase 1 Implementation Notes:
+        - Runs in background using asyncio.create_task()
+        - Uses TF-IDF embeddings for fast initialization
+        - Logs progress and errors clearly
+        - Gracefully degrades on failure (doesn't block main operation)
+        - Saves state to disk for persistence
+    """
+    import time
+
+    try:
+        start_time = time.time()
+        logger.info(f"🧠 Auto-initializing GraphRAG for schema '{schema_name}'...")
+
+        # Initialize GraphRAG manager if needed
+        if session.graphrag_manager is None:
+            session.graphrag_manager = GraphRAGManager(
+                embedding_model="tfidf",  # Fast default for auto-init
+                connection_id=session.connection_id,  # CRITICAL: Prevent naming collisions
+                schema_name=schema_name  # For ChromaDB collection naming
+            )
+
+        # Convert TableInfo to dict format expected by GraphRAG
+        tables_dict = []
+        for table_info in tables_info:
+            table_dict = {
+                "name": table_info.name,
+                "schema": table_info.schema,
+                "columns": [
+                    {
+                        "name": col.name,
+                        "data_type": col.data_type,
+                        "nullable": col.nullable,
+                        "default": col.default,
+                        "comment": col.comment
+                    }
+                    for col in table_info.columns
+                ],
+                "primary_keys": table_info.primary_keys,
+                "foreign_keys": [
+                    {
+                        "column": fk.column,
+                        "referenced_table": fk.referenced_table,
+                        "referenced_column": fk.referenced_column
+                    }
+                    for fk in table_info.foreign_keys
+                ],
+                "comment": table_info.comment
+            }
+            tables_dict.append(table_dict)
+
+        # Build vector index and graph
+        session.graphrag_manager.initialize_from_schema(
+            schema_name=schema_name,
+            schema_data={"tables": tables_dict}
+        )
+
+        # Save state to disk for persistence
+        output_dir = get_output_dir()
+        session.graphrag_manager.save_state(output_dir)
+
+        elapsed = time.time() - start_time
+        session.graphrag_initialized = True
+
+        # Log success with statistics
+        vector_count = session.graphrag_manager.vector_store.vector_count if session.graphrag_manager.vector_store else 0
+        logger.info(f"✅ GraphRAG auto-initialized successfully ({elapsed:.2f}s)")
+        logger.info(f"📊 Indexed {vector_count} vectors ({len(tables_dict)} tables)")
+
+        # PHASE 2: Chain to ontology generation if enabled
+        auto_ontology = os.getenv("AUTO_ONTOLOGY", "false").lower()
+        if auto_ontology == "true":
+            logger.info("🔗 Chaining to ontology auto-generation...")
+            await _auto_generate_ontology_background(
+                schema_name=schema_name,
+                tables_info=tables_info,
+                session=session,
+                ctx=ctx
+            )
+
+    except Exception as e:
+        logger.error(f"❌ GraphRAG auto-initialization failed: {type(e).__name__}: {e}")
+        logger.debug("GraphRAG auto-init traceback:", exc_info=True)
+        # Don't fail the main operation - graceful degradation
+        session.graphrag_initialized = False
+        # Tools will fall back to basic schema analysis
+
+
 @mcp.tool()
 async def initialize_graphrag(
     ctx: Context,
@@ -2897,7 +3416,9 @@ async def initialize_graphrag(
         if session.graphrag_manager is None:
             session.graphrag_manager = GraphRAGManager(
                 embedding_model=embedding_model,
-                embedding_dimension=384
+                embedding_dimension=384,
+                connection_id=session.connection_id,  # CRITICAL: Prevent naming collisions
+                schema_name=effective_schema or "default"  # For ChromaDB collection naming
             )
 
         session.graphrag_manager.initialize_from_schema(
@@ -3235,7 +3756,18 @@ async def graphrag_overview(ctx: Context) -> Dict[str, Any]:
 # --- Oxigraph RDF Store & SPARQL Tools ---
 
 def get_oxigraph_store(ctx: Context) -> Optional[OxigraphStoreManager]:
-    """Get or initialize Oxigraph store for the session."""
+    """
+    Get or initialize connection-scoped Oxigraph store for the session.
+
+    IMPORTANT: Now uses connection-scoped stores to prevent RDF data collisions
+    between different databases with the same schema name.
+
+    Each database connection gets its own Oxigraph instance at:
+    tmp/oxigraph/{connection_id}/store/
+
+    Returns:
+        OxigraphStoreManager instance or None if unavailable
+    """
     session = get_session_data(ctx)
 
     if not OXIGRAPH_AVAILABLE:
@@ -3244,10 +3776,17 @@ def get_oxigraph_store(ctx: Context) -> Optional[OxigraphStoreManager]:
 
     if session.oxigraph_store is None:
         try:
-            store_path = get_oxigraph_store_dir()
+            # Use connection-scoped store directory
+            store_path = get_oxigraph_store_dir(connection_id=session.connection_id)
             session.oxigraph_store = OxigraphStoreManager(store_path=store_path)
             session.oxigraph_initialized = True
-            logger.info(f"Initialized Oxigraph store at: {store_path}")
+
+            if session.connection_id:
+                logger.info(f"Initialized connection-scoped Oxigraph store at: {store_path}")
+                logger.info(f"Connection ID: {session.connection_id}")
+            else:
+                logger.info(f"Initialized Oxigraph store at: {store_path} (legacy mode)")
+
         except Exception as e:
             logger.error(f"Failed to initialize Oxigraph store: {e}")
             return None

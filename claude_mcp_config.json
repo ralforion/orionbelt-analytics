@@ -1,16 +1,16 @@
 {
   "mcpServers": {
-    "database-ontology": {
+    "orionbelt-analytics": {
       "command": "/Users/ralfbecher/.local/bin/uv",
       "args": [
         "run",
         "--project",
-        "/Users/ralfbecher/database-ontology-mcp",
+        "/Users/ralfbecher/orionbelt-analytics",
         "python",
         "run_server.py"
       ],
       "env": {
-        "PYTHONPATH": "/Users/ralfbecher/database-ontology-mcp"
+        "PYTHONPATH": "/Users/ralfbecher/orionbelt-analytics"
       }
     }
   }

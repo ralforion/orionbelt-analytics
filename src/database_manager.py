@@ -323,7 +323,7 @@ class DatabaseManager:
                 echo=False,
                 connect_args={
                     "connect_timeout": CONNECTION_TIMEOUT,
-                    "application_name": "database-ontology-mcp"
+                    "application_name": "orionbelt-analytics"
                 }
             )
             self.metadata = MetaData()
@@ -424,7 +424,7 @@ class DatabaseManager:
                 pool_recycle=3600,
                 echo=False,
                 connect_args={
-                    "application": "database-ontology-mcp",
+                    "application": "orionbelt-analytics",
                     "network_timeout": CONNECTION_TIMEOUT
                 }
             )

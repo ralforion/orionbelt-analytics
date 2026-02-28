@@ -1,0 +1,393 @@
+"""
+Version Metadata Management
+
+Tracks versions of GraphRAG and RDF ontology data for each database connection.
+Enables version history, comparison, rollback, and automatic cleanup.
+"""
+
+import json
+import logging
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+from datetime import datetime
+from dataclasses import dataclass, asdict
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class VersionInfo:
+    """Information about a specific version."""
+    version: int
+    created_at: str  # ISO format
+    schema_hash: str
+    table_count: int
+    column_count: int
+
+    # GraphRAG info
+    graphrag_vector_count: int
+    graphrag_status: str  # "active" or "archived"
+
+    # Ontology info
+    ontology_graph_uri: str
+    ontology_triple_count: int
+    ontology_ttl_file: str
+    ontology_status: str  # "active" or "archived"
+
+    # Changes from previous version (if any)
+    changes: Optional[Dict[str, Any]] = None
+
+    # Overall status
+    status: str = "active"  # "active" or "archived"
+
+
+@dataclass
+class RetentionPolicy:
+    """Retention policy for cleanup."""
+    graphrag_keep_versions: int = 3
+    graphrag_max_age_days: int = 30
+    ontology_keep_versions: int = 5
+    ontology_max_age_days: int = 60
+    min_versions: int = 2  # Always keep at least this many
+
+
+class VersionMetadataManager:
+    """
+    Manages version metadata for a database connection.
+
+    Metadata is stored in: tmp/{connection_id}/metadata.json
+    """
+
+    def __init__(self, connection_id: str, output_dir: Path):
+        """
+        Initialize metadata manager.
+
+        Args:
+            connection_id: Database connection fingerprint
+            output_dir: Base output directory (usually tmp/)
+        """
+        self.connection_id = connection_id
+        self.connection_dir = output_dir / connection_id
+        self.metadata_file = self.connection_dir / "metadata.json"
+
+        # Ensure directory exists
+        self.connection_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load or initialize metadata
+        self.metadata = self._load_metadata()
+
+    def _load_metadata(self) -> Dict[str, Any]:
+        """Load metadata from disk or create new."""
+        if self.metadata_file.exists():
+            try:
+                with open(self.metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                logger.debug(f"Loaded metadata for connection {self.connection_id}")
+                return metadata
+            except Exception as e:
+                logger.error(f"Failed to load metadata: {e}")
+                # Return fresh metadata on error
+                return self._create_fresh_metadata()
+        else:
+            return self._create_fresh_metadata()
+
+    def _create_fresh_metadata(self) -> Dict[str, Any]:
+        """Create fresh metadata structure."""
+        return {
+            "connection_id": self.connection_id,
+            "connection": {},  # Will be filled with connection details
+            "schemas": {},
+            "retention_policy": asdict(RetentionPolicy())
+        }
+
+    def _save_metadata(self):
+        """Save metadata to disk."""
+        try:
+            with open(self.metadata_file, 'w') as f:
+                json.dump(self.metadata, f, indent=2)
+            logger.debug(f"Saved metadata for connection {self.connection_id}")
+        except Exception as e:
+            logger.error(f"Failed to save metadata: {e}")
+
+    def get_schema_metadata(self, schema_name: str) -> Optional[Dict[str, Any]]:
+        """Get metadata for a specific schema."""
+        return self.metadata.get("schemas", {}).get(schema_name)
+
+    def get_current_version(self, schema_name: str) -> Optional[VersionInfo]:
+        """Get current (active) version for a schema."""
+        schema_meta = self.get_schema_metadata(schema_name)
+        if not schema_meta:
+            return None
+
+        versions = schema_meta.get("versions", [])
+        if not versions:
+            return None
+
+        # Find active version
+        for v_dict in reversed(versions):
+            if v_dict.get("status") == "active":
+                return VersionInfo(**v_dict)
+
+        # Fallback to latest
+        return VersionInfo(**versions[-1])
+
+    def should_create_new_version(
+        self,
+        schema_name: str,
+        current_hash: str
+    ) -> tuple[bool, Optional[int]]:
+        """
+        Determine if a new version should be created.
+
+        Args:
+            schema_name: Schema name
+            current_hash: Current schema hash
+
+        Returns:
+            (should_create, new_version_number or None)
+        """
+        schema_meta = self.get_schema_metadata(schema_name)
+
+        if not schema_meta:
+            # First time - create version 1
+            return (True, 1)
+
+        current_version = self.get_current_version(schema_name)
+
+        if not current_version:
+            # No versions exist - create version 1
+            return (True, 1)
+
+        if current_version.schema_hash == current_hash:
+            # Schema unchanged - reuse existing version
+            logger.info(f"Schema '{schema_name}' unchanged (hash: {current_hash[:8]}...)")
+            return (False, None)
+
+        # Schema changed - create new version
+        next_version = len(schema_meta.get("versions", [])) + 1
+        logger.info(f"Schema '{schema_name}' changed - creating version {next_version}")
+        return (True, next_version)
+
+    def add_version(
+        self,
+        schema_name: str,
+        version_info: VersionInfo,
+        connection_info: Optional[Dict[str, Any]] = None
+    ):
+        """
+        Add a new version to metadata.
+
+        Args:
+            schema_name: Schema name
+            version_info: Version information
+            connection_info: Optional connection details
+        """
+        # Update connection info if provided
+        if connection_info:
+            self.metadata["connection"] = connection_info
+
+        # Initialize schema metadata if needed
+        if schema_name not in self.metadata["schemas"]:
+            self.metadata["schemas"][schema_name] = {
+                "current_version": version_info.version,
+                "schema_hash": version_info.schema_hash,
+                "versions": []
+            }
+
+        # Archive previous active version
+        schema_meta = self.metadata["schemas"][schema_name]
+        for v_dict in schema_meta.get("versions", []):
+            if v_dict.get("status") == "active":
+                v_dict["status"] = "archived"
+                v_dict["graphrag_status"] = "archived"
+                v_dict["ontology_status"] = "archived"
+
+        # Add new version
+        version_dict = asdict(version_info)
+        schema_meta["versions"].append(version_dict)
+        schema_meta["current_version"] = version_info.version
+        schema_meta["schema_hash"] = version_info.schema_hash
+
+        # Save to disk
+        self._save_metadata()
+
+        logger.info(f"Added version {version_info.version} for schema '{schema_name}'")
+
+    def get_versions_to_cleanup(
+        self,
+        schema_name: str,
+        data_type: str = "all"  # "graphrag", "ontology", or "all"
+    ) -> List[VersionInfo]:
+        """
+        Get versions that should be cleaned up based on retention policy.
+
+        Args:
+            schema_name: Schema name
+            data_type: Which data type to check
+
+        Returns:
+            List of versions to delete
+        """
+        schema_meta = self.get_schema_metadata(schema_name)
+        if not schema_meta:
+            return []
+
+        versions = [VersionInfo(**v) for v in schema_meta.get("versions", [])]
+        if not versions:
+            return []
+
+        policy = RetentionPolicy(**self.metadata.get("retention_policy", {}))
+
+        # Separate logic for GraphRAG vs Ontology
+        if data_type == "graphrag":
+            return self._get_cleanup_list(
+                versions,
+                policy.graphrag_keep_versions,
+                policy.graphrag_max_age_days,
+                policy.min_versions,
+                "graphrag_status"
+            )
+        elif data_type == "ontology":
+            return self._get_cleanup_list(
+                versions,
+                policy.ontology_keep_versions,
+                policy.ontology_max_age_days,
+                policy.min_versions,
+                "ontology_status"
+            )
+        else:  # "all"
+            # For "all", only delete if BOTH are eligible
+            graphrag_cleanup = self._get_cleanup_list(
+                versions,
+                policy.graphrag_keep_versions,
+                policy.graphrag_max_age_days,
+                policy.min_versions,
+                "graphrag_status"
+            )
+            ontology_cleanup = self._get_cleanup_list(
+                versions,
+                policy.ontology_keep_versions,
+                policy.ontology_max_age_days,
+                policy.min_versions,
+                "ontology_status"
+            )
+
+            # Intersection - only delete if both agree
+            graphrag_ids = {v.version for v in graphrag_cleanup}
+            ontology_ids = {v.version for v in ontology_cleanup}
+            both_ids = graphrag_ids & ontology_ids
+
+            return [v for v in versions if v.version in both_ids]
+
+    def _get_cleanup_list(
+        self,
+        versions: List[VersionInfo],
+        keep_count: int,
+        max_age_days: int,
+        min_versions: int,
+        status_field: str
+    ) -> List[VersionInfo]:
+        """
+        Get versions to cleanup based on policy.
+
+        Args:
+            versions: All versions
+            keep_count: Number of recent versions to keep
+            max_age_days: Maximum age in days
+            min_versions: Minimum versions to always keep
+            status_field: Which status field to check
+
+        Returns:
+            List of versions to delete
+        """
+        # Filter to only archived versions
+        archived = [v for v in versions if getattr(v, status_field) == "archived"]
+
+        if len(archived) < min_versions:
+            # Not enough versions - don't delete any
+            return []
+
+        # Sort by version number (oldest first)
+        sorted_versions = sorted(archived, key=lambda v: v.version)
+
+        # Keep latest N versions
+        if len(sorted_versions) <= keep_count:
+            return []
+
+        to_check = sorted_versions[:-keep_count]  # Exclude latest N
+
+        # Check age
+        now = datetime.now()
+        to_delete = []
+
+        for version in to_check:
+            created = datetime.fromisoformat(version.created_at)
+            age_days = (now - created).days
+
+            if age_days > max_age_days:
+                to_delete.append(version)
+
+        # Safety check: ensure we keep minimum versions
+        remaining = len(sorted_versions) - len(to_delete)
+        if remaining < min_versions:
+            # Delete fewer to maintain minimum
+            excess = min_versions - remaining
+            to_delete = to_delete[excess:]
+
+        return to_delete
+
+    def mark_version_deleted(
+        self,
+        schema_name: str,
+        version: int,
+        data_type: str = "all"
+    ):
+        """
+        Mark a version as deleted in metadata.
+
+        Args:
+            schema_name: Schema name
+            version: Version number
+            data_type: "graphrag", "ontology", or "all"
+        """
+        schema_meta = self.metadata["schemas"].get(schema_name)
+        if not schema_meta:
+            return
+
+        for v_dict in schema_meta.get("versions", []):
+            if v_dict["version"] == version:
+                if data_type in ["graphrag", "all"]:
+                    v_dict["graphrag_status"] = "deleted"
+                if data_type in ["ontology", "all"]:
+                    v_dict["ontology_status"] = "deleted"
+                if data_type == "all":
+                    v_dict["status"] = "deleted"
+                break
+
+        self._save_metadata()
+
+    def remove_version(self, schema_name: str, version: int):
+        """
+        Completely remove a version from metadata.
+
+        Args:
+            schema_name: Schema name
+            version: Version number
+        """
+        schema_meta = self.metadata["schemas"].get(schema_name)
+        if not schema_meta:
+            return
+
+        versions = schema_meta.get("versions", [])
+        schema_meta["versions"] = [v for v in versions if v["version"] != version]
+
+        self._save_metadata()
+
+    def get_retention_policy(self) -> RetentionPolicy:
+        """Get current retention policy."""
+        return RetentionPolicy(**self.metadata.get("retention_policy", {}))
+
+    def update_retention_policy(self, policy: RetentionPolicy):
+        """Update retention policy."""
+        self.metadata["retention_policy"] = asdict(policy)
+        self._save_metadata()

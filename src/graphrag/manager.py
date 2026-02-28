@@ -11,11 +11,24 @@ from pathlib import Path
 import json
 
 from .embedder import SchemaEmbedder
-from .vector_store import VectorStore
 from .retriever import GraphRetriever
 from .community_detector import CommunityDetector
 
-logger = logging.getLogger(__name__)
+# Try to use ChromaDB if available, fallback to JSON-based VectorStore
+try:
+    from .vector_store_chromadb import ChromaDBVectorStore, CHROMADB_AVAILABLE
+    if CHROMADB_AVAILABLE:
+        logger = logging.getLogger(__name__)
+        logger.info("ChromaDB available - using high-performance vector storage")
+    else:
+        from .vector_store import VectorStore
+        logger = logging.getLogger(__name__)
+        logger.warning("ChromaDB not available - falling back to JSON-based vector storage")
+except ImportError:
+    from .vector_store import VectorStore
+    CHROMADB_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("ChromaDB not available - falling back to JSON-based vector storage")
 
 
 class GraphRAGManager:
@@ -24,7 +37,9 @@ class GraphRAGManager:
     def __init__(
         self,
         embedding_model: str = "tfidf",
-        embedding_dimension: int = 384
+        embedding_dimension: int = 384,
+        connection_id: Optional[str] = None,
+        schema_name: Optional[str] = None
     ):
         """
         Initialize GraphRAG manager.
@@ -32,14 +47,30 @@ class GraphRAGManager:
         Args:
             embedding_model: Type of embedding ("tfidf", "sentence-transformers")
             embedding_dimension: Embedding vector dimension
+            connection_id: Database connection fingerprint (for file isolation)
+            schema_name: Schema name (for ChromaDB collection naming)
         """
         self.embedder = SchemaEmbedder(embedding_model=embedding_model)
-        self.vector_store = VectorStore(dimension=embedding_dimension)
+
+        # Use ChromaDB if available, otherwise fallback to JSON-based storage
+        if CHROMADB_AVAILABLE:
+            self.vector_store = ChromaDBVectorStore(
+                connection_id=connection_id or "default",
+                schema_name=schema_name or "default",
+                dimension=embedding_dimension
+            )
+            logger.info("Initialized ChromaDB vector store")
+        else:
+            from .vector_store import VectorStore
+            self.vector_store = VectorStore(dimension=embedding_dimension)
+            logger.warning("Using JSON-based vector store (ChromaDB not available)")
+
         self.graph_retriever = GraphRetriever()
         self.community_detector: Optional[CommunityDetector] = None
 
         self._initialized = False
-        self._schema_name: Optional[str] = None
+        self._schema_name: Optional[str] = schema_name
+        self._connection_id: Optional[str] = connection_id or "default"
 
     def initialize_from_schema(
         self,
@@ -314,21 +345,24 @@ class GraphRAGManager:
             output_dir: Output directory
         """
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create connection-specific subdirectory to prevent collisions
+        connection_dir = output_dir / self._connection_id
+        connection_dir.mkdir(parents=True, exist_ok=True)
 
         # Save vector store
-        vector_store_path = output_dir / f"vector_store_{self._schema_name}.json"
+        vector_store_path = connection_dir / f"vector_store_{self._schema_name}.json"
         self.vector_store.save(vector_store_path)
 
         # Save graph
-        graph_path = output_dir / f"graph_{self._schema_name}.json"
+        graph_path = connection_dir / f"graph_{self._schema_name}.json"
         graph_data = self.graph_retriever.export_graph_for_visualization()
         with open(graph_path, 'w') as f:
             json.dump(graph_data, f, indent=2)
 
         # Save communities
         if self.community_detector:
-            communities_path = output_dir / f"communities_{self._schema_name}.json"
+            communities_path = connection_dir / f"communities_{self._schema_name}.json"
             communities_data = {
                 "summaries": self.community_detector.get_all_summaries(),
                 "domain_names": self.community_detector.suggest_domain_names()
@@ -336,27 +370,33 @@ class GraphRAGManager:
             with open(communities_path, 'w') as f:
                 json.dump(communities_data, f, indent=2)
 
-        logger.info(f"Saved GraphRAG state to {output_dir}")
+        logger.info(f"Saved GraphRAG state to {connection_dir}")
 
-    def load_state(self, input_dir: Path, schema_name: str):
+    def load_state(self, input_dir: Path, schema_name: str, connection_id: Optional[str] = None):
         """
         Load GraphRAG state from disk.
 
         Args:
             input_dir: Input directory
             schema_name: Schema identifier
+            connection_id: Database connection fingerprint (for file isolation)
         """
         input_dir = Path(input_dir)
 
+        # Use connection-specific subdirectory
+        if connection_id:
+            self._connection_id = connection_id
+        connection_dir = input_dir / self._connection_id
+
         # Load vector store
-        vector_store_path = input_dir / f"vector_store_{schema_name}.json"
+        vector_store_path = connection_dir / f"vector_store_{schema_name}.json"
         if vector_store_path.exists():
             self.vector_store.load(vector_store_path)
 
         self._schema_name = schema_name
         self._initialized = True
 
-        logger.info(f"Loaded GraphRAG state from {input_dir}")
+        logger.info(f"Loaded GraphRAG state from {connection_dir}")
 
     def clear(self):
         """Clear all GraphRAG state."""

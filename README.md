@@ -306,7 +306,7 @@ sudo apt-get install libssl-dev libffi-dev   # For cryptographic functions
 ## Project Structure
 
 ```
-database-ontology-mcp/
+orionbelt-analytics/
 ├── src/
 │   ├── __init__.py                 # Package initialization
 │   ├── main.py                     # FastMCP server entry point (13 tools)
@@ -348,8 +348,8 @@ database-ontology-mcp/
 1. **Clone the repository:**
 
 ```bash
-git clone https://github.com/ralfbecher/database-ontology-mcp
-cd database-ontology-mcp
+git clone https://github.com/ralfbecher/orionbelt-analytics
+cd orionbelt-analytics
 ```
 
 2. **Install dependencies with uv (recommended):**
@@ -385,7 +385,7 @@ Create a `.env` file in the project root:
 
 ```env
 # =================================================================
-# Database Ontology MCP Server Configuration
+# OrionBelt Analytics Configuration
 # =================================================================
 
 # Server Configuration
@@ -469,14 +469,14 @@ python server.py
 **Start the server manually**:
 
 ```bash
-cd /path/to/database-ontology-mcp
+cd /path/to/orionbelt-analytics
 uv run server.py
 ```
 
 **Or with activated venv:**
 
 ```bash
-cd /path/to/database-ontology-mcp
+cd /path/to/orionbelt-analytics
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 python server.py
 ```
@@ -508,7 +508,7 @@ Add to your Claude Desktop MCP settings (`claude_desktop_config.json`):
 Start the server manually with SSE transport:
 
 ```bash
-cd /path/to/database-ontology-mcp
+cd /path/to/orionbelt-analytics
 # Set MCP_TRANSPORT=sse in your .env file first
 uv run server.py
 ```

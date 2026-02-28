@@ -1,5 +1,5 @@
 """
-MCP Tools for the Database Ontology MCP Server.
+MCP Tools for OrionBelt Analytics.
 
 This package contains all MCP tools organized by functionality.
 Each tool is in its own module for better maintainability.

@@ -32,7 +32,7 @@ def connect_database(
     possible_env_paths = [
         os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env'),  # From src/tools/connection.py
         os.path.join(os.getcwd(), '.env'),  # Current working directory
-        '/Users/ralfbecher/Documents/GitHub/mcp-servers/database-ontology-mcp/.env'  # Absolute path as fallback
+        '/Users/ralfbecher/Documents/GitHub/mcp-servers/orionbelt-analytics/.env'  # Absolute path as fallback
     ]
     
     for env_path in possible_env_paths:
@@ -214,7 +214,7 @@ def diagnose_connection_issue(
                 sslmode = 'require' if actual_ssl else 'disable'
                 result["connection_string_preview"] = (
                     f"postgresql://{actual_username}:****@{actual_host}:{actual_port}/dremio"
-                    f"?sslmode={sslmode}&application_name=database-ontology-mcp"
+                    f"?sslmode={sslmode}&application_name=orionbelt-analytics"
                 )
             
             # Add Dremio-specific recommendations
@@ -297,7 +297,7 @@ def diagnose_connection_issue(
             if actual_host and actual_port and actual_username:
                 result["connection_string_preview"] = (
                     f"postgresql://{actual_username}:****@{actual_host}:{actual_port}/{db_config.postgres_database or 'DATABASE'}"
-                    f"?sslmode=prefer&application_name=database-ontology-mcp"
+                    f"?sslmode=prefer&application_name=orionbelt-analytics"
                 )
             
             result["recommendations"].extend([
