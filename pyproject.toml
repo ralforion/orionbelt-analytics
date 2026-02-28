@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     # Core MCP Framework - latest version
-    "fastmcp>=2.14.5",
+    "fastmcp>=3.0.2",
     # Database connectivity - latest versions
     "sqlalchemy>=2.0.46",
     "psycopg2-binary>=2.9.11",
@@ -53,15 +53,17 @@ dependencies = [
     "scikit-learn>=1.3.0",
     "networkx>=3.1",
     "numpy>=1.24.0",
+    # ChromaDB for efficient vector storage (replaces JSON files)
+    "chromadb>=0.4.0",
     # Oxigraph RDF store for SPARQL endpoint
     "pyoxigraph>=0.3.22",
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/database-ontology-mcp"
-Repository = "https://github.com/yourusername/database-ontology-mcp"
-Documentation = "https://github.com/yourusername/database-ontology-mcp#readme"
-Issues = "https://github.com/yourusername/database-ontology-mcp/issues"
+Homepage = "https://github.com/ralfbecher/orionbelt-analytics"
+Repository = "https://github.com/ralfbecher/orionbelt-analytics"
+Documentation = "https://github.com/ralfbecher/orionbelt-analytics#readme"
+Issues = "https://github.com/ralfbecher/orionbelt-analytics/issues"
 
 [build-system]
 requires = ["hatchling"]
