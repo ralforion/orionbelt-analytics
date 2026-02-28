@@ -6,7 +6,7 @@ helping organize large schemas into understandable domains.
 """
 
 import logging
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Optional
 import networkx as nx
 from collections import defaultdict
 
