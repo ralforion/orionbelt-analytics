@@ -3180,7 +3180,7 @@ async def _auto_generate_ontology_background(
                 store = get_oxigraph_store(ctx)
                 if store:
                     graph_uri = f"{base_uri}{schema_name}"
-                    triple_count = store.load_ontology(ontology_ttl, graph_uri)
+                    triple_count = store.load_ontology(ontology_ttl, graph_uri, schema_name)
                     logger.info(f"📦 Stored {triple_count} triples in RDF store (graph: {graph_uri})")
             except Exception as e:
                 logger.warning(f"Failed to store in RDF: {e}")
@@ -3264,8 +3264,8 @@ async def _auto_initialize_graphrag_background(
 
         # Build vector index and graph
         session.graphrag_manager.initialize_from_schema(
-            schema_name=schema_name,
-            schema_data={"tables": tables_dict}
+            tables_info=tables_dict,
+            schema_name=schema_name
         )
 
         # Save state to disk for persistence
@@ -3276,9 +3276,8 @@ async def _auto_initialize_graphrag_background(
         session.graphrag_initialized = True
 
         # Log success with statistics
-        vector_count = session.graphrag_manager.vector_store.vector_count if session.graphrag_manager.vector_store else 0
         logger.info(f"✅ GraphRAG auto-initialized successfully ({elapsed:.2f}s)")
-        logger.info(f"📊 Indexed {vector_count} vectors ({len(tables_dict)} tables)")
+        logger.info(f"📊 Indexed {len(tables_dict)} tables with their metadata")
 
         # PHASE 2: Chain to ontology generation if enabled
         auto_ontology = os.getenv("AUTO_ONTOLOGY", "false").lower()
@@ -4162,7 +4161,8 @@ async def list_tables_sparql(
         if not schema_graph:
             session = get_session_data(ctx)
             schema_name = session.get_last_analyzed_schema() or "default"
-            schema_graph = f"http://example.com/ontology/{schema_name}"
+            # Use same graph URI pattern as generate_ontology() and store_ontology_in_rdf()
+            schema_graph = f"http://example.com/schema/{schema_name}"
 
         tables = store.list_tables_sparql(schema_graph)
 

@@ -87,8 +87,10 @@ class GraphRetriever:
 
         try:
             # Use bidirectional search (considers both directions)
+            # Also try undirected view to find mixed-direction paths (e.g., A → B ← C)
             path_forward = None
             path_backward = None
+            path_undirected = None
 
             try:
                 path_forward = nx.shortest_path(
@@ -108,15 +110,31 @@ class GraphRetriever:
             except nx.NetworkXNoPath:
                 pass
 
-            # Choose shorter path
-            if path_forward and path_backward:
-                path = path_forward if len(path_forward) <= len(path_backward) else list(reversed(path_backward))
-            elif path_forward:
-                path = path_forward
-            elif path_backward:
-                path = list(reversed(path_backward))
-            else:
+            # Try undirected view for mixed-direction paths
+            try:
+                undirected_graph = self.graph.to_undirected()
+                path_undirected = nx.shortest_path(
+                    undirected_graph,
+                    source=from_table,
+                    target=to_table
+                )
+            except nx.NetworkXNoPath:
+                pass
+
+            # Choose shortest path among all options
+            candidates = []
+            if path_forward:
+                candidates.append(path_forward)
+            if path_backward:
+                candidates.append(list(reversed(path_backward)))
+            if path_undirected:
+                candidates.append(path_undirected)
+
+            if not candidates:
                 return None
+
+            # Pick shortest path
+            path = min(candidates, key=len)
 
             if len(path) - 1 > max_hops:
                 logger.warning(f"Path from {from_table} to {to_table} requires {len(path) - 1} hops (max: {max_hops})")

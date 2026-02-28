@@ -169,8 +169,14 @@ class OxigraphStoreManager:
             ```
         """
         try:
+            # For ASK queries, pyoxigraph returns a boolean directly
+            # We need to cast the query result properly
             result = self.store.query(sparql_query)
-            return bool(result)
+            # ASK queries return a boolean, not an iterator
+            # pyoxigraph query() returns the boolean value for ASK queries
+            return bool(result) if isinstance(result, bool) else bool(next(iter(result), False))
+        except StopIteration:
+            return False
         except Exception as e:
             logger.error(f"SPARQL ASK query failed: {e}", exc_info=True)
             raise
