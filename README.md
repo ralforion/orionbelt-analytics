@@ -5,140 +5,54 @@
 
 <h1 align="center">OrionBelt Analytics</h1>
 
-<p align="center"><strong>AI-Powered Database Intelligence with GraphRAG, Vector Search & SPARQL</strong></p>
+<p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
+
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
+[![FastMCP](https://img.shields.io/badge/FastMCP-2.14+-blue)](https://github.com/jlowin/fastmcp)
+[![RDF/OWL](https://img.shields.io/badge/RDF%2FOWL-Ontology-orange)](https://www.w3.org/OWL/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-supported-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Snowflake](https://img.shields.io/badge/Snowflake-supported-29B5E8?logo=snowflake&logoColor=white)](https://www.snowflake.com/)
+[![ClickHouse](https://img.shields.io/badge/ClickHouse-supported-FFCC01?logo=clickhouse&logoColor=black)](https://clickhouse.com/)
+[![Dremio](https://img.shields.io/badge/Dremio-supported-31A05F)](https://www.dremio.com/)
+
+This project provides a production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, Snowflake, and Dremio) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
 
 <p align="center">
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.13+-blue.svg" alt="Python 3.13+"/></a>
-  <a href="https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"/></a>
-  <a href="https://github.com/jlowin/fastmcp"><img src="https://img.shields.io/badge/FastMCP-2.14+-blue" alt="FastMCP"/></a>
-  <img src="https://img.shields.io/badge/Token_Reduction-98%25-brightgreen" alt="98% Token Reduction"/>
+  <img src="assets/architecture.png" alt="OrionBelt Analytics Architecture" width="800">
 </p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/RDF%2FOWL-Ontology-orange" alt="RDF/OWL"/>
-  <img src="https://img.shields.io/badge/SPARQL-1.1-orange" alt="SPARQL 1.1"/>
-  <img src="https://img.shields.io/badge/GraphRAG-Enabled-purple" alt="GraphRAG"/>
-  <img src="https://img.shields.io/badge/Vector_DB-scikit--learn-red" alt="Vector DB"/>
-  <img src="https://img.shields.io/badge/RDF_Store-Oxigraph-yellow" alt="Oxigraph"/>
-</p>
-
-<p align="center">
-  <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-supported-336791?logo=postgresql&logoColor=white" alt="PostgreSQL"/></a>
-  <a href="https://www.snowflake.com/"><img src="https://img.shields.io/badge/Snowflake-supported-29B5E8?logo=snowflake&logoColor=white" alt="Snowflake"/></a>
-  <a href="https://clickhouse.com/"><img src="https://img.shields.io/badge/ClickHouse-supported-FFCC01?logo=clickhouse&logoColor=black" alt="ClickHouse"/></a>
-  <a href="https://www.dremio.com/"><img src="https://img.shields.io/badge/Dremio-supported-31A05F" alt="Dremio"/></a>
-</p>
-
-**OrionBelt Analytics** is a next-generation MCP server that combines **Graph-based RAG (Retrieval-Augmented Generation)**, **vector search**, **persistent RDF storage**, and **SPARQL querying** to provide intelligent database schema navigation with **98% token reduction**.
-
-### 🚀 What's New
-
-- ✨ **GraphRAG** - Semantic schema search with 85-95% token reduction
-- 🔍 **Vector Database** - TF-IDF/Sentence Transformers for intelligent retrieval
-- 📊 **Oxigraph RDF Store** - Persistent SPARQL endpoint for ontology queries
-- 🧠 **Knowledge Collection** - Accumulate learned patterns across sessions
-- 🎯 **Community Detection** - Automatic schema domain clustering
-- ⚡ **Hierarchical Retrieval** - On-demand table/column metadata
 
 > **Better Together:** Combine with [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer) for a complete AI-powered analytics stack. The Semantic Layer compiles declarative YAML models into dialect-specific, optimized SQL — ensuring correct joins, aggregations, and fan-trap-free queries across Postgres, Snowflake, ClickHouse, Dremio, and Databricks. Run both MCP servers side-by-side in Claude Desktop for schema-aware ontology generation **and** guaranteed-correct SQL compilation.
 
-## 🎯 Key Philosophy
+## Key Philosophy: Automatic Ontology Integration
 
-**Intelligent Context, Not Full Dumps**: Instead of loading entire schemas (145k+ tokens), OrionBelt uses GraphRAG and vector search to retrieve only relevant tables and columns (1k-5k tokens) based on your natural language queries.
-
-## ⚡ Quick Start
-
-```python
-# 1. Connect to database
-connect_database(db_type="postgresql")
-
-# 2. Analyze schema
-analyze_schema(schema_name="public")
-
-# 3. Initialize GraphRAG (vector search + graph traversal)
-initialize_graphrag(schema_name="public")
-
-# 4. Store in RDF for SPARQL queries
-generate_ontology(schema_name="public")
-store_ontology_in_rdf(schema_name="public")
-
-# 5. Semantic search
-results = graphrag_search("find customer and order tables")
-
-# 6. Get intelligent context (98% token reduction!)
-context = graphrag_query_context("show total sales by customer")
-
-# 7. SPARQL queries
-query_sparql('''
-    PREFIX db: <http://example.com/db#>
-    SELECT ?table ?column
-    WHERE {
-        ?table db:hasColumn ?column .
-        ?column db:dataType "INTEGER" .
-    }
-''')
-
-# 8. Execute SQL with context
-execute_sql_query("SELECT customer_id, SUM(amount) FROM orders GROUP BY customer_id")
-```
+Our main analysis tool `get_analysis_context()` automatically includes ontology generation, making semantic context readily available for every query.
 
 ## 🌟 Key Features
 
 ### 🔗 Database Connectivity
 
-- **PostgreSQL**, **Snowflake**, **ClickHouse**, and **Dremio** support
-- **Connection pooling** and retry logic
-- **Environment variable fallback** for seamless configuration
-- **Automatic dependency management**
+- **PostgreSQL**, **Snowflake**, and **Dremio** support with connection pooling
+- **Environment variable fallback** - parameters optional, uses .env when not provided
+- **Enhanced connection management** with retry logic and timeout handling
+- **Automatic dependency management** for Snowflake and Dremio connectors
 
-### 🎯 34 Powerful MCP Tools
+### 🎯 13 Essential Tools
 
-**Core Tools:**
-- Database connection and schema analysis
-- RDF/OWL ontology generation with auto-persist
-- SQL query execution with validation
-- Interactive chart generation
-
-**GraphRAG Tools:**
-- `graphrag_search()` - Semantic schema search
-- `graphrag_query_context()` - Intelligent context retrieval (85-95% token reduction)
-- `graphrag_find_join_path()` - Automatic join discovery
-- `graphrag_overview()` - Schema intelligence & communities
-
-**SPARQL Tools:**
-- `query_sparql()` - Full SPARQL 1.1 SELECT queries
-- `query_sparql_ask()` - Boolean SPARQL queries
-- `store_ontology_in_rdf()` - Persistent RDF storage
-- `add_rdf_knowledge()` - Knowledge accumulation
-- `list_tables_sparql()` - SPARQL-based table listing
-- `find_columns_by_type_sparql()` - Type-based column search
-
-**Download Tools (NEW - Phase 4):**
-- `download_ontology()` - Export ontology from RDF store or tmp folder
-- `download_r2rml()` - Download R2RML mapping files
-
-### 🧠 GraphRAG Intelligence
-
-- **Vector embeddings** for tables, columns, and relationships
-- **Semantic similarity search** using TF-IDF or Sentence Transformers
-- **Graph traversal** for automatic join path discovery
-- **Community detection** for schema domain clustering
-- **Context-aware retrieval** - only load relevant schema elements
-
-### 🗄️ Persistent RDF Store (Oxigraph)
-
-- **Fast embedded database** written in Rust (via pyoxigraph)
-- **Full SPARQL 1.1 support** for complex ontology queries
-- **Named graphs** for multi-schema management
-- **Knowledge accumulation** across sessions
-- **ACID transactions** for reliable persistence
+- **Streamlined workflow** with focused, purpose-built tools
+- **Interactive charting** (`generate_chart`) with direct image rendering
+- **Comprehensive schema analysis** with automatic ontology generation
+- **Semantic name resolution** for business-friendly ontologies
+- **Custom ontology loading** from external files
+- **Built-in workflow guidance** via FastMCP Context integration
+- **Focus on results** - maximum effectiveness with minimum complexity
 
 ### 🧠 Automatic Ontology Generation
 
-- **Self-sufficient ontologies** with direct database references
-- **Business context inference** from naming patterns
-- **Complete SQL mappings** embedded in RDF
-- **Fan-trap detection** and query safety
+- **Self-sufficient ontologies** with direct database references (`db:sqlReference`, `db:sqlJoinCondition`)
+- **Business context inference** from table and column naming patterns
+- **Complete SQL mappings** embedded directly in ontology
+- **Fan-trap detection** and query safety validation
 
 ### 🗺️ R2RML Mapping Generation
 
@@ -154,26 +68,12 @@ execute_sql_query("SELECT customer_id, SUM(amount) FROM orders GROUP BY customer
 - **Safe aggregation patterns** (UNION, separate CTEs, window functions)
 - **Comprehensive SQL validation** before execution
 
-### 📉 Token Reduction (98%)
-
-**Before OrionBelt** (100-table schema):
-- Full schema dump: 145,000 tokens per query
-- Total session: 145,000+ tokens
-
-**After OrionBelt** (all optimizations):
-- Phase 1 (Skills): ~7,800 tokens saved
-- Phase 2 (Hierarchical): ~90% schema reduction
-- GraphRAG: ~85-95% context reduction
-- **Result: 1,000-5,000 tokens per query (98% reduction!)**
-
 ### ⚡ Performance & Reliability
 
 - **Concurrent processing** with thread pool management
 - **Connection pooling** and resource optimization
 - **Comprehensive error handling** with structured responses
 - **Production-ready logging** and monitoring
-- **Fast vector search** - sub-second semantic queries
-- **Efficient graph traversal** - NetworkX algorithms
 
 ## Python Library Installation
 
@@ -216,15 +116,6 @@ python-dotenv>=1.0.0,<2.0.0      # Environment variable loading from .env files
 ```bash
 rdflib>=7.0.0,<8.0.0             # RDF graph creation and manipulation
 owlrl>=6.0.0,<7.0.0              # OWL reasoning and validation
-pyoxigraph>=0.3.22               # Fast embedded RDF store with SPARQL 1.1 support
-```
-
-#### **GraphRAG & Vector Search**
-
-```bash
-scikit-learn>=1.3.0              # TF-IDF vectorization and ML utilities
-networkx>=3.1                    # Graph algorithms and traversal
-numpy>=1.24.0                    # Vector operations and numerical computing
 ```
 
 #### **Automatic Dependencies (installed with above)**
@@ -385,7 +276,7 @@ Create a `.env` file in the project root:
 
 ```env
 # =================================================================
-# OrionBelt Analytics Configuration
+# OrionBelt Analytics MCP Server Configuration
 # =================================================================
 
 # Server Configuration

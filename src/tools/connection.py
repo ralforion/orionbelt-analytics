@@ -216,7 +216,7 @@ def diagnose_connection_issue(
                     f"postgresql://{actual_username}:****@{actual_host}:{actual_port}/dremio"
                     f"?sslmode={sslmode}&application_name=orionbelt-analytics"
                 )
-            
+
             # Add Dremio-specific recommendations
             result["recommendations"].extend([
                 "Ensure Dremio coordinator is running and accessible",
@@ -299,7 +299,7 @@ def diagnose_connection_issue(
                     f"postgresql://{actual_username}:****@{actual_host}:{actual_port}/{db_config.postgres_database or 'DATABASE'}"
                     f"?sslmode=prefer&application_name=orionbelt-analytics"
                 )
-            
+
             result["recommendations"].extend([
                 "Ensure PostgreSQL server is running and accessible",
                 "Verify pg_hba.conf allows connections from your IP",
