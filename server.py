@@ -21,9 +21,6 @@ from src import __version__, __name__ as SERVER_NAME
 config = config_manager.get_server_config()
 logger = setup_logging(config.log_level, structured=False)  # Use simple format for startup
 
-# Suppress CancelledError warnings during shutdown (FastMCP 3.0 + SSE cleanup)
-warnings.filterwarnings("ignore", category=asyncio.CancelledError)
-
 def setup_signal_handlers():
     """Setup signal handlers for graceful shutdown."""
     shutdown_event = asyncio.Event()
