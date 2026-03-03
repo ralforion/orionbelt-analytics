@@ -4,6 +4,8 @@
 import sys
 import signal
 import shutil
+import asyncio
+import warnings
 from pathlib import Path
 
 # Add src directory to path for imports
@@ -19,14 +21,27 @@ from src import __version__, __name__ as SERVER_NAME
 config = config_manager.get_server_config()
 logger = setup_logging(config.log_level, structured=False)  # Use simple format for startup
 
+# Suppress CancelledError warnings during shutdown (FastMCP 3.0 + SSE cleanup)
+warnings.filterwarnings("ignore", category=asyncio.CancelledError)
+
 def setup_signal_handlers():
     """Setup signal handlers for graceful shutdown."""
+    shutdown_event = asyncio.Event()
+
     def signal_handler(signum, frame):
         logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        # Set shutdown event to allow cleanup
+        try:
+            loop = asyncio.get_event_loop()
+            loop.call_soon_threadsafe(shutdown_event.set)
+        except RuntimeError:
+            pass  # No event loop running
         sys.exit(0)
-    
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+    return shutdown_event
 
 def print_startup_info():
     """Print server startup information."""
@@ -95,29 +110,39 @@ def main():
     """Start the OrionBelt Analytics MCP server."""
     try:
         # Setup signal handlers for graceful shutdown
-        setup_signal_handlers()
-        
+        shutdown_event = setup_signal_handlers()
+
         # Clean up temporary files from previous runs
         cleanup_tmp_folder()
-        
+
         # Print startup information
         print_startup_info()
-        
+
         transport_name = "streamable-http" if config.mcp_transport == "http" else "SSE"
         logger.info(f"🚀 Starting OrionBelt Analytics MCP server with {transport_name} transport...")
         logger.info("📡 Server ready for MCP protocol messages")
 
+        # Configure FastMCP with shorter shutdown timeout for cleaner exits
+        # This reduces the timeout window for SSE connections during shutdown
+        import os
+        os.environ.setdefault("MCP_SHUTDOWN_TIMEOUT", "2")  # 2 seconds instead of default 5
+
         mcp.run(transport=config.mcp_transport, host=config.mcp_server_host, port=config.mcp_server_port)
-        
+
     except KeyboardInterrupt:
         logger.info("⏹️  Server stopped by user (Ctrl+C)")
+    except asyncio.CancelledError:
+        # Gracefully handle cancelled tasks during shutdown
+        logger.debug("Async tasks cancelled during shutdown (expected)")
     except Exception as e:
-        logger.error(f"❌ Critical server error: {type(e).__name__}: {e}")
-        logger.error("Please check your configuration and try again")
-        return 1
+        # Only log unexpected exceptions
+        if "CancelledError" not in str(type(e).__name__):
+            logger.error(f"❌ Critical server error: {type(e).__name__}: {e}")
+            logger.error("Please check your configuration and try again")
+            return 1
     finally:
         logger.info("✅ Server shutdown complete")
-    
+
     return 0
 
 if __name__ == "__main__":
