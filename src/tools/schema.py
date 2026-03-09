@@ -1,4 +1,9 @@
-"""Schema analysis and data sampling tools."""
+"""Schema analysis and data sampling tools.
+
+DEPRECATED: This module is superseded by ``src/handlers/schema.py``.
+The handler version uses per-session dependency injection instead of the
+shared global ``get_db_manager()`` pattern.  Do not add new code here.
+"""
 
 import logging
 from typing import Dict, Optional, Any

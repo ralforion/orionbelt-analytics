@@ -1,4 +1,12 @@
-"""Database connection and diagnostic tools."""
+"""Database connection and diagnostic tools.
+
+DEPRECATED: This module is superseded by ``src/handlers/connection.py``.
+The handler version uses per-session dependency injection instead of the
+shared global ``get_db_manager()`` pattern.
+
+Only ``diagnose_connection_issue`` is still imported by ``handlers/connection.py``
+as a transitional measure.  New development should go in ``handlers/connection.py``.
+"""
 
 import logging
 from typing import Dict, Any, Optional

@@ -252,7 +252,7 @@ class TestDatabaseManagerSecurity(unittest.TestCase):
     def setUp(self) -> None:
         self.db_manager = DatabaseManager()
 
-    @patch('src.database_manager.create_engine')
+    @patch('src.drivers.postgresql.create_engine')
     def test_secure_postgresql_connection(
         self, mock_create_engine: MagicMock
     ) -> None:

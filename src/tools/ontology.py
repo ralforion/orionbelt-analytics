@@ -1,4 +1,9 @@
-"""Ontology generation and management tools."""
+"""Ontology generation and management tools.
+
+DEPRECATED: This module is superseded by ``src/handlers/ontology.py``.
+The handler version uses per-session dependency injection instead of the
+shared global ``get_db_manager()`` pattern.  Do not add new code here.
+"""
 
 import logging
 import os

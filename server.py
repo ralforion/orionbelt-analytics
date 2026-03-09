@@ -106,6 +106,9 @@ def cleanup_tmp_folder():
 def main():
     """Start the OrionBelt Analytics MCP server."""
     try:
+        # Validate configuration before anything else
+        config_manager.validate_config()
+
         # Setup signal handlers for graceful shutdown
         shutdown_event = setup_signal_handlers()
 

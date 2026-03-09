@@ -29,6 +29,9 @@ tmp/
 # Test files in main directory
 /test_*.py
 
+# Review reports
+review*
+
 # OS specific
 .DS_Store
 Thumbs.db

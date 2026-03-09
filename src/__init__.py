@@ -12,11 +12,14 @@ from .ontology_generator import OntologyGenerator
 from .config import config_manager
 from .constants import SUPPORTED_DB_TYPES
 
+from .session import SessionData
+
 __all__ = [
     "DatabaseManager",
-    "TableInfo", 
+    "TableInfo",
     "ColumnInfo",
     "OntologyGenerator",
+    "SessionData",
     "config_manager",
     "SUPPORTED_DB_TYPES",
     "__version__",

@@ -1,4 +1,9 @@
-"""SQL query validation and execution tools."""
+"""SQL query validation and execution tools.
+
+DEPRECATED: This module is superseded by ``src/handlers/query.py``.
+The handler version uses per-session dependency injection instead of the
+shared global ``get_db_manager()`` pattern.  Do not add new code here.
+"""
 
 import logging
 from typing import Dict, Any

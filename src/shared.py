@@ -48,7 +48,32 @@ def get_db_manager() -> DatabaseManager:
 
 
 def create_error_response(message: str, error_type: str, details: str = None) -> Dict[str, Any]:
-    """Create a standardized error response."""
+    """Create a standardized error response.
+
+    DEPRECATED: Use the typed exception classes in ``src/exceptions.py`` instead.
+
+    Each exception subclass produces the same ``{"success": False, ...}`` dict
+    via its ``.to_response()`` method, but adds type safety and avoids free-form
+    ``error_type`` strings scattered across the codebase.
+
+    Example migration::
+
+        # Before (deprecated):
+        return create_error_response("Not connected", "connection_error")
+
+        # After (preferred):
+        from .exceptions import ConnectionError
+        return ConnectionError("Not connected").to_response()
+
+    This function is retained only for backward compatibility with
+    ``src/tools/`` modules.  It will be removed in a future release.
+    """
+    warnings.warn(
+        "create_error_response() is deprecated. "
+        "Use exception classes from src.exceptions instead (e.g. ConnectionError('msg').to_response()).",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     error_response = {
         "success": False,
         "error": message,

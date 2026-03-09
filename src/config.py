@@ -135,6 +135,34 @@ class ConfigManager:
             logger.info("Database configuration loaded")
         return self._db_config
     
+    def validate_config(self) -> None:
+        """Validate core server configuration at startup.
+
+        Checks that MCP_TRANSPORT is a recognized value and MCP_SERVER_PORT
+        is within the valid TCP port range (1-65535).
+
+        Raises:
+            ValueError: If any configuration value is invalid.
+        """
+        config = self.get_server_config()
+
+        # Validate transport type
+        valid_transports = {"http", "sse"}
+        if config.mcp_transport not in valid_transports:
+            raise ValueError(
+                f"Invalid MCP_TRANSPORT='{config.mcp_transport}'. "
+                f"Must be one of: {', '.join(sorted(valid_transports))}"
+            )
+
+        # Validate port range
+        if not (1 <= config.mcp_server_port <= 65535):
+            raise ValueError(
+                f"Invalid MCP_SERVER_PORT={config.mcp_server_port}. "
+                f"Must be between 1 and 65535."
+            )
+
+        logger.info("Server configuration validated successfully")
+
     def validate_db_config(self, db_type: str) -> Dict[str, Any]:
         """Validate database configuration for a specific type."""
         config = self.get_database_config()

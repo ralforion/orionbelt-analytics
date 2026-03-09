@@ -1,4 +1,8 @@
-"""Server information tool."""
+"""Server information tool.
+
+DEPRECATED: This module is superseded by ``src/handlers/info.py``.
+Do not add new code here.
+"""
 
 import logging
 from typing import Dict, Any
