@@ -2,9 +2,7 @@
 name = "orionbelt-analytics"
 version = "0.6.0"
 description = "OrionBelt Analytics - the Ontology-based MCP server for your Text-2-SQL convenience"
-authors = [
-    {name = "Ralf Becher, RALFORION d.o.o.", email = "ralf.becher@web.de"}
-]
+authors = [{name = "Ralf Becher, RALFORION d.o.o.", email = "ralf.becher@web.de"}]
 readme = "README.md"
 requires-python = ">=3.13"
 keywords = ["mcp", "database", "ontology", "rdf", "schema-analysis", "postgresql", "snowflake", "clickhouse"]

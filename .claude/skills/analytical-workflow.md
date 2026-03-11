@@ -702,6 +702,100 @@ SELECT c.id, c.name FROM customers c JOIN orders o ON c.id = o.customer_id
 
 ---
 
+## Integration: OrionBelt Semantic Layer MCP
+
+### When to Use Semantic Layer MCP
+
+If the **OrionBelt Semantic Layer MCP** server is available, use it for business-user-friendly semantic queries.
+
+**OrionBelt Analytics MCP** (this server):
+- ✅ Schema analysis and metadata
+- ✅ Direct SQL execution
+- ✅ Ontology generation
+- ✅ Technical/admin workflows
+
+**OrionBelt Semantic Layer MCP** (separate server):
+- ✅ Business-friendly semantic queries
+- ✅ Pre-defined metrics and dimensions
+- ✅ Natural language to SQL via semantic layer
+- ✅ Business user workflows
+
+### Recommended Integration Workflow
+
+```
+1. Use OrionBelt Analytics to analyze schema
+   → analyze_schema()
+   → generate_ontology()
+
+2. Use Semantic Layer MCP for business queries
+   → semantic_layer.get_metrics()
+   → semantic_layer.query_semantic()
+
+3. Use OrionBelt Analytics for advanced/technical queries
+   → execute_sql_query()
+   → generate_chart()
+```
+
+### Division of Responsibilities
+
+| Task | Use This Server | Use Semantic Layer |
+|------|----------------|-------------------|
+| Schema discovery | ✅ Analytics | ❌ |
+| Ontology generation | ✅ Analytics | ❌ |
+| Direct SQL queries | ✅ Analytics | ❌ |
+| Technical analysis | ✅ Analytics | ❌ |
+| Business metrics | ❌ | ✅ Semantic Layer |
+| Natural language queries | ❌ | ✅ Semantic Layer |
+| Pre-defined KPIs | ❌ | ✅ Semantic Layer |
+| Business user queries | ❌ | ✅ Semantic Layer |
+
+### Example Combined Workflow
+
+```
+User: "I need to analyze our sales data"
+
+Step 1: Discover schema (Analytics)
+analyze_schema(schema_name="sales")
+
+Step 2: Generate ontology (Analytics)
+generate_ontology(schema_name="sales")
+
+Step 3: Query business metrics (Semantic Layer - if available)
+semantic_layer.get_metrics()  // Returns: revenue, orders, avg_order_value
+
+Step 4: Run semantic query (Semantic Layer - if available)
+semantic_layer.query_semantic(
+  query="What was our revenue by region last quarter?"
+)
+
+Step 5: Visualize (Analytics)
+generate_chart(data=..., chart_type="bar")
+```
+
+### Fallback Behavior
+
+**If Semantic Layer MCP is not available:**
+- Use OrionBelt Analytics for all queries
+- Provide technical SQL-based workflows
+- Explain schema structure to help user write queries
+
+**If Semantic Layer MCP is available:**
+- Prefer Semantic Layer for business-friendly queries
+- Use Analytics for schema discovery and technical workflows
+- Use both together for comprehensive analysis
+
+### Detection
+
+Check if Semantic Layer MCP is available:
+```
+// Claude Desktop automatically shows available MCP servers
+// If "OrionBelt Semantic Layer" appears, it's available
+```
+
+**Recommendation:** When both are available, start with Analytics for schema discovery, then switch to Semantic Layer for business queries.
+
+---
+
 ## Best Practices
 
 ### 1. Always Connect First
@@ -724,6 +818,9 @@ Use `sample_table_data()` to understand data before writing complex queries.
 
 ### 7. Check Server Logs
 Watch server logs to see auto-init happening and verify features are active.
+
+### 8. Use Semantic Layer for Business Queries
+When available, prefer Semantic Layer MCP for business-friendly queries and metrics.
 
 ---
 
