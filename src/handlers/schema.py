@@ -86,11 +86,29 @@ async def analyze_schema(
     if cached_tables:
         ontology_also_cached = session.ontology_file is not None
 
+        # Auto-initialize GraphRAG even for cached results (if not already initialized)
+        auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
+        if auto_graphrag == "true" and cached_tables and not session.graphrag_initialized:
+            logger.info(f"🤖 GraphRAG auto-init triggered for cached schema: {effective_schema or 'default'}")
+            task = asyncio.create_task(
+                _auto_initialize_graphrag_background(
+                    schema_name=effective_schema or "default",
+                    tables_info=cached_tables,
+                    session=session,
+                    ctx=ctx,
+                )
+            )
+            # Store task reference for tracking
+            if not hasattr(session, '_graphrag_init_task'):
+                session._graphrag_init_task = None
+            session._graphrag_init_task = task
+            logger.info("GraphRAG auto-initialization started in background (from cache)")
+
         if ontology_also_cached:
             await ctx.info(
                 "Schema AND ontology already cached - proceed directly to suggest_semantic_names()"
             )
-            return {
+            result = {
                 "schema": effective_schema or "default",
                 "table_count": len(cached_tables),
                 "cache_hit": True,
@@ -101,11 +119,14 @@ async def analyze_schema(
                 "next_step": "suggest_semantic_names",
                 "instruction": "Call suggest_semantic_names() NOW - do NOT call any other tools first!",
             }
+            if auto_graphrag == "true":
+                result["graphrag_auto_init"] = "started in background (from cache)"
+            return result
         else:
             await ctx.info(
                 f"Schema cached with {len(cached_tables)} tables - proceed to generate_ontology()"
             )
-            return {
+            result = {
                 "schema": effective_schema or "default",
                 "table_count": len(cached_tables),
                 "cache_hit": True,
@@ -114,6 +135,9 @@ async def analyze_schema(
                 "next_step": "generate_ontology",
                 "instruction": "Call generate_ontology() NOW - do NOT call analyze_schema again!",
             }
+            if auto_graphrag == "true":
+                result["graphrag_auto_init"] = "started in background (from cache)"
+            return result
 
     db_manager = get_session_db_manager(ctx)
     tables = db_manager.get_tables(schema_name)
