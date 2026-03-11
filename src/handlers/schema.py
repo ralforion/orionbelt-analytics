@@ -88,6 +88,14 @@ async def analyze_schema(
 
         # Auto-initialize GraphRAG even for cached results (if not already initialized)
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
+
+        # Debug logging to diagnose auto-init issues
+        logger.info(f"🔍 GraphRAG auto-init check (CACHED path):")
+        logger.info(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
+        logger.info(f"  cached_tables exists: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")
+        logger.info(f"  session.graphrag_initialized: {session.graphrag_initialized}")
+        logger.info(f"  Will trigger: {auto_graphrag == 'true' and cached_tables and not session.graphrag_initialized}")
+
         if auto_graphrag == "true" and cached_tables and not session.graphrag_initialized:
             logger.info(f"🤖 GraphRAG auto-init triggered for cached schema: {effective_schema or 'default'}")
             task = asyncio.create_task(
@@ -198,6 +206,13 @@ async def analyze_schema(
 
         # Auto-initialize GraphRAG in background
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
+
+        # Debug logging to diagnose auto-init issues
+        logger.info(f"🔍 GraphRAG auto-init check (NON-CACHED path):")
+        logger.info(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
+        logger.info(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
+        logger.info(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")
+
         if auto_graphrag == "true" and table_info_objects:
             logger.info(f"🤖 GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
             task = asyncio.create_task(
