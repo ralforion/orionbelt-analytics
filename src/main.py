@@ -181,6 +181,15 @@ def chart_examples_skill() -> str:
     return "Chart examples skill not found. Please ensure .claude/skills/chart-examples.md exists."
 
 
+@mcp.resource("skill://analytical-workflow")
+def analytical_workflow_skill() -> str:
+    """Complete analytical session workflow - optimal tool chain and best practices."""
+    skills_path = get_skills_dir() / "analytical-workflow.md"
+    if skills_path.exists():
+        return skills_path.read_text()
+    return "Analytical workflow skill not found. Please ensure .claude/skills/analytical-workflow.md exists."
+
+
 # --- Session State Management (Task 5: W2 - Decomposed SessionData) ---
 
 from .session import SessionData
