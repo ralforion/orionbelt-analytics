@@ -175,6 +175,7 @@ async def analyze_schema(
         # Auto-initialize GraphRAG in background
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
         if auto_graphrag == "true" and table_info_objects:
+            logger.info(f"🤖 GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
             task = asyncio.create_task(
                 _auto_initialize_graphrag_background(
                     schema_name=schema_name or "default",
@@ -183,8 +184,10 @@ async def analyze_schema(
                     ctx=ctx,
                 )
             )
-            # Store task for init tracking
-            session.graphrag._init_task = task
+            # Store task reference for tracking (create placeholder if needed)
+            if not hasattr(session, '_graphrag_init_task'):
+                session._graphrag_init_task = None
+            session._graphrag_init_task = task
             logger.info("GraphRAG auto-initialization started in background")
             lightweight_result["graphrag_auto_init"] = "started in background"
 

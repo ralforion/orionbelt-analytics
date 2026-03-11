@@ -166,7 +166,8 @@ async def _auto_initialize_graphrag_background(
             )
 
     except Exception as e:
-        logger.error(f"GraphRAG auto-initialization failed: {type(e).__name__}: {e}")
+        logger.error(f"GraphRAG auto-initialization failed: {type(e).__name__}: {e}", exc_info=True)
+        session.graphrag_initialized = False
         logger.debug("GraphRAG auto-init traceback:", exc_info=True)
         session.graphrag_initialized = False
 
