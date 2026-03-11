@@ -704,84 +704,199 @@ SELECT c.id, c.name FROM customers c JOIN orders o ON c.id = o.customer_id
 
 ## Integration: OrionBelt Semantic Layer MCP
 
-### When to Use Semantic Layer MCP
+### GraphRAG as Foundation for OBML Model Creation
 
-If the **OrionBelt Semantic Layer MCP** server is available, use it for business-user-friendly semantic queries.
+**Key Insight:** GraphRAG in OrionBelt Analytics provides the schema intelligence that enables OBML (OrionBelt Modeling Language) model creation for the Semantic Layer.
 
-**OrionBelt Analytics MCP** (this server):
-- ✅ Schema analysis and metadata
-- ✅ Direct SQL execution
-- ✅ Ontology generation
-- ✅ Technical/admin workflows
+**The Complete Stack:**
+
+```
+GraphRAG (Analytics) → OBML Model Creation → Semantic Layer (Business Queries)
+       ↓                      ↓                        ↓
+Schema Discovery      Semantic Modeling        Natural Language SQL
+```
+
+### When to Use Each Component
+
+**OrionBelt Analytics MCP + GraphRAG** (this server):
+- ✅ **Schema discovery** - Automatic relationship mapping
+- ✅ **OBML model creation** - Provides intelligence for semantic modeling
+- ✅ **Direct SQL execution** - Ad-hoc technical queries
+- ✅ **Ontology generation** - RDF/OWL semantic layer
+- ✅ **Technical/admin workflows** - Database analysis and exploration
 
 **OrionBelt Semantic Layer MCP** (separate server):
-- ✅ Business-friendly semantic queries
-- ✅ Pre-defined metrics and dimensions
-- ✅ Natural language to SQL via semantic layer
-- ✅ Business user workflows
+- ✅ **Business queries** - Natural language to SQL via OBML models
+- ✅ **Pre-defined metrics** - Curated KPIs and business logic
+- ✅ **Governed analytics** - Consistent definitions across organization
+- ✅ **Business user workflows** - User-friendly query interface
+
+### GraphRAG's Role in the Workflow
+
+When creating OBML models, users and LLMs leverage GraphRAG to:
+
+1. **Discover table relationships**
+   - "What tables are related to customers?" → GraphRAG graph traversal
+   - Finds direct foreign keys and indirect relationships (up to 12 hops)
+
+2. **Understand join paths**
+   - "How do orders connect to products?" → GraphRAG shortest path algorithm
+   - Discovers complex multi-hop joins automatically
+
+3. **Identify business concepts**
+   - "Find all revenue-related columns" → GraphRAG vector similarity search
+   - Semantic embeddings match related concepts across tables
+
+4. **Build OBML models**
+   - LLM uses GraphRAG insights to define metrics, dimensions, and joins
+   - Creates accurate semantic models without manual schema inspection
 
 ### Recommended Integration Workflow
 
+#### Creating New OBML Models (User or LLM)
+
 ```
-1. Use OrionBelt Analytics to analyze schema
-   → analyze_schema()
-   → generate_ontology()
+1. Schema Discovery with GraphRAG (Analytics)
+   → analyze_schema(schema_name="sales")
+   → GraphRAG auto-initializes with graph + vector embeddings
 
-2. Use Semantic Layer MCP for business queries
+2. Intelligent Schema Exploration (Analytics + GraphRAG)
+   → Ask: "What tables contain customer data?"
+   → GraphRAG uses vector similarity to find relevant tables
+   → Ask: "How do orders connect to products?"
+   → GraphRAG finds optimal join path via graph algorithm
+
+3. Create OBML Model (User/LLM)
+   → Define metrics: revenue = SUM(order_items.price * quantity)
+   → Define dimensions: customer.region, product.category
+   → Define joins: Use paths discovered by GraphRAG
+   → semantic_layer.create_model(obml_definition)
+
+4. Business Queries (Semantic Layer)
+   → semantic_layer.query("revenue by region last quarter")
+   → Uses pre-built OBML model for guaranteed-correct SQL
+```
+
+#### Using Existing OBML Models
+
+```
+1. Schema Analysis (Analytics)
+   → analyze_schema()  # Optional - for validation/updates
+
+2. Business Queries (Semantic Layer - Primary)
+   → semantic_layer.query("revenue by customer segment")
    → semantic_layer.get_metrics()
-   → semantic_layer.query_semantic()
 
-3. Use OrionBelt Analytics for advanced/technical queries
-   → execute_sql_query()
-   → generate_chart()
+3. Ad-hoc Technical Queries (Analytics + GraphRAG)
+   → Use when query falls outside OBML model
+   → GraphRAG helps discover new relationships
+   → execute_sql_query() for direct SQL execution
+   → generate_chart() for visualization
 ```
 
 ### Division of Responsibilities
 
-| Task | Use This Server | Use Semantic Layer |
-|------|----------------|-------------------|
-| Schema discovery | ✅ Analytics | ❌ |
-| Ontology generation | ✅ Analytics | ❌ |
-| Direct SQL queries | ✅ Analytics | ❌ |
-| Technical analysis | ✅ Analytics | ❌ |
-| Business metrics | ❌ | ✅ Semantic Layer |
-| Natural language queries | ❌ | ✅ Semantic Layer |
-| Pre-defined KPIs | ❌ | ✅ Semantic Layer |
-| Business user queries | ❌ | ✅ Semantic Layer |
+| Task | Use Analytics + GraphRAG | Use Semantic Layer |
+|------|-------------------------|-------------------|
+| **Schema Discovery** |  |  |
+| Schema discovery | ✅ Required | ❌ |
+| Relationship mapping | ✅ GraphRAG graph traversal | ❌ |
+| Join path discovery | ✅ GraphRAG shortest path | ❌ |
+| Semantic similarity search | ✅ GraphRAG vector search | ❌ |
+| **Model Creation** |  |  |
+| OBML model creation | ✅ Provides intelligence | ✅ Receives model |
+| Ontology generation | ✅ RDF/OWL output | ❌ |
+| **Query Execution** |  |  |
+| Direct SQL queries | ✅ Ad-hoc technical | ❌ |
+| Business metrics | ❌ | ✅ Via OBML |
+| Natural language queries | ❌ | ✅ Via OBML |
+| Pre-defined KPIs | ❌ | ✅ Via OBML |
+| **Workflows** |  |  |
+| Technical analysis | ✅ Primary | ❌ |
+| Business user queries | ❌ | ✅ Primary |
 
-### Example Combined Workflow
+**Key Takeaway:** GraphRAG is not redundant with Semantic Layer - it's the **foundational intelligence** that makes OBML model creation possible.
+
+### Example: Creating OBML Model from Scratch
 
 ```
-User: "I need to analyze our sales data"
+User: "Create a semantic model for our sales database"
 
-Step 1: Discover schema (Analytics)
+Step 1: Schema Discovery (Analytics + GraphRAG)
 analyze_schema(schema_name="sales")
+→ GraphRAG auto-initializes: graph structure + vector embeddings
 
-Step 2: Generate ontology (Analytics)
-generate_ontology(schema_name="sales")
+Step 2: Explore Relationships (GraphRAG)
+Ask: "What tables are related to customers?"
+→ GraphRAG response: customers → orders → order_items → products (via FK graph)
 
-Step 3: Query business metrics (Semantic Layer - if available)
-semantic_layer.get_metrics()  // Returns: revenue, orders, avg_order_value
+Ask: "How do I calculate revenue?"
+→ GraphRAG response: "order_items has price and quantity columns (vector search)"
+→ Join path: orders → order_items (2 hops)
 
-Step 4: Run semantic query (Semantic Layer - if available)
-semantic_layer.query_semantic(
-  query="What was our revenue by region last quarter?"
-)
+Step 3: Create OBML Model (User/LLM uses GraphRAG insights)
+→ Define metric: revenue = SUM(order_items.price * order_items.quantity)
+→ Define dimension: customer.region, product.category
+→ Define joins: customers → orders → order_items (from GraphRAG)
+→ semantic_layer.create_model(obml_yaml)
+
+Step 4: Query via Semantic Layer
+semantic_layer.query("revenue by region last quarter")
+→ Returns guaranteed-correct SQL with proper joins
 
 Step 5: Visualize (Analytics)
 generate_chart(data=..., chart_type="bar")
 ```
 
+### Example: Using Existing OBML Model
+
+```
+User: "What was our revenue by region last quarter?"
+
+Step 1: Query Semantic Layer (Primary)
+semantic_layer.query("revenue by region last quarter")
+→ Uses pre-built OBML model
+
+Step 2: Visualize (Analytics)
+generate_chart(data=..., chart_type="bar")
+```
+
+### Why GraphRAG is Essential (Even with Semantic Layer)
+
+**Question:** "If I have a Semantic Layer with OBML models, do I still need GraphRAG?"
+
+**Answer:** **Yes!** GraphRAG is not redundant - it's the foundation that enables OBML model creation.
+
+**Without GraphRAG:**
+- ❌ Manual schema inspection required
+- ❌ Tedious relationship discovery
+- ❌ Error-prone join path identification
+- ❌ Extensive user guidance needed for modeling
+
+**With GraphRAG:**
+- ✅ **Zero-setup schema intelligence** - Automatic on `analyze_schema()`
+- ✅ **Intelligent relationship discovery** - Graph algorithms (12 hop traversal)
+- ✅ **Semantic similarity search** - Vector embeddings find related concepts
+- ✅ **OBML model creation** - LLM can create accurate models automatically
+- ✅ **Ad-hoc queries** - Handle queries outside OBML model scope
+
+**GraphRAG Serves Multiple Purposes:**
+
+1. **Foundation for OBML creation** - Discovers schema structure that feeds into semantic models
+2. **Ad-hoc technical queries** - Direct SQL when business query falls outside OBML scope
+3. **Schema exploration** - Understanding database structure before or after modeling
+4. **Different user personas** - Technical users need raw access, business users need OBML
+
 ### Fallback Behavior
 
 **If Semantic Layer MCP is not available:**
-- Use OrionBelt Analytics for all queries
-- Provide technical SQL-based workflows
-- Explain schema structure to help user write queries
+- Use OrionBelt Analytics + GraphRAG for all queries
+- GraphRAG provides intelligent schema discovery
+- Direct SQL execution for queries
 
 **If Semantic Layer MCP is available:**
-- Prefer Semantic Layer for business-friendly queries
-- Use Analytics for schema discovery and technical workflows
+- **Primary workflow:** GraphRAG → OBML creation → Semantic Layer queries
+- **Fallback workflow:** GraphRAG → Direct SQL (for ad-hoc queries)
 - Use both together for comprehensive analysis
 
 ### Detection
@@ -792,7 +907,10 @@ Check if Semantic Layer MCP is available:
 // If "OrionBelt Semantic Layer" appears, it's available
 ```
 
-**Recommendation:** When both are available, start with Analytics for schema discovery, then switch to Semantic Layer for business queries.
+**Recommendation:** When both are available:
+1. Use Analytics + GraphRAG for schema discovery and OBML model creation
+2. Use Semantic Layer for business queries (once OBML models exist)
+3. Use Analytics + GraphRAG for ad-hoc technical queries outside OBML scope
 
 ---
 

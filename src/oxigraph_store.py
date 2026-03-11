@@ -11,13 +11,14 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 try:
-    from pyoxigraph import Store, NamedNode, Literal, Triple
+    from pyoxigraph import Store, NamedNode, Literal, Triple, RdfFormat
     from pyoxigraph import parse as oxigraph_parse
     OXIGRAPH_AVAILABLE = True
 except ImportError:
     OXIGRAPH_AVAILABLE = False
     Store = None
     NamedNode = None
+    RdfFormat = None
     Literal = None
     Triple = None
 
@@ -76,12 +77,32 @@ class OxigraphStoreManager:
             # Parse and load into named graph
             triples_before = len(self.store)
 
-            self.store.load(
-                ontology_ttl.encode('utf-8'),
-                mime_type="text/turtle",
-                base_iri=graph_uri,
-                to_graph=NamedNode(graph_uri)
-            )
+            # Use RdfFormat.TURTLE for newer versions, fall back to strings for older versions
+            try:
+                # Try with RdfFormat object (pyoxigraph >= 0.4.0)
+                self.store.load(
+                    ontology_ttl.encode('utf-8'),
+                    format=RdfFormat.TURTLE,
+                    base_iri=graph_uri,
+                    to_graph=NamedNode(graph_uri)
+                )
+            except (TypeError, AttributeError):
+                # Fallback for older pyoxigraph versions
+                try:
+                    self.store.load(
+                        ontology_ttl.encode('utf-8'),
+                        format="text/turtle",
+                        base_iri=graph_uri,
+                        to_graph=NamedNode(graph_uri)
+                    )
+                except TypeError:
+                    # Final fallback for very old versions using mime_type
+                    self.store.load(
+                        ontology_ttl.encode('utf-8'),
+                        mime_type="text/turtle",
+                        base_iri=graph_uri,
+                        to_graph=NamedNode(graph_uri)
+                    )
 
             triples_after = len(self.store)
             triples_loaded = triples_after - triples_before

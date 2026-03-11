@@ -9,9 +9,6 @@ from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Temporary directory for file storage
-TMP_DIR = Path(__file__).parent.parent / "tmp"
-
 
 def format_measure_name(measure: str) -> str:
     """Format measure name by removing underscores and applying title case.
@@ -457,15 +454,42 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     return fig
 
 
-def save_image_to_tmp(image_bytes: bytes, chart_id: str, format: str) -> Optional[str]:
-    """Save image bytes to temporary directory and return file path."""
+def save_image_to_tmp(
+    image_bytes: bytes,
+    chart_id: str,
+    format: str,
+    connection_id: Optional[str] = None
+) -> Optional[str]:
+    """Save image bytes to connection-scoped directory and return file path.
+
+    Args:
+        image_bytes: Image data to save
+        chart_id: Unique chart identifier
+        format: Image format (e.g., 'png', 'jpg')
+        connection_id: Database connection fingerprint for scoping.
+                      If None, uses legacy global tmp/ directory (backward compat).
+
+    Returns:
+        Path to saved image file, or None on error
+    """
+    from .paths import get_charts_dir, OUTPUT_DIR
+
     try:
         image_filename = f"{chart_id}.{format}"
-        image_file_path = TMP_DIR / image_filename
-        
+
+        if connection_id:
+            # Use connection-scoped charts directory (preferred)
+            charts_dir = get_charts_dir(connection_id)
+            image_file_path = charts_dir / image_filename
+        else:
+            # Legacy fallback to global tmp/ directory
+            tmp_dir = OUTPUT_DIR / "tmp"
+            tmp_dir.mkdir(exist_ok=True)
+            image_file_path = tmp_dir / image_filename
+
         with open(image_file_path, 'wb') as f:
             f.write(image_bytes)
-        
+
         logger.debug(f"Saved {format.upper()} chart to: {image_file_path}")
         return str(image_file_path)
     except Exception as e:

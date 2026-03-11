@@ -69,7 +69,7 @@ class GraphRetriever:
         self,
         from_table: str,
         to_table: str,
-        max_hops: int = 3
+        max_hops: int = 12
     ) -> Optional[List[Dict[str, Any]]]:
         """
         Find join path between two tables.
@@ -77,7 +77,7 @@ class GraphRetriever:
         Args:
             from_table: Source table
             to_table: Target table
-            max_hops: Maximum number of joins allowed
+            max_hops: Maximum number of joins allowed (default: 12)
 
         Returns:
             List of join specifications or None if no path exists

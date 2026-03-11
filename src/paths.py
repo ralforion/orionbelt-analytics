@@ -83,6 +83,20 @@ def get_skills_dir() -> Path:
     return PROJECT_ROOT / ".claude" / "skills"
 
 
+def get_charts_dir(connection_id: str) -> Path:
+    """Get the charts directory for a connection.
+
+    Args:
+        connection_id: Database connection fingerprint.
+
+    Returns:
+        Path to charts directory for this connection
+    """
+    charts_dir = OUTPUT_DIR / connection_id / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    return charts_dir
+
+
 def get_chart_viewer_path() -> Path:
     """Get the path to the chart viewer HTML app."""
     return Path(__file__).parent / "apps" / "chart_viewer.html"

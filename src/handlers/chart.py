@@ -166,7 +166,17 @@ async def generate_chart(
     if isinstance(result, tuple) and len(result) == 2:
         image_bytes, chart_id = result
 
-        image_file_path = save_image_to_tmp(image_bytes, chart_id, "png")
+        # Get connection_id from session for scoped storage
+        from ..main import get_session_data
+        session = get_session_data(ctx)
+        connection_id = session.connection_id
+
+        image_file_path = save_image_to_tmp(
+            image_bytes,
+            chart_id,
+            "png",
+            connection_id=connection_id
+        )
 
         if not image_file_path:
             await ctx.info("Chart generation failed to save file")

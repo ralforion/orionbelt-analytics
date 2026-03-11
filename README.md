@@ -7,6 +7,7 @@
 
 <p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
 
+![Version](https://img.shields.io/badge/version-0.7.0-brightgreen)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.14+-blue)](https://github.com/jlowin/fastmcp)
@@ -23,6 +24,44 @@ This project provides a production-ready Python-based MCP (Model Context Protoco
 </p>
 
 > **Better Together:** Combine with [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer) for a complete AI-powered analytics stack. The Semantic Layer compiles declarative YAML models into dialect-specific, optimized SQL — ensuring correct joins, aggregations, and fan-trap-free queries across Postgres, Snowflake, ClickHouse, Dremio, and Databricks. Run both MCP servers side-by-side in Claude Desktop for schema-aware ontology generation **and** guaranteed-correct SQL compilation.
+
+### GraphRAG: The Foundation for OBML Model Creation
+
+**OrionBelt Analytics provides the schema intelligence that powers semantic modeling:**
+
+When creating OBML models (OrionBelt Modeling Language) for the Semantic Layer, users and LLMs need to understand database structure, relationships, and join paths. **GraphRAG serves as the foundational discovery engine** that makes intelligent semantic modeling possible.
+
+**The Workflow:**
+
+1. **Schema Discovery** (Analytics + GraphRAG)
+   - `analyze_schema()` automatically initializes GraphRAG
+   - Graph structure built from foreign keys (up to 12 hops)
+   - Vector embeddings created for semantic similarity search
+
+2. **OBML Model Creation** (Analytics + GraphRAG + LLM)
+   - LLM queries GraphRAG: "What tables contain revenue data?"
+   - LLM queries GraphRAG: "How do customers connect to orders?"
+   - LLM creates OBML model with metrics, dimensions, and join paths
+   - User/LLM loads OBML into Semantic Layer
+
+3. **Business Queries** (Semantic Layer)
+   - Natural language queries via pre-built OBML models
+   - Guaranteed-correct SQL compilation with fan-trap prevention
+
+4. **Ad-hoc Technical Queries** (Analytics + GraphRAG)
+   - Direct SQL execution for queries not in OBML model
+   - GraphRAG-assisted discovery for new relationships
+
+**Why GraphRAG is Essential:**
+
+- ✅ **Zero-setup intelligence** - No manual modeling required for schema discovery
+- ✅ **Intelligent relationship discovery** - Graph algorithms find complex join paths automatically
+- ✅ **Semantic similarity** - Vector search identifies related concepts across tables
+- ✅ **Foundation for OBML** - Provides the raw intelligence needed to create accurate semantic models
+
+**Without GraphRAG:** Creating OBML models requires manual schema inspection, tedious relationship discovery, and extensive user guidance.
+
+**With GraphRAG:** LLMs can intelligently discover schema structure and create accurate OBML models automatically, while still supporting ad-hoc technical queries that fall outside the semantic layer.
 
 ## Key Philosophy: Automatic Ontology Integration
 
@@ -61,6 +100,38 @@ Our main analysis tool `get_analysis_context()` automatically includes ontology 
 - **XSD datatype mapping** from SQL types to RDF datatypes
 - **Configurable base IRI** via environment variable (`R2RML_BASE_IRI`)
 
+### 🔍 SPARQL Query Support
+
+- **Persistent RDF store** via Oxigraph with SPARQL 1.1 support
+- **Semantic schema queries** using the `db:` namespace ontology annotations
+- **Connection-scoped storage** - each database gets isolated RDF store
+- **7 SPARQL tools** for semantic exploration:
+  - `query_sparql()` - Execute custom SPARQL SELECT queries
+  - `query_sparql_ask()` - Execute SPARQL ASK queries (true/false)
+  - `list_tables_sparql()` - List tables via semantic query
+  - `find_columns_by_type_sparql()` - Find columns by data type
+  - `add_rdf_knowledge()` - Add custom metadata triples
+  - `store_ontology_in_rdf()` - Persist ontologies for SPARQL access
+  - `get_rdf_store_stats()` - RDF store statistics
+
+**Key ontology properties for SPARQL queries:**
+- `db:sqlReference` - Maps properties to SQL columns (e.g., `"customers.customer_id"`)
+- `db:sqlJoinCondition` - Stores JOIN conditions (e.g., `"orders.customer_id = customers.customer_id"`)
+- `db:hasColumn`, `db:columnName`, `db:dataType` - Column metadata
+- `db:tableName`, `db:relationshipType` - Schema structure
+
+**Example SPARQL query:**
+```sparql
+PREFIX db: <http://example.com/db#>
+SELECT ?table ?column ?dataType
+WHERE {
+    ?table db:hasColumn ?column .
+    ?column db:columnName ?columnName .
+    ?column db:dataType ?dataType .
+    FILTER(CONTAINS(LCASE(?columnName), "revenue"))
+}
+```
+
 ### 🛡️ Advanced SQL Safety
 
 - **Fan-trap prevention protocols** with mandatory relationship analysis
@@ -75,124 +146,14 @@ Our main analysis tool `get_analysis_context()` automatically includes ontology 
 - **Comprehensive error handling** with structured responses
 - **Production-ready logging** and monitoring
 
-## Python Library Installation
-
-### Required Dependencies
+## Installation
 
 ```bash
-# Install all required dependencies
+# Install all dependencies (recommended)
 uv sync
 ```
 
-### Complete Library List
-
-The project uses the following Python libraries:
-
-#### **Core MCP Framework**
-
-```bash
-fastmcp>=2.12.0                  # FastMCP framework for MCP server implementation
-```
-
-#### **Database Connectivity**
-
-```bash
-sqlalchemy>=2.0.0,<3.0.0         # Database ORM and connection management
-psycopg2-binary>=2.9.0,<3.0.0    # PostgreSQL database adapter
-snowflake-sqlalchemy>=1.5.0,<2.0.0     # Snowflake SQLAlchemy dialect
-snowflake-connector-python>=3.0.0,<4.0.0  # Snowflake Python connector
-# Dremio uses PostgreSQL wire protocol (psycopg2-binary above)
-```
-
-#### **Configuration & Environment**
-
-```bash
-pydantic>=2.0.0,<3.0.0           # Data validation and settings management
-python-dotenv>=1.0.0,<2.0.0      # Environment variable loading from .env files
-```
-
-#### **Semantic Web & Ontology**
-
-```bash
-rdflib>=7.0.0,<8.0.0             # RDF graph creation and manipulation
-owlrl>=6.0.0,<7.0.0              # OWL reasoning and validation
-```
-
-#### **Automatic Dependencies (installed with above)**
-
-When you install the main dependencies, these will be automatically installed:
-
-**Database & Connection**:
-
-- `boto3`, `botocore` - AWS SDK (for Snowflake S3 integration)
-- `cryptography` - Encryption and security functions
-- `pyOpenSSL` - SSL/TLS support
-- `cffi` - C Foreign Function Interface
-- `asn1crypto` - ASN.1 parsing and encoding
-
-**Data Processing**:
-
-- `sortedcontainers` - Sorted list/dict implementations
-- `platformdirs` - Platform-specific directory locations
-- `filelock` - File locking utilities
-
-**Network & Auth**:
-
-- `requests` - HTTP library
-- `urllib3` - HTTP client
-- `certifi` - Certificate bundle
-- `pyjwt` - JWT token handling
-
-**Configuration**:
-
-- `tomlkit` - TOML file parsing
-- `typing_extensions` - Enhanced type hints
-
-### Manual Installation (if needed)
-
-If you encounter issues with automatic installation, install key components manually:
-
-```bash
-# Core framework
-pip install fastmcp>=2.12.0
-
-# Database support
-pip install sqlalchemy>=2.0.0 psycopg2-binary>=2.9.0
-
-# Snowflake support (may require additional system dependencies)
-pip install snowflake-sqlalchemy snowflake-connector-python
-
-# Dremio support (uses PostgreSQL protocol, psycopg2-binary already installed above)
-
-# Semantic web
-pip install rdflib>=7.0.0 owlrl>=6.0.0
-
-# Configuration
-pip install pydantic>=2.0.0 python-dotenv>=1.0.0
-```
-
-### System Dependencies
-
-For some libraries, you might need system-level dependencies:
-
-**macOS (via Homebrew)**:
-
-```bash
-brew install postgresql  # For psycopg2
-brew install openssl     # For cryptographic functions
-```
-
-**Ubuntu/Debian**:
-
-```bash
-sudo apt-get install libpq-dev python3-dev  # For psycopg2
-sudo apt-get install libssl-dev libffi-dev   # For cryptographic functions
-```
-
-**Windows**:
-
-- Most dependencies work out of the box with pip
-- For PostgreSQL support, ensure PostgreSQL client libraries are installed
+**Key dependencies:** FastMCP, SQLAlchemy, PostgreSQL/Snowflake/Dremio connectors, RDFLib, Pydantic
 
 ## Project Structure
 
