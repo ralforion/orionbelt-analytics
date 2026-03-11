@@ -367,6 +367,33 @@ async def analyze_schema(
     else:
         await ctx.info("Schema analysis found no tables")
 
+    # Auto-initialize GraphRAG in background (FULL MODE path)
+    auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
+
+    # Debug logging to diagnose auto-init issues
+    logger.info(f"🔍 GraphRAG auto-init check (FULL MODE path):")
+    logger.info(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
+    logger.info(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
+    logger.info(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")
+
+    if auto_graphrag == "true" and table_info_objects:
+        logger.info(f"🤖 GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
+        task = asyncio.create_task(
+            _auto_initialize_graphrag_background(
+                schema_name=schema_name or "default",
+                tables_info=table_info_objects,
+                session=get_session_data(ctx),
+                ctx=ctx,
+            )
+        )
+        # Store task reference for tracking
+        session = get_session_data(ctx)
+        if not hasattr(session, '_graphrag_init_task'):
+            session._graphrag_init_task = None
+        session._graphrag_init_task = task
+        logger.info("GraphRAG auto-initialization started in background (full mode)")
+        schema_result["graphrag_auto_init"] = "started in background"
+
     return schema_result
 
 
