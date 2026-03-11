@@ -484,7 +484,7 @@ class ChromaDBVectorStore:
                     "name": metadata.get("name", ""),
                     "description": metadata.get("description", ""),
                     "metadata": elem_metadata,
-                    "embedding": embedding
+                    "embedding": embedding.tolist() if hasattr(embedding, 'tolist') else embedding
                 }
                 elements.append(element_dict)
 
@@ -501,7 +501,8 @@ class ChromaDBVectorStore:
             logger.info(f"Exported ChromaDB vector store ({len(elements)} elements) to {filepath}")
         except Exception as e:
             logger.error(f"Failed to export vector store: {e}")
-            raise
+            # Don't raise - ChromaDB is already persisted, JSON export is optional
+            logger.warning(f"ChromaDB is already persisted to disk, JSON export failed but data is safe")
 
     def load(self, filepath: Path):
         """
