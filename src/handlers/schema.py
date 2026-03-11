@@ -78,10 +78,15 @@ async def analyze_schema(
         get_session_safe_filename: Function to generate safe filenames
         _auto_initialize_graphrag_background: Background init function
     """
+    # Log function entry to verify code is being called
+    logger.info(f"🔍 analyze_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
+
     # Check cache
     session = get_session_data(ctx)
     effective_schema = schema_name or ""
     cached_tables = session.get_cached_schema(effective_schema)
+
+    logger.info(f"🔍 Cache check result - cached_tables: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")
 
     if cached_tables:
         ontology_also_cached = session.ontology_file is not None
