@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**OrionBelt Analytics** - A FastMCP server that analyzes database schemas (PostgreSQL, Snowflake, Dremio, ClickHouse) and generates RDF/OWL ontologies with embedded SQL mappings. Enables Text-to-SQL with fan-trap prevention and relationship-aware query construction.
+**OrionBelt Analytics** - A FastMCP server that analyzes database schemas (PostgreSQL, Snowflake, Dremio, ClickHouse) and generates RDF/OWL ontologies with embedded SQL mappings. Enables Text-to-SQL with fan-trap prevention and relationship-aware query construction. Includes GraphRAG for intelligent schema discovery via graph traversal and vector embeddings.
 
 ## Build & Development Commands
 
@@ -15,14 +15,14 @@ uv sync
 # Start MCP server (default: localhost:9000)
 uv run server.py
 
-# Run tests with coverage
-pytest
+# Run tests with coverage (pytest configured in pyproject.toml with --cov=src)
+uv run pytest
 
 # Run a single test file
-pytest tests/test_ontology_generator.py -v
+uv run pytest tests/test_ontology_generator.py -v
 
 # Run a specific test
-pytest tests/test_ontology_generator.py::test_function_name -v
+uv run pytest tests/test_ontology_generator.py::test_function_name -v
 
 # Code formatting
 black src/ tests/
@@ -41,26 +41,75 @@ bandit -r src/
 
 ## Architecture
 
-### Core Components
+### Layered Design
 
-- **`server.py`** - Entry point with startup logging and signal handling
-- **`src/main.py`** (~2800 lines) - FastMCP server with 13 MCP tools as `@mcp.tool()` async decorators
-- **`src/database_manager.py`** (~1900 lines) - Connection pooling, schema analysis, SQLAlchemy integration
-- **`src/ontology_generator.py`** (~900 lines) - RDF/OWL generation using rdflib with `db:` namespace annotations
-- **`src/r2rml_generator.py`** (~360 lines) - W3C R2RML mapping generation
-- **`src/security.py`** (~350 lines) - SQL injection prevention, fan-trap detection, credential encryption
-- **`src/chart_utils.py`** (~450 lines) - Plotly chart generation (kaleido for PNG export)
+The codebase follows a three-layer pattern:
+
+1. **Registration layer** (`src/main.py`) - `@mcp.tool()` async decorators, thin wrappers only
+2. **Handler layer** (`src/handlers/`) - Tool implementation logic, receives utilities as parameters
+3. **Service layer** - Domain modules (`database_manager.py`, `ontology_generator.py`, etc.)
+
+```
+server.py → src/main.py (@mcp.tool decorators)
+                ↓
+            src/handlers/*.py (tool implementations)
+                ↓
+            src/database_manager.py, src/ontology_generator.py, etc.
+```
+
+### Core Modules
+
+- **`src/main.py`** - FastMCP server setup, tool registration, resource/prompt definitions
+- **`src/session.py`** - `SessionData` class for per-session state isolation
+- **`src/database_manager.py`** - Connection pooling, schema analysis, SQLAlchemy integration
+- **`src/ontology_generator.py`** - RDF/OWL generation using rdflib with `db:` namespace annotations
+- **`src/oxigraph_store.py`** - Persistent RDF storage with SPARQL 1.1 query support
+- **`src/obqc_validator.py`** - Ontology Basic Quality Criteria validation using sqlglot
+- **`src/r2rml_generator.py`** - W3C R2RML mapping generation
+- **`src/security.py`** - SQL injection prevention, fan-trap detection, credential encryption
+- **`src/chart_utils.py`** - Plotly chart generation (kaleido for PNG export)
+- **`src/paths.py`** - Centralized path resolution for output/skills/config directories
+
+### Handler Modules (`src/handlers/`)
+
+Each handler maps to a group of MCP tools:
+- `connection.py` - `connect_database`, `list_schemas`
+- `schema.py` - `analyze_schema`, `get_table_details`, `reset_cache`
+- `ontology.py` - `generate_ontology`, `suggest_semantic_names`, `apply_semantic_names`, `load_my_ontology`
+- `query.py` - `validate_sql_syntax`, `execute_sql_query`, `sample_table_data`
+- `chart.py` - `generate_chart`
+- `rdf.py` - SPARQL query tools, RDF store operations
+- `graphrag.py` - GraphRAG initialization and context retrieval
+- `info.py` - `get_server_info`
+
+### Database Driver Pattern (`src/drivers/`)
+
+Abstract base driver with per-database implementations handling dialect differences:
+```
+BaseDriver (src/drivers/base.py)
+  ├─ PostgreSQLDriver
+  ├─ SnowflakeDriver  (UPPERCASE identifiers, case-sensitive)
+  ├─ DremioDriver
+  └─ ClickHouseDriver (no FKs, system.* tables, ORDER BY defines sort)
+```
+
+### GraphRAG Subsystem (`src/graphrag/`)
+
+Graph-based Retrieval Augmented Generation for schema intelligence:
+- `manager.py` - Orchestrator, auto-initialized by `analyze_schema()`
+- `embedder.py` - Vector embeddings for schema elements
+- `retriever.py` - Graph traversal and relationship discovery (up to 12 hops)
+- `vector_store_chromadb.py` - ChromaDB vector storage implementation
+- `community_detector.py` - Schema clustering via community detection
+
+### Lifecycle Management (`src/lifecycle/`)
+
+- `metadata.py` - Version tracking and retention policies for generated artifacts
+- `cleanup.py` - Data cleanup manager for `tmp/` outputs
 
 ### Key Patterns
 
-**Per-Session State Isolation**: Each MCP session maintains isolated `SessionData` with its own `DatabaseManager`, preventing cross-session interference:
-```python
-class SessionData:
-    db_manager: DatabaseManager
-    schema_file: Optional[Path]
-    ontology_file: Optional[Path]
-    r2rml_file: Optional[Path]
-```
+**Per-Session State Isolation**: Each MCP session maintains isolated `SessionData` (in `src/session.py`) with its own `DatabaseManager`, GraphRAG manager, and file paths, preventing cross-session interference.
 
 **Fan-Trap Prevention**: Multi-step validation prevents data multiplication errors:
 1. `analyze_schema()` extracts FK relationships
@@ -70,11 +119,9 @@ class SessionData:
 **Ontology Triple Storage**: RDF graphs link back to SQL:
 - `ns:TableName` → OWL:Class with `db:tableName`, `db:primaryKey`
 - `ns:relationship` → OWL:ObjectProperty with `db:joinCondition`
-- Uses `rdfs:comment` for business descriptions
+- Persistent SPARQL queries via Oxigraph (`src/oxigraph_store.py`)
 
-### MCP Tools (in `src/main.py`)
-
-`connect_database`, `list_schemas`, `reset_cache`, `analyze_schema`, `generate_ontology`, `suggest_semantic_names`, `apply_semantic_names`, `load_my_ontology`, `sample_table_data`, `validate_sql_syntax`, `execute_sql_query`, `generate_chart`, `get_server_info`
+**MCP Resources**: Skills in `.claude/skills/` (fan-trap-prevention, sql-best-practices, chart-examples, analytical-workflow) are exposed as MCP resources via `@mcp.resource()` decorators in `main.py`.
 
 ## Configuration
 
@@ -92,6 +139,7 @@ Key environment variables (see `.env.template`):
 - Type hints required for all public functions (mypy strict)
 - Google-style docstrings
 - Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`
+- pytest with `asyncio_mode = "auto"` (configured in pyproject.toml)
 
 ## Implementation Guidelines
 
@@ -132,11 +180,3 @@ When implementing changes, ALWAYS:
 - **Fix bugs directly**: When given a bug report, investigate and fix it - don't ask for hand-holding
 - **Re-plan when stuck**: If implementation hits unexpected complexity, stop and re-plan rather than pushing through with hacky fixes
 - **Challenge your work**: Before presenting a solution, ask "would a staff engineer approve this?"
-
-## Dependencies
-
-Core: `fastmcp>=2.14.4`, `sqlalchemy>=2.0.36`, `rdflib>=7.1.0`, `pydantic>=2.10.0`, `clickhouse-sqlalchemy>=0.3.0`
-
-Visualization: `plotly>=6.1.1`, `kaleido>=1.2.0`, `pandas>=2.2.0`
-
-MCP-UI: `mcp-ui-server>=1.0.0` (for interactive chart rendering in Claude Desktop)

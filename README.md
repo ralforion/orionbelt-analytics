@@ -19,10 +19,6 @@
 
 This project provides a production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, Snowflake, and Dremio) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
 
-<p align="center">
-  <img src="assets/architecture.png" alt="OrionBelt Analytics Architecture" width="800">
-</p>
-
 > **Better Together:** Combine with [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer) for a complete AI-powered analytics stack. The Semantic Layer compiles declarative YAML models into dialect-specific, optimized SQL — ensuring correct joins, aggregations, and fan-trap-free queries across Postgres, Snowflake, ClickHouse, Dremio, and Databricks. Run both MCP servers side-by-side in Claude Desktop for schema-aware ontology generation **and** guaranteed-correct SQL compilation.
 
 ### GraphRAG: The Foundation for OBML Model Creation
@@ -66,6 +62,20 @@ When creating OBML models (OrionBelt Modeling Language) for the Semantic Layer, 
 ## Key Philosophy: Automatic Ontology Integration
 
 Our main analysis tool `get_analysis_context()` automatically includes ontology generation, making semantic context readily available for every query.
+
+## Architecture Overview
+
+<p align="center">
+  <img src="assets/architecture.png" alt="OrionBelt Analytics Architecture" width="900">
+</p>
+
+OrionBelt Analytics combines multiple AI-powered technologies to provide intelligent database understanding:
+
+- **GraphRAG** - Graph-based relationship discovery with 12-hop traversal
+- **Vector Search** - Semantic similarity via ChromaDB embeddings
+- **RDF Store** - Persistent ontology storage with SPARQL query interface
+- **Connection Scoping** - Isolated storage per database connection
+- **FastMCP** - Model Context Protocol server for Claude Desktop integration
 
 ## 🌟 Key Features
 

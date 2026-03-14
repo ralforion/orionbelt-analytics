@@ -26,6 +26,9 @@ import/
 # Temporary chart files
 tmp/
 
+# Blog drafts (not tracked in repo)
+blog/
+
 # Test files in main directory
 /test_*.py
 
