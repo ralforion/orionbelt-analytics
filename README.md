@@ -7,19 +7,23 @@
 
 <p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
 
-![Version](https://img.shields.io/badge/version-0.7.0-brightgreen)
+[![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
-[![FastMCP](https://img.shields.io/badge/FastMCP-2.14+-blue)](https://github.com/jlowin/fastmcp)
+[![FastMCP](https://img.shields.io/badge/FastMCP-3.1+-blue)](https://github.com/jlowin/fastmcp)
 [![RDF/OWL](https://img.shields.io/badge/RDF%2FOWL-Ontology-orange)](https://www.w3.org/OWL/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-supported-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Snowflake](https://img.shields.io/badge/Snowflake-supported-29B5E8?logo=snowflake&logoColor=white)](https://www.snowflake.com/)
-[![ClickHouse](https://img.shields.io/badge/ClickHouse-supported-FFCC01?logo=clickhouse&logoColor=black)](https://clickhouse.com/)
-[![Dremio](https://img.shields.io/badge/Dremio-supported-31A05F)](https://www.dremio.com/)
 
-This project provides a production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, Snowflake, and Dremio) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
+[![BigQuery](https://img.shields.io/badge/BigQuery-669DF6.svg?logo=googlebigquery&logoColor=white)](https://cloud.google.com/bigquery)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![Snowflake](https://img.shields.io/badge/Snowflake-29B5E8.svg?logo=snowflake&logoColor=white)](https://www.snowflake.com)
+[![ClickHouse](https://img.shields.io/badge/ClickHouse-FFCC01.svg?logo=clickhouse&logoColor=black)](https://clickhouse.com)
+[![Dremio](https://img.shields.io/badge/Dremio-31B48D.svg)](https://www.dremio.com)
+[![Databricks](https://img.shields.io/badge/Databricks-FF3621.svg?logo=databricks&logoColor=white)](https://www.databricks.com)
+[![DuckDB](https://img.shields.io/badge/DuckDB-FFF000.svg?logo=duckdb&logoColor=black)](https://duckdb.org)
 
-> **Better Together:** Combine with [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer) for a complete AI-powered analytics stack. The Semantic Layer compiles declarative YAML models into dialect-specific, optimized SQL — ensuring correct joins, aggregations, and fan-trap-free queries across Postgres, Snowflake, ClickHouse, Dremio, and Databricks. Run both MCP servers side-by-side in Claude Desktop for schema-aware ontology generation **and** guaranteed-correct SQL compilation.
+This project provides a production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, and Databricks SQL) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
+
+> **Better Together:** Combine with [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer) for a complete AI-powered analytics stack. The Semantic Layer compiles declarative YAML models into dialect-specific, optimized SQL — ensuring correct joins, aggregations, and fan-trap-free queries across PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, and Databricks. Run both MCP servers side-by-side in Claude Desktop for schema-aware ontology generation **and** guaranteed-correct SQL compilation.
 
 ### GraphRAG: The Foundation for OBML Model Creation
 
@@ -81,10 +85,12 @@ OrionBelt Analytics combines multiple AI-powered technologies to provide intelli
 
 ### 🔗 Database Connectivity
 
-- **PostgreSQL**, **Snowflake**, and **Dremio** support with connection pooling
+- **PostgreSQL**, **Snowflake**, **ClickHouse**, **Dremio**, **BigQuery**, **DuckDB/MotherDuck**, and **Databricks SQL** support with connection pooling
 - **Environment variable fallback** - parameters optional, uses .env when not provided
 - **Enhanced connection management** with retry logic and timeout handling
-- **Automatic dependency management** for Snowflake and Dremio connectors
+- **Automatic dependency management** for all database connectors
+- **Cloud-native support** - BigQuery, MotherDuck, and Databricks SQL for cloud data warehouses
+- **Local analytics** - DuckDB for fast local OLAP workloads
 
 ### 🎯 13 Essential Tools
 
@@ -125,12 +131,14 @@ OrionBelt Analytics combines multiple AI-powered technologies to provide intelli
   - `get_rdf_store_stats()` - RDF store statistics
 
 **Key ontology properties for SPARQL queries:**
+
 - `db:sqlReference` - Maps properties to SQL columns (e.g., `"customers.customer_id"`)
 - `db:sqlJoinCondition` - Stores JOIN conditions (e.g., `"orders.customer_id = customers.customer_id"`)
 - `db:hasColumn`, `db:columnName`, `db:dataType` - Column metadata
 - `db:tableName`, `db:relationshipType` - Schema structure
 
 **Example SPARQL query:**
+
 ```sparql
 PREFIX db: <http://example.com/db#>
 SELECT ?table ?column ?dataType
@@ -163,7 +171,7 @@ WHERE {
 uv sync
 ```
 
-**Key dependencies:** FastMCP, SQLAlchemy, PostgreSQL/Snowflake/Dremio connectors, RDFLib, Pydantic
+**Key dependencies:** FastMCP, SQLAlchemy, database connectors (PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks), RDFLib, Pydantic
 
 ## Project Structure
 
@@ -203,7 +211,7 @@ orionbelt-analytics/
 
 - **Python 3.13 or higher** (required)
 - **uv** package manager (recommended) - [Install uv](https://github.com/astral-sh/uv)
-- PostgreSQL, Snowflake, or Dremio database access
+- Database access: PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, or Databricks SQL
 
 ### Installation
 
@@ -288,6 +296,25 @@ DREMIO_PORT=31010
 DREMIO_USERNAME=your_username
 DREMIO_PASSWORD=your_password
 
+# BigQuery Configuration (optional - can provide via tool parameters)
+BIGQUERY_PROJECT_ID=your-gcp-project-id
+BIGQUERY_DATASET=your_dataset
+BIGQUERY_CREDENTIALS_PATH=/path/to/service-account-key.json
+# Alternatively, use GOOGLE_APPLICATION_CREDENTIALS environment variable
+
+# DuckDB/MotherDuck Configuration (optional - can provide via tool parameters)
+DUCKDB_DATABASE_PATH=:memory:  # or /path/to/file.db
+# For MotherDuck cloud:
+# DUCKDB_DATABASE_PATH=md:your_database
+# MOTHERDUCK_TOKEN=your_motherduck_token
+
+# Databricks SQL Configuration (optional - can provide via tool parameters)
+DATABRICKS_SERVER_HOSTNAME=your-workspace.cloud.databricks.com
+DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/your_warehouse_id
+DATABRICKS_ACCESS_TOKEN=your_access_token
+DATABRICKS_CATALOG=hive_metastore
+DATABRICKS_SCHEMA=default
+
 # Snowflake Troubleshooting:
 # - Account format: Check Snowflake web UI URL for correct format
 #   Common formats: CLYKFLK-KA74251, account.region, account.region.cloud
@@ -300,6 +327,23 @@ DREMIO_PASSWORD=your_password
 # - Port: Default PostgreSQL wire protocol port is 31010
 # - SSL: Enable/disable SSL connections (default: enabled)
 # - Connection: Uses PostgreSQL protocol, no additional drivers needed
+
+# BigQuery Troubleshooting:
+# - Project ID: Find in GCP Console under project settings
+# - Credentials: Use service account JSON key or default credentials
+# - Dataset: Optional, can be specified per query
+# - Permissions: Ensure service account has BigQuery Data Viewer role
+
+# DuckDB/MotherDuck Troubleshooting:
+# - Local file: Use absolute path or :memory: for in-memory database
+# - MotherDuck: Prefix database name with "md:" (e.g., md:my_database)
+# - Token: Get from MotherDuck web UI under Settings > Access Tokens
+
+# Databricks Troubleshooting:
+# - Server hostname: Find in workspace URL (without https://)
+# - HTTP path: Copy from SQL Warehouse connection details
+# - Access token: Generate in User Settings > Access Tokens
+# - Catalog: Use "hive_metastore" for legacy or Unity Catalog name
 ```
 
 #### Transport Configuration
@@ -412,7 +456,7 @@ The server provides **built-in workflow guidance** through FastMCP Context integ
 
 #### 1. `connect_database`
 
-Connect to PostgreSQL, Snowflake, or Dremio with environment variable fallback.
+Connect to PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, or Databricks SQL with environment variable fallback.
 
 **Key Feature**: Parameters are optional - uses .env values when not provided.
 
@@ -420,12 +464,33 @@ Connect to PostgreSQL, Snowflake, or Dremio with environment variable fallback.
 
 ```typescript
 {
-  db_type: "postgresql" | "snowflake" | "dremio",
+  db_type: "postgresql" | "snowflake" | "clickhouse" | "dremio" | "bigquery" | "duckdb" | "databricks",
   // All other parameters optional - falls back to .env values
+
+  // PostgreSQL, ClickHouse
   host?: string, port?: number, database?: string,
   username?: string, password?: string,
+
+  // Snowflake
   account?: string, warehouse?: string, schema?: string, role?: string,
-  ssl?: boolean  // Dremio only
+
+  // Dremio
+  ssl?: boolean,
+
+  // BigQuery
+  project_id?: string, dataset?: string,
+  credentials_path?: string, credentials_json?: string,
+
+  // DuckDB/MotherDuck
+  database_path?: string,  // ":memory:", "/path/to/file.db", or "md:database_name"
+  motherduck_token?: string,
+  read_only?: boolean,
+
+  // Databricks SQL
+  server_hostname?: string,
+  http_path?: string,
+  access_token?: string,
+  catalog?: string
 }
 ```
 
@@ -435,12 +500,20 @@ Connect to PostgreSQL, Snowflake, or Dremio with environment variable fallback.
 # Simple connection using .env values
 connect_database("postgresql")
 connect_database("snowflake")
+connect_database("clickhouse")
 connect_database("dremio")
+connect_database("bigquery")
+connect_database("duckdb")
+connect_database("databricks")
 
 # Override specific parameters
 connect_database("postgresql", host="custom.host.com", port=5433)
 connect_database("snowflake", account="CUSTOM-ACCOUNT", warehouse="ANALYTICS_WH")
 connect_database("dremio", host="dremio.company.com", port=31010, ssl=False)
+connect_database("bigquery", project_id="my-project", dataset="analytics")
+connect_database("duckdb", database_path="/data/analytics.db")
+connect_database("duckdb", database_path="md:my_cloud_db", motherduck_token="token")
+connect_database("databricks", server_hostname="my-workspace.cloud.databricks.com", catalog="main")
 ```
 
 #### 2. `list_schemas`
@@ -756,6 +829,18 @@ The server provides **built-in comprehensive instructions** that are automatical
 "I need to query my Snowflake data warehouse - help me understand the schema relationships first"
 ```
 
+```
+"Connect to BigQuery project 'analytics-prod' and explore the schema structure"
+```
+
+```
+"Use DuckDB to analyze the local data file at /data/sales.db"
+```
+
+```
+"Connect to my Databricks SQL Warehouse and generate an ontology for the catalog"
+```
+
 ### Key Improvements in Recent Updates
 
 **FastMCP 2.12+ Integration**:
@@ -847,6 +932,42 @@ success = db_manager.connect_snowflake(
     db_config.snowflake_role
 )
 print(f'Snowflake connection: {\"✅ Success\" if success else \"❌ Failed\"}')
+"
+
+# Test BigQuery connection
+python3 -c "
+from src.database_manager import DatabaseManager
+db_manager = DatabaseManager()
+success = db_manager.connect_bigquery(
+    project_id='your-gcp-project',
+    dataset='your_dataset',
+    credentials_path='/path/to/service-account-key.json'
+)
+print(f'BigQuery connection: {\"✅ Success\" if success else \"❌ Failed\"}')
+"
+
+# Test DuckDB connection
+python3 -c "
+from src.database_manager import DatabaseManager
+db_manager = DatabaseManager()
+success = db_manager.connect_duckdb(
+    database_path=':memory:'  # or '/path/to/file.db' or 'md:database_name'
+)
+print(f'DuckDB connection: {\"✅ Success\" if success else \"❌ Failed\"}')
+"
+
+# Test Databricks SQL connection
+python3 -c "
+from src.database_manager import DatabaseManager
+db_manager = DatabaseManager()
+success = db_manager.connect_databricks(
+    server_hostname='your-workspace.cloud.databricks.com',
+    http_path='/sql/1.0/warehouses/abc123',
+    access_token='your_token',
+    catalog='hive_metastore',
+    schema='default'
+)
+print(f'Databricks connection: {\"✅ Success\" if success else \"❌ Failed\"}')
 "
 ```
 
@@ -972,9 +1093,54 @@ Users can confidently use all features documented in this README. The test failu
 - Confirm credentials and database name
 - Test with psql command line first
 
+### BigQuery Connection Issues
+
+**Authentication Problems**:
+
+- Verify service account JSON key path is correct
+- Check service account has BigQuery Data Viewer role
+- Ensure project ID matches your GCP project
+- For default credentials, set `GOOGLE_APPLICATION_CREDENTIALS` environment variable
+
+**Dataset Access**:
+
+- Confirm dataset exists in the specified project
+- Verify service account has access to the dataset
+- Check dataset region restrictions
+
+### DuckDB/MotherDuck Connection Issues
+
+**Local DuckDB**:
+
+- Verify file path is absolute or use `:memory:`
+- Check file permissions for read/write access
+- Ensure sufficient disk space for database file
+
+**MotherDuck Cloud**:
+
+- Prefix database name with `md:` (e.g., `md:my_database`)
+- Get access token from MotherDuck web UI (Settings > Access Tokens)
+- Verify internet connectivity to MotherDuck servers
+- Check MotherDuck account has access to the specified database
+
+### Databricks SQL Connection Issues
+
+**Connection Parameters**:
+
+- Server hostname: Copy from workspace URL (without `https://`)
+- HTTP path: Get from SQL Warehouse > Connection Details
+- Access token: Generate in User Settings > Access Tokens (or use service principal)
+
+**Unity Catalog**:
+
+- Default catalog is `hive_metastore` for legacy metastore
+- For Unity Catalog, specify the catalog name (e.g., `main`, `dev`)
+- Verify user/service principal has `USE CATALOG` and `USE SCHEMA` privileges
+- Check that SQL Warehouse is running and accessible
+
 ## License
 
-Copyright 2025 [RALFORION d.o.o.](https://ralforion.com)
+Copyright 2025-2026 [RALFORION d.o.o.](https://ralforion.com)
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
 

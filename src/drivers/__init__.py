@@ -9,6 +9,9 @@ from .postgresql import PostgreSQLDriver
 from .snowflake import SnowflakeDriver
 from .clickhouse import ClickHouseDriver
 from .dremio import DremioDriver
+from .bigquery import BigQueryDriver
+from .duckdb import DuckDBDriver
+from .databricks import DatabricksDriver
 
 __all__ = [
     "DatabaseDriver",
@@ -16,4 +19,7 @@ __all__ = [
     "SnowflakeDriver",
     "ClickHouseDriver",
     "DremioDriver",
+    "BigQueryDriver",
+    "DuckDBDriver",
+    "DatabricksDriver",
 ]

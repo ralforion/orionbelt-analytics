@@ -550,6 +550,125 @@ class DatabaseManager:
                 }
         return success
 
+    def connect_bigquery(self, project_id: str, dataset: str = "",
+                        credentials_path: str = None, credentials_json: str = None) -> bool:
+        """Connect to Google BigQuery."""
+        from .drivers.bigquery import BigQueryDriver
+
+        driver = BigQueryDriver(
+            pool_size=self._connection_pool_size,
+            max_overflow=self._max_overflow,
+        )
+        success = driver.connect(
+            project_id=project_id,
+            dataset=dataset,
+            credentials_path=credentials_path,
+            credentials_json=credentials_json,
+        )
+        if success:
+            self._driver = driver
+            self._dremio_rest_connection = None
+            self._sync_engine_from_driver()
+
+            self.connection_info = {
+                "type": "bigquery",
+                "project_id": project_id,
+                "dataset": dataset,
+            }
+            self._connection_id = hashlib.sha256(
+                f"{project_id}:{dataset}".encode()
+            ).hexdigest()[:16]
+
+            self._last_connection_params = {
+                "type": "bigquery",
+                "project_id": project_id,
+                "dataset": dataset,
+                "credentials_path": credentials_path,
+                "credentials_json": credentials_json,
+            }
+        return success
+
+    def connect_duckdb(self, database_path: str = ":memory:",
+                      motherduck_token: str = None, read_only: bool = False) -> bool:
+        """Connect to DuckDB or MotherDuck."""
+        from .drivers.duckdb import DuckDBDriver
+
+        driver = DuckDBDriver(
+            pool_size=self._connection_pool_size,
+            max_overflow=self._max_overflow,
+        )
+        success = driver.connect(
+            database_path=database_path,
+            motherduck_token=motherduck_token,
+            read_only=read_only,
+        )
+        if success:
+            self._driver = driver
+            self._dremio_rest_connection = None
+            self._sync_engine_from_driver()
+
+            is_motherduck = database_path.startswith("md:")
+            self.connection_info = {
+                "type": "duckdb",
+                "database_path": database_path,
+                "is_motherduck": is_motherduck,
+                "read_only": read_only,
+            }
+            self._connection_id = hashlib.sha256(
+                f"duckdb:{database_path}".encode()
+            ).hexdigest()[:16]
+
+            self._last_connection_params = {
+                "type": "duckdb",
+                "database_path": database_path,
+                "motherduck_token": motherduck_token,
+                "read_only": read_only,
+            }
+        return success
+
+    def connect_databricks(self, server_hostname: str, http_path: str,
+                          access_token: str, catalog: str = "hive_metastore",
+                          schema: str = "default") -> bool:
+        """Connect to Databricks SQL."""
+        from .drivers.databricks import DatabricksDriver
+
+        driver = DatabricksDriver(
+            pool_size=self._connection_pool_size,
+            max_overflow=self._max_overflow,
+        )
+        success = driver.connect(
+            server_hostname=server_hostname,
+            http_path=http_path,
+            access_token=access_token,
+            catalog=catalog,
+            schema=schema,
+        )
+        if success:
+            self._driver = driver
+            self._dremio_rest_connection = None
+            self._sync_engine_from_driver()
+
+            self.connection_info = {
+                "type": "databricks",
+                "server_hostname": server_hostname,
+                "http_path": http_path,
+                "catalog": catalog,
+                "schema": schema,
+            }
+            self._connection_id = hashlib.sha256(
+                f"{server_hostname}:{catalog}:{schema}".encode()
+            ).hexdigest()[:16]
+
+            self._last_connection_params = {
+                "type": "databricks",
+                "server_hostname": server_hostname,
+                "http_path": http_path,
+                "access_token": access_token,
+                "catalog": catalog,
+                "schema": schema,
+            }
+        return success
+
     # ------------------------------------------------------------------
     # Schema introspection (delegated to driver)
     # ------------------------------------------------------------------

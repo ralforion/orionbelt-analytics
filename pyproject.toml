@@ -1,13 +1,13 @@
 [project]
 name = "orionbelt-analytics"
-version = "0.6.0"
+version = "1.0.0"
 description = "OrionBelt Analytics - the Ontology-based MCP server for your Text-2-SQL convenience"
 authors = [{name = "Ralf Becher, RALFORION d.o.o.", email = "ralf.becher@web.de"}]
 readme = "README.md"
 requires-python = ">=3.13"
-keywords = ["mcp", "database", "ontology", "rdf", "schema-analysis", "postgresql", "snowflake", "clickhouse"]
+keywords = ["mcp", "database", "ontology", "rdf", "schema-analysis", "postgresql", "snowflake", "clickhouse", "bigquery", "duckdb", "databricks"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Topic :: Database",
     "Topic :: Scientific/Engineering :: Information Analysis",
@@ -20,7 +20,7 @@ classifiers = [
 ]
 dependencies = [
     # Core MCP Framework - latest version
-    "fastmcp>=3.0.2",
+    "fastmcp>=3.1.0",
     # Database connectivity - latest versions
     "sqlalchemy>=2.0.46",
     "psycopg2-binary>=2.9.11",
@@ -29,6 +29,13 @@ dependencies = [
     # ClickHouse connectivity
     "clickhouse-sqlalchemy>=0.3.2",
     "clickhouse-driver>=0.2.10",
+    # BigQuery connectivity
+    "sqlalchemy-bigquery>=1.11.0",
+    # DuckDB connectivity
+    "duckdb>=1.1.0",
+    "duckdb-engine>=0.13.0",
+    # Databricks connectivity
+    "databricks-sql-connector>=3.5.0",
     # Security dependencies
     "cryptography>=46.0.5",
     # Configuration and validation

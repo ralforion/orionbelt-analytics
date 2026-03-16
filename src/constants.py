@@ -31,10 +31,13 @@ DEFAULT_OUTPUT_DIR = "tmp"
 IDENTIFIER_PATTERN = r'^[a-zA-Z_][a-zA-Z0-9_-]*$'
 
 # Supported database types
-SUPPORTED_DB_TYPES = ["postgresql", "snowflake", "dremio", "clickhouse"]
+SUPPORTED_DB_TYPES = ["postgresql", "snowflake", "dremio", "clickhouse", "bigquery", "duckdb", "databricks"]
 
 # System schemas to exclude
 POSTGRES_SYSTEM_SCHEMAS = ["information_schema", "pg_catalog", "pg_toast"]
 SNOWFLAKE_SYSTEM_SCHEMAS = ["INFORMATION_SCHEMA", "SNOWFLAKE", "SNOWFLAKE_SAMPLE_DATA"]
 DREMIO_SYSTEM_SCHEMAS = ["INFORMATION_SCHEMA", "sys"]
 CLICKHOUSE_SYSTEM_SCHEMAS = ["system", "INFORMATION_SCHEMA", "information_schema"]
+BIGQUERY_SYSTEM_SCHEMAS = ["INFORMATION_SCHEMA", "information_schema"]
+DUCKDB_SYSTEM_SCHEMAS = ["information_schema", "pg_catalog"]
+DATABRICKS_SYSTEM_SCHEMAS = ["information_schema", "default"]
