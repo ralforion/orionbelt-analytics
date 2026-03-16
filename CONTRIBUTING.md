@@ -4,7 +4,7 @@ Thank you for your interest in contributing! This guide covers the essentials to
 
 ## 🎯 Project Overview
 
-OrionBelt Analytics is a production-ready MCP server that analyzes database schemas (PostgreSQL, Snowflake, Dremio) and generates RDF/OWL ontologies with automatic SQL mappings.
+OrionBelt Analytics is a production-ready MCP server that analyzes database schemas (PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, Databricks SQL) and generates RDF/OWL ontologies with automatic SQL mappings.
 
 ## 🚀 Getting Started
 
@@ -158,7 +158,13 @@ Be respectful and inclusive in all interactions.
 
 ## 📄 License
 
-Contributions will be licensed under the MIT License.
+This project is licensed under the Business Source License 1.1 (BSL 1.1). By submitting a contribution, you agree to the terms of our [Contributor License Agreement (CLA)](CLA.md), which grants RALFORION d.o.o. the right to license your contributions under BSL 1.1 and future licenses (including Apache 2.0 after the Change Date of 2030-03-16).
+
+**Key Points:**
+- All contributions are covered by the [CLA](CLA.md)
+- Current license: BSL 1.1 (source-available, production use allowed with restrictions)
+- Change Date: 2030-03-16 → converts to Apache 2.0
+- Commercial licensing available: contact licensing@ralforion.com
 
 ---
 
