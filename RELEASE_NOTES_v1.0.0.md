@@ -10,128 +10,110 @@
 
 ---
 
-OrionBelt Analytics v1.0.0 marks the first production-ready release, delivering enterprise-grade database schema analysis and ontology generation across **7 major database platforms**.
+## Highlights
 
-## 🌟 What's New in v1.0.0
+**7 SQL Dialects** — PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, Databricks SQL
 
-### Expanded Database Support (3 New Vendors)
+**New Database Support (v1.0)**
+- **BigQuery** — Google Cloud data warehouse with service account authentication
+- **DuckDB/MotherDuck** — Local OLAP files and cloud databases
+- **Databricks SQL** — SQL Warehouse with Unity Catalog integration
 
-OrionBelt Analytics now supports **7 database platforms**, adding three major cloud and analytics databases:
+**FastMCP 3.1+** — Upgraded MCP framework with enhanced streaming and error handling
 
-#### **NEW: BigQuery Support** 🆕
-- Full Google Cloud BigQuery integration
-- Service account JSON key authentication
-- Project and dataset-level schema analysis
-- Support for BigQuery-specific data types and features
+**GraphRAG** — 12-hop graph traversal for intelligent schema discovery and relationship inference
 
-#### **NEW: DuckDB/MotherDuck Support** 🆕
-- Local DuckDB file databases for fast OLAP workloads
-- MotherDuck cloud database integration
-- In-memory database support (`:memory:`)
-- High-performance analytical queries
+**SPARQL Query Support** — 7 SPARQL tools for semantic querying of database ontologies via Oxigraph RDF store
 
-#### **NEW: Databricks SQL Support** 🆕
-- Databricks SQL Warehouse connectivity
-- Unity Catalog integration
-- Catalog and schema-aware analysis
-- Delta Lake table support
+**Production Hardening** — Security scanning (bandit, safety), credential encryption, SQL injection prevention
 
-### Complete Database Coverage
+## Production Hardening
 
-OrionBelt Analytics v1.0.0 supports:
-1. **PostgreSQL** - Industry-standard relational database
-2. **Snowflake** - Cloud data warehouse
-3. **ClickHouse** - Real-time analytics OLAP database
-4. **Dremio** - Data lakehouse and query engine
-5. **BigQuery** - Google Cloud data warehouse (NEW)
-6. **DuckDB/MotherDuck** - Local and cloud OLAP (NEW)
-7. **Databricks SQL** - Unified analytics platform (NEW)
+This release marks OrionBelt Analytics as **production-ready** with:
 
-### FastMCP 3.1 Upgrade
+- **Security scanning tools** configured (bandit, safety)
+- **Credential encryption** with AES-128-CBC + HMAC
+- **SQL injection prevention** and identifier validation
+- **Audit logging** for security events
+- **Comprehensive test coverage** (12 test files)
+- **Complete documentation** with troubleshooting guides for all 7 databases
 
-- Updated to FastMCP 3.1+ for latest MCP protocol features
-- Enhanced compatibility with Claude Desktop and other MCP clients
-- Improved streaming and error handling
+## New Database Drivers
 
-### Enhanced Documentation
+Three new production-ready drivers following the established `DatabaseDriver` protocol:
 
-- Comprehensive `.env.template` with all 7 databases
-- Database-specific configuration examples
-- Troubleshooting guides for each vendor
-- Connection test scripts for validation
-- Updated README with complete coverage
+- **`src/drivers/bigquery.py`** (430 lines) — Project/dataset-level schema analysis
+- **`src/drivers/duckdb.py`** (458 lines) — Local files, in-memory, and MotherDuck cloud
+- **`src/drivers/databricks.py`** (512 lines) — Unity Catalog and Delta Lake support
 
-## 🔧 Technical Improvements
+Each driver provides:
+- Schema introspection (get_schemas, get_tables, analyze_table)
+- Query validation and execution
+- Sample data retrieval
+- Connection health checks
+- Security validation and audit logging
 
-### New Database Drivers
-- `src/drivers/bigquery.py` - BigQuery driver (476 lines)
-- `src/drivers/duckdb.py` - DuckDB/MotherDuck driver (467 lines)
-- `src/drivers/databricks.py` - Databricks SQL driver (503 lines)
+## Configuration & Environment
 
-### Connection Management
-- New connection methods: `connect_bigquery()`, `connect_duckdb()`, `connect_databricks()`
-- Enhanced error handling and validation for all databases
-- Consistent connection pooling strategy across vendors
+**Complete `.env.template`** with configuration sections for all databases:
+- BigQuery (project_id, dataset, credentials_path)
+- DuckDB/MotherDuck (database_path, motherduck_token)
+- Databricks SQL (server_hostname, http_path, access_token, catalog)
 
-### Configuration & Environment
-- Complete `.env.template` with all database configurations
-- Security best practices documentation
-- Credential management guidelines
+**Database-specific troubleshooting guides** covering:
+- Authentication and credential management
+- Connection parameters and network configuration
+- Common errors and solutions
 
-## 📦 Dependencies
+## Dependencies
 
-### New Dependencies
+### New
 ```toml
-sqlalchemy-bigquery>=1.11.0    # BigQuery support
-duckdb>=1.1.0                  # DuckDB engine
-duckdb-engine>=0.13.0          # DuckDB SQLAlchemy dialect
+sqlalchemy-bigquery>=1.11.0     # BigQuery support
+duckdb>=1.1.0                   # DuckDB engine
+duckdb-engine>=0.13.0           # DuckDB SQLAlchemy dialect
 databricks-sql-connector>=3.5.0 # Databricks SQL support
 ```
 
-### Updated Dependencies
+### Updated
 ```toml
-fastmcp>=3.1.0  # (was >=3.0.2)
+fastmcp>=3.1.0  # (was >=3.0.2) - Latest MCP protocol features
 ```
 
-All dependencies include minimum version constraints for security and compatibility.
+## Compatibility
 
-## 🔄 Compatibility with OrionBelt Platform
+**OrionBelt Platform Integration** — Fully compatible with:
+- OrionBelt Semantic Layer v1.0.0
+- OrionBelt Semantic Layer MCP v1.0.0
 
-OrionBelt Analytics v1.0.0 is fully compatible with:
-- **OrionBelt Semantic Layer v1.0.0** - All 7 databases supported
-- **OrionBelt Semantic Layer MCP v1.0.0** - Seamless integration
+All three components now support the same 7 database vendors, enabling seamless workflows from schema discovery (Analytics) to semantic modeling (Semantic Layer) to SQL compilation.
 
-The complete OrionBelt Platform now provides:
-1. **Schema Discovery** (Analytics) - Understand database structure with GraphRAG
-2. **Semantic Modeling** (Semantic Layer) - OBML model creation and validation
-3. **SQL Compilation** (Semantic Layer) - Dialect-specific SQL generation
-4. **MCP Integration** (All components) - Claude Desktop and MCP client support
+## Migration
 
-## 🚀 Getting Started
+**No breaking changes from v0.7.0** — All existing functionality preserved. New database support is additive.
 
-### Installation
+**Upgrading:**
+```bash
+cd orionbelt-analytics
+git pull origin main
+uv sync
+uv run server.py
+```
+
+## Installation
 
 ```bash
 git clone https://github.com/ralfbecher/orionbelt-analytics
 cd orionbelt-analytics
 uv sync
-```
-
-### Quick Start
-
-```bash
-# Copy environment template
 cp .env.template .env
-
 # Edit .env with your database credentials
-nano .env
-
-# Start the server
 uv run server.py
 ```
 
-### Example: Connect to BigQuery
+## Quick Start Examples
 
+### BigQuery
 ```python
 from src.database_manager import DatabaseManager
 
@@ -143,17 +125,15 @@ success = db_manager.connect_bigquery(
 )
 ```
 
-### Example: Connect to DuckDB
-
+### DuckDB
 ```python
 db_manager = DatabaseManager()
 success = db_manager.connect_duckdb(
-    database_path='/data/analytics.db'  # or ':memory:' for in-memory
+    database_path='/data/analytics.db'  # or ':memory:'
 )
 ```
 
-### Example: Connect to Databricks SQL
-
+### Databricks SQL
 ```python
 db_manager = DatabaseManager()
 success = db_manager.connect_databricks(
@@ -165,30 +145,14 @@ success = db_manager.connect_databricks(
 )
 ```
 
-## 📚 Documentation
+## Documentation
 
-- [README.md](README.md) - Complete documentation with examples
-- [CHANGELOG.md](CHANGELOG.md) - Detailed change history
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
-- [CLA.md](CLA.md) - Contributor License Agreement
+- [README](README.md) — Complete documentation with examples
+- [CHANGELOG](CHANGELOG.md) — Detailed change history
+- [CONTRIBUTING](CONTRIBUTING.md) — Contribution guidelines
+- [CLA](CLA.md) — Contributor License Agreement
 
-## 🔐 Security
-
-OrionBelt Analytics v1.0.0 includes:
-- ✅ Credential encryption with AES-128-CBC + HMAC
-- ✅ SQL injection prevention
-- ✅ Secure identifier validation
-- ✅ Audit logging for security events
-- ✅ Security scanning tools (bandit, safety) configured
-
-See [Security Notes](README.md#security-notes) for best practices.
-
-## 🐛 Bug Reports & Feature Requests
-
-- **Issues:** https://github.com/ralfbecher/orionbelt-analytics/issues
-- **Discussions:** https://github.com/ralfbecher/orionbelt-analytics/discussions
-
-## 📄 License
+## License
 
 Copyright 2025-2026 [RALFORION d.o.o.](https://ralforion.com)
 
@@ -202,24 +166,11 @@ See [LICENSE](LICENSE) for full details.
 
 > **Note:** For Apache 2.0 licensing, use the `v0.7` branch.
 
-## 🙏 Acknowledgments
+## Support
 
-Special thanks to:
-- FastMCP team for the excellent MCP framework
-- Database vendor teams for comprehensive documentation
-- OrionBelt community for feedback and contributions
-
-## 🎯 Next Steps
-
-After installing v1.0.0:
-1. Configure your database connections in `.env`
-2. Test connectivity with connection examples
-3. Explore schema analysis and ontology generation
-4. Integrate with OrionBelt Semantic Layer for complete analytics workflow
-5. Join our community and share feedback!
+- **Issues:** https://github.com/ralfbecher/orionbelt-analytics/issues
+- **Discussions:** https://github.com/ralfbecher/orionbelt-analytics/discussions
 
 ---
 
-**Happy Analyzing! 🚀**
-
-For questions or support, visit our [GitHub repository](https://github.com/ralfbecher/orionbelt-analytics).
+**OrionBelt Analytics v1.0.0** — Production-ready database schema analysis and ontology generation for AI-powered analytics across 7 major database platforms.
