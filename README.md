@@ -9,7 +9,7 @@
 
 [![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
+[![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
 [![FastMCP](https://img.shields.io/badge/FastMCP-3.1+-blue)](https://github.com/jlowin/fastmcp)
 [![RDF/OWL](https://img.shields.io/badge/RDF%2FOWL-Ontology-orange)](https://www.w3.org/OWL/)
 
@@ -1142,7 +1142,11 @@ Users can confidently use all features documented in this README. The test failu
 
 Copyright 2025-2026 [RALFORION d.o.o.](https://ralforion.com)
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+Licensed under the Business Source License 1.1. See [LICENSE](LICENSE) for details.
+
+**Change Date:** 2030-03-16 | **Change License:** Apache License, Version 2.0
+
+For commercial licensing inquiries, contact: licensing@ralforion.com
 
 ---
 

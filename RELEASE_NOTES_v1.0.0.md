@@ -1,10 +1,14 @@
-# OrionBelt Analytics v1.0.0 - Production Release
+# OrionBelt Analytics v1.0.0
+
+**First production release of OrionBelt Analytics**
 
 **Release Date:** March 16, 2026
 **Status:** Production/Stable
-**License:** Apache 2.0
+**License:** Business Source License 1.1 (converts to Apache 2.0 on 2030-03-16)
 
-## 🎉 Production-Ready Release
+> **Note:** For Apache 2.0 licensing, use the `v0.7` branch.
+
+---
 
 OrionBelt Analytics v1.0.0 marks the first production-ready release, delivering enterprise-grade database schema analysis and ontology generation across **7 major database platforms**.
 
@@ -188,7 +192,15 @@ See [Security Notes](README.md#security-notes) for best practices.
 
 Copyright 2025-2026 [RALFORION d.o.o.](https://ralforion.com)
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+Licensed under the **Business Source License 1.1** (BSL 1.1).
+
+- **Change Date:** 2030-03-16
+- **Change License:** Apache License, Version 2.0
+- **Commercial Licensing:** Contact licensing@ralforion.com
+
+See [LICENSE](LICENSE) for full details.
+
+> **Note:** For Apache 2.0 licensing, use the `v0.7` branch.
 
 ## 🙏 Acknowledgments
 
