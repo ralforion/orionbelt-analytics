@@ -1,11 +1,11 @@
 [project]
 name = "orionbelt-analytics"
-version = "1.0.0"
+version = "1.1.0"
 description = "OrionBelt Analytics - the Ontology-based MCP server for your Text-2-SQL convenience"
 authors = [{name = "Ralf Becher, RALFORION d.o.o.", email = "ralf.becher@web.de"}]
 readme = "README.md"
 requires-python = ">=3.13"
-keywords = ["mcp", "database", "ontology", "rdf", "schema-analysis", "postgresql", "snowflake", "clickhouse", "bigquery", "duckdb", "databricks"]
+keywords = ["mcp", "database", "ontology", "rdf", "schema-analysis", "postgresql", "snowflake", "clickhouse", "bigquery", "duckdb", "databricks", "mysql"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
@@ -36,6 +36,8 @@ dependencies = [
     "duckdb-engine>=0.13.0",
     # Databricks connectivity
     "databricks-sql-connector>=3.5.0",
+    # MySQL connectivity
+    "pymysql>=1.1.0",
     # Security dependencies
     "cryptography>=46.0.5",
     # Configuration and validation

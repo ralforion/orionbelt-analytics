@@ -5,6 +5,7 @@ DEFAULT_POSTGRES_PORT = 5432
 DEFAULT_SNOWFLAKE_SCHEMA = "PUBLIC"
 DEFAULT_DREMIO_PORT = 9047  # Dremio REST API port
 DEFAULT_CLICKHOUSE_PORT = 8123  # ClickHouse HTTP protocol port
+DEFAULT_MYSQL_PORT = 3306  # MySQL default port
 
 # Data sampling limits
 MIN_SAMPLE_LIMIT = 1
@@ -31,7 +32,7 @@ DEFAULT_OUTPUT_DIR = "tmp"
 IDENTIFIER_PATTERN = r'^[a-zA-Z_][a-zA-Z0-9_-]*$'
 
 # Supported database types
-SUPPORTED_DB_TYPES = ["postgresql", "snowflake", "dremio", "clickhouse", "bigquery", "duckdb", "databricks"]
+SUPPORTED_DB_TYPES = ["postgresql", "snowflake", "dremio", "clickhouse", "bigquery", "duckdb", "databricks", "mysql"]
 
 # System schemas to exclude
 POSTGRES_SYSTEM_SCHEMAS = ["information_schema", "pg_catalog", "pg_toast"]
@@ -41,3 +42,4 @@ CLICKHOUSE_SYSTEM_SCHEMAS = ["system", "INFORMATION_SCHEMA", "information_schema
 BIGQUERY_SYSTEM_SCHEMAS = ["INFORMATION_SCHEMA", "information_schema"]
 DUCKDB_SYSTEM_SCHEMAS = ["information_schema", "pg_catalog"]
 DATABRICKS_SYSTEM_SCHEMAS = ["information_schema", "default"]
+MYSQL_SYSTEM_SCHEMAS = ["information_schema", "mysql", "performance_schema", "sys"]

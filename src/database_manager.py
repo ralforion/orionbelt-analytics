@@ -669,6 +669,63 @@ class DatabaseManager:
             }
         return success
 
+    def connect_mysql(self, host: str, port: int, database: str,
+                      username: str, password: str, charset: str = "utf8mb4") -> bool:
+        """Connect to MySQL database.
+
+        Args:
+            host: MySQL server hostname or IP
+            port: MySQL server port (default: 3306)
+            database: Database name
+            username: MySQL username
+            password: MySQL password
+            charset: Character set (default: utf8mb4 for full Unicode support)
+
+        Returns:
+            True if connection successful, False otherwise
+        """
+        from .drivers.mysql import MySQLDriver
+
+        driver = MySQLDriver(
+            pool_size=self._connection_pool_size,
+            max_overflow=self._max_overflow,
+        )
+        success = driver.connect(
+            host=host,
+            port=port,
+            database=database,
+            username=username,
+            password=password,
+            charset=charset,
+        )
+        if success:
+            self._driver = driver
+            self._dremio_rest_connection = None
+            self._sync_engine_from_driver()
+
+            self.connection_info = {
+                "type": "mysql",
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username,
+                "charset": charset,
+            }
+            self._connection_id = hashlib.sha256(
+                f"{host}:{port}:{database}:{username}".encode()
+            ).hexdigest()[:16]
+
+            self._last_connection_params = {
+                "type": "mysql",
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username,
+                "password": password,
+                "charset": charset,
+            }
+        return success
+
     # ------------------------------------------------------------------
     # Schema introspection (delegated to driver)
     # ------------------------------------------------------------------
