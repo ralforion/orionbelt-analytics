@@ -671,7 +671,7 @@ class DatabaseManager:
 
     def connect_mysql(self, host: str, port: int, database: str,
                       username: str, password: str, charset: str = "utf8mb4") -> bool:
-        """Connect to MySQL database.
+        """Connect to MySQL 8.0+ or MariaDB 10.5+ database.
 
         Args:
             host: MySQL server hostname or IP
@@ -683,6 +683,10 @@ class DatabaseManager:
 
         Returns:
             True if connection successful, False otherwise
+
+        Note:
+            MySQL 5.7 reached EOL in October 2023 and is not supported.
+            Requires MySQL 8.0+ or MariaDB 10.5+.
         """
         from .drivers.mysql import MySQLDriver
 

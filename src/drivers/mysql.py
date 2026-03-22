@@ -1,4 +1,8 @@
-"""MySQL database driver."""
+"""MySQL database driver.
+
+Supports MySQL 8.0+ and MariaDB 10.5+.
+MySQL 5.7 reached EOL in October 2023 and is not supported.
+"""
 
 import hashlib
 import logging
@@ -48,9 +52,11 @@ class MySQLDriver(DatabaseDriver):
     # ------------------------------------------------------------------
 
     def connect(self, **params) -> bool:
-        """Connect to MySQL.
+        """Connect to MySQL 8.0+ or MariaDB 10.5+.
 
         Expected params: host, port, database, username, password, charset (optional).
+
+        Note: MySQL 5.7 reached EOL in October 2023 and is not supported.
         """
         host = params["host"]
         port = params["port"]

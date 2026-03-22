@@ -8,7 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.0] - 2026-03-22
 
 ### Added
-- **MySQL Support** - Full support for MySQL 5.7+, 8.0+, and MariaDB 10.3+
+- **MySQL Support** - Full support for MySQL 8.0+ and MariaDB 10.5+
+  - MySQL 5.7 reached EOL in October 2023 (no longer supported)
+  - MySQL 8.0+ provides CTEs, window functions, and improved performance
 - New MySQL database driver: `mysql.py` with PyMySQL connector
 - Connection method: `connect_mysql()` with charset configuration (default: utf8mb4)
 - MySQL configuration section in `.env.template` with troubleshooting guide
