@@ -12,6 +12,7 @@ from .dremio import DremioDriver
 from .bigquery import BigQueryDriver
 from .duckdb import DuckDBDriver
 from .databricks import DatabricksDriver
+from .mysql import MySQLDriver
 
 __all__ = [
     "DatabaseDriver",
@@ -22,4 +23,5 @@ __all__ = [
     "BigQueryDriver",
     "DuckDBDriver",
     "DatabricksDriver",
+    "MySQLDriver",
 ]

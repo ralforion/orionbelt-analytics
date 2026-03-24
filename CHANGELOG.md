@@ -5,6 +5,39 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-22
+
+### Added
+- **MySQL Support** - Full support for MySQL 8.0+ and MariaDB 10.5+
+  - MySQL 5.7 reached EOL in October 2023 (no longer supported)
+  - MySQL 8.0+ provides CTEs, window functions, and improved performance
+- New MySQL database driver: `mysql.py` with PyMySQL connector
+- Connection method: `connect_mysql()` with charset configuration (default: utf8mb4)
+- MySQL configuration section in `.env.template` with troubleshooting guide
+- MySQL system schema exclusions: `information_schema`, `mysql`, `performance_schema`, `sys`
+- MySQL badge and documentation in README
+- Connection pooling with automatic reconnection for MySQL (pool_pre_ping=True)
+
+### Changed
+- Supported databases expanded from 7 to 8
+- README updated with MySQL in all database lists
+- Version bumped to 1.1.0
+- Project keywords expanded to include `mysql`
+
+### Dependencies
+- Added `pymysql>=1.1.0` for MySQL connectivity (pure Python, cross-platform)
+
+### Database Support Summary
+OrionBelt Analytics v1.1.0 now supports:
+1. PostgreSQL
+2. **MySQL** (NEW)
+3. Snowflake
+4. ClickHouse
+5. Dremio
+6. BigQuery
+7. DuckDB/MotherDuck
+8. Databricks SQL
+
 ## [1.0.0] - 2026-03-16
 
 ### Added

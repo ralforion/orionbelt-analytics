@@ -7,7 +7,7 @@
 
 <p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
 
-[![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
+[![Version 1.1.0](https://img.shields.io/badge/version-1.1.0-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
 [![FastMCP](https://img.shields.io/badge/FastMCP-3.1+-blue)](https://github.com/jlowin/fastmcp)
@@ -15,15 +15,16 @@
 
 [![BigQuery](https://img.shields.io/badge/BigQuery-669DF6.svg?logo=googlebigquery&logoColor=white)](https://cloud.google.com/bigquery)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![MySQL](https://img.shields.io/badge/MySQL-4479A1.svg?logo=mysql&logoColor=white)](https://www.mysql.com)
 [![Snowflake](https://img.shields.io/badge/Snowflake-29B5E8.svg?logo=snowflake&logoColor=white)](https://www.snowflake.com)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-FFCC01.svg?logo=clickhouse&logoColor=black)](https://clickhouse.com)
 [![Dremio](https://img.shields.io/badge/Dremio-31B48D.svg)](https://www.dremio.com)
 [![Databricks](https://img.shields.io/badge/Databricks-FF3621.svg?logo=databricks&logoColor=white)](https://www.databricks.com)
 [![DuckDB](https://img.shields.io/badge/DuckDB-FFF000.svg?logo=duckdb&logoColor=black)](https://duckdb.org)
 
-This project provides a production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, and Databricks SQL) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
+This project provides a production-ready Python-based MCP (Model Context Protocol) server that analyzes relational database schemas (PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, and Databricks SQL) and automatically generates comprehensive ontologies in RDF/Turtle format with direct SQL mappings.
 
-> **Better Together:** Combine with [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer) for a complete AI-powered analytics stack. The Semantic Layer compiles declarative YAML models into dialect-specific, optimized SQL — ensuring correct joins, aggregations, and fan-trap-free queries across PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, and Databricks. Run both MCP servers side-by-side in Claude Desktop for schema-aware ontology generation **and** guaranteed-correct SQL compilation.
+> **Better Together:** Combine with [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer) for a complete AI-powered analytics stack. The Semantic Layer compiles declarative YAML models into dialect-specific, optimized SQL — ensuring correct joins, aggregations, and fan-trap-free queries across PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, and Databricks. Run both MCP servers side-by-side in Claude Desktop for schema-aware ontology generation **and** guaranteed-correct SQL compilation.
 
 ### GraphRAG: The Foundation for OBML Model Creation
 
@@ -85,7 +86,7 @@ OrionBelt Analytics combines multiple AI-powered technologies to provide intelli
 
 ### 🔗 Database Connectivity
 
-- **PostgreSQL**, **Snowflake**, **ClickHouse**, **Dremio**, **BigQuery**, **DuckDB/MotherDuck**, and **Databricks SQL** support with connection pooling
+- **PostgreSQL**, **MySQL**, **Snowflake**, **ClickHouse**, **Dremio**, **BigQuery**, **DuckDB/MotherDuck**, and **Databricks SQL** support with connection pooling
 - **Environment variable fallback** - parameters optional, uses .env when not provided
 - **Enhanced connection management** with retry logic and timeout handling
 - **Automatic dependency management** for all database connectors
@@ -171,7 +172,7 @@ WHERE {
 uv sync
 ```
 
-**Key dependencies:** FastMCP, SQLAlchemy, database connectors (PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks), RDFLib, Pydantic
+**Key dependencies:** FastMCP, SQLAlchemy, database connectors (PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks), RDFLib, Pydantic
 
 ## Project Structure
 
@@ -211,7 +212,7 @@ orionbelt-analytics/
 
 - **Python 3.13 or higher** (required)
 - **uv** package manager (recommended) - [Install uv](https://github.com/astral-sh/uv)
-- Database access: PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, or Databricks SQL
+- Database access: PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, or Databricks SQL
 
 ### Installation
 
@@ -280,6 +281,14 @@ POSTGRES_PORT=5432
 POSTGRES_DATABASE=postgres
 POSTGRES_USERNAME=postgres
 POSTGRES_PASSWORD=postgres
+
+# MySQL Configuration (optional - can provide via tool parameters)
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_DATABASE=mydb
+MYSQL_USERNAME=root
+MYSQL_PASSWORD=your_password
+MYSQL_CHARSET=utf8mb4  # Recommended for full Unicode support
 
 # Snowflake Configuration (optional - can provide via tool parameters)
 SNOWFLAKE_ACCOUNT=CLYKFLK-KA74251    # Use your actual account identifier
@@ -456,7 +465,7 @@ The server provides **built-in workflow guidance** through FastMCP Context integ
 
 #### 1. `connect_database`
 
-Connect to PostgreSQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, or Databricks SQL with environment variable fallback.
+Connect to PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, or Databricks SQL with environment variable fallback.
 
 **Key Feature**: Parameters are optional - uses .env values when not provided.
 
