@@ -1,0 +1,74 @@
+{
+  "name": "OrionBelt Analytics - AI Agent with MCP",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "You are a database intelligence assistant powered by OrionBelt Analytics. You help users analyze database schemas, generate ontologies, and write safe SQL queries.\n\nWorkflow:\n1. Call connect_database to establish a connection (postgresql, snowflake, dremio, clickhouse, or mysql).\n2. Call list_schemas to discover available schemas.\n3. Call analyze_schema to get the schema structure.\n4. Use generate_ontology to create RDF/OWL ontology.\n5. Use validate_sql_syntax before running queries.\n6. Use execute_sql_query to run validated SQL (set checklist_completed=true).\n7. Use generate_chart to visualize results.\n\nAlways validate SQL before execution. Set checklist_completed=true after validation."
+        }
+      },
+      "id": "ai-agent",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [620, 300]
+    },
+    {
+      "parameters": {},
+      "id": "chat-trigger",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [380, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {}
+      },
+      "id": "openai-model",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [620, 520]
+    },
+    {
+      "parameters": {
+        "connectionType": "sse",
+        "sseUrl": "={{ $env.ORIONBELT_MCP_URL || 'http://localhost:9000/mcp' }}"
+      },
+      "id": "mcp-client",
+      "name": "OrionBelt Analytics MCP",
+      "type": "@n8n/n8n-nodes-langchain.toolMCP",
+      "typeVersion": 1,
+      "position": [520, 520],
+      "notes": "Connects to OrionBelt Analytics MCP server. All 20+ tools are auto-discovered."
+    }
+  ],
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [{ "node": "AI Agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [{ "node": "AI Agent", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "OrionBelt Analytics MCP": {
+      "ai_tool": [
+        [{ "node": "AI Agent", "type": "ai_tool", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "OrionBelt" },
+    { "name": "AI Agent" },
+    { "name": "MCP" },
+    { "name": "Database Analytics" }
+  ]
+}

@@ -441,6 +441,34 @@ mcpServers:
 
 **Note:** LibreChat requires SSE transport (having seen some bugs with transport http). Make sure to set `MCP_TRANSPORT=sse` in your `.env` file before starting the server.
 
+## AI Framework Integrations
+
+Connect OrionBelt Analytics to popular AI agent frameworks via native MCP support. All 20+ tools are auto-discovered — no manual wrapping needed. See the [`integrations/`](integrations/) folder for complete examples.
+
+| Framework | Transport | Files |
+|-----------|-----------|-------|
+| [LangChain / LangGraph](integrations/langchain/) | `langchain-mcp-adapters` | `agent_example.py` |
+| [OpenAI Agents SDK](integrations/openai-agents-sdk/) | `MCPServerStreamableHttp` | `agent_example.py` |
+| [CrewAI](integrations/crewai/) | Native MCP (`mcps=`) | `crew_example.py` (3-agent crew) |
+| [Google ADK](integrations/google-adk/) | `MCPToolset.from_server()` | `agent_example.py` |
+| [Vercel AI SDK](integrations/vercel-ai-sdk/) | `experimental_createMCPClient` | `route-example.ts` (Next.js) |
+| [n8n](integrations/n8n/) | MCP Client Tool node | `workflow_ai_agent.json` |
+| [ChatGPT Custom GPT](integrations/chatgpt-custom-gpt/) | MCP-to-REST bridge | `instructions.md` |
+
+**Quick example (LangChain):**
+
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+async with MultiServerMCPClient({
+    "orionbelt-analytics": {
+        "url": "http://localhost:9000/mcp",
+        "transport": "streamable_http",
+    }
+}) as client:
+    tools = client.get_tools()  # auto-discovers all 20+ MCP tools
+```
+
 ## MCP Tools Reference
 
 ### Workflow Guidance
