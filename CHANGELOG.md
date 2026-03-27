@@ -5,6 +5,14 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-03-27
+
+### Fixed
+- Lowered `pandas` requirement from `>=3.0.0` to `>=2.2.3` to resolve dependency conflict with `databricks-sql-connector` (which caps pandas at `<2.4.0`)
+
+### Changed
+- Published to PyPI as `orionbelt-analytics`
+
 ## [1.1.0] - 2026-03-22
 
 ### Added

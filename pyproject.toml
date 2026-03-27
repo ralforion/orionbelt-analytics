@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-analytics"
-version = "1.1.0"
+version = "1.1.1"
 description = "OrionBelt Analytics - the Ontology-based MCP server for your Text-2-SQL convenience"
 authors = [{name = "Ralf Becher, RALFORION d.o.o.", email = "ralf.becher@web.de"}]
 readme = "README.md"
@@ -49,7 +49,7 @@ dependencies = [
     # Visualization libraries
     "plotly>=6.5.2",
     "kaleido>=1.2.0",
-    "pandas>=3.0.0",
+    "pandas>=2.2.3",
     "pillow>=12.1.1",
     # Network and async
     "aiohttp>=3.13.3",
