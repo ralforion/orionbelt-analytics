@@ -79,14 +79,14 @@ async def analyze_schema(
         _auto_initialize_graphrag_background: Background init function
     """
     # Log function entry to verify code is being called
-    logger.info(f"🔍 analyze_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
+    logger.debug(f"analyze_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
 
     # Check cache
     session = get_session_data(ctx)
     effective_schema = schema_name or ""
     cached_tables = session.get_cached_schema(effective_schema)
 
-    logger.info(f"🔍 Cache check result - cached_tables: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")
+    logger.debug(f"Cache check result - cached_tables: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")
 
     if cached_tables:
         ontology_also_cached = session.ontology_file is not None
@@ -95,14 +95,14 @@ async def analyze_schema(
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
 
         # Debug logging to diagnose auto-init issues
-        logger.info(f"🔍 GraphRAG auto-init check (CACHED path):")
-        logger.info(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
-        logger.info(f"  cached_tables exists: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")
+        logger.debug(f"GraphRAG auto-init check (CACHED path):")
+        logger.debug(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
+        logger.debug(f"  cached_tables exists: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")
         logger.info(f"  session.graphrag_initialized: {session.graphrag_initialized}")
-        logger.info(f"  Will trigger: {auto_graphrag == 'true' and cached_tables and not session.graphrag_initialized}")
+        logger.debug(f"  Will trigger: {auto_graphrag == 'true' and cached_tables and not session.graphrag_initialized}")
 
         if auto_graphrag == "true" and cached_tables and not session.graphrag_initialized:
-            logger.info(f"🤖 GraphRAG auto-init triggered for cached schema: {effective_schema or 'default'}")
+            logger.info(f"GraphRAG auto-init triggered for cached schema: {effective_schema or 'default'}")
             task = asyncio.create_task(
                 _auto_initialize_graphrag_background(
                     schema_name=effective_schema or "default",
@@ -111,10 +111,7 @@ async def analyze_schema(
                     ctx=ctx,
                 )
             )
-            # Store task reference for tracking
-            if not hasattr(session, '_graphrag_init_task'):
-                session._graphrag_init_task = None
-            session._graphrag_init_task = task
+            session.graphrag._init_task = task
             logger.info("GraphRAG auto-initialization started in background (from cache)")
 
         if ontology_also_cached:
@@ -213,13 +210,13 @@ async def analyze_schema(
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
 
         # Debug logging to diagnose auto-init issues
-        logger.info(f"🔍 GraphRAG auto-init check (NON-CACHED path):")
-        logger.info(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
-        logger.info(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
-        logger.info(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")
+        logger.debug(f"GraphRAG auto-init check (NON-CACHED path):")
+        logger.debug(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
+        logger.debug(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
+        logger.debug(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")
 
         if auto_graphrag == "true" and table_info_objects:
-            logger.info(f"🤖 GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
+            logger.info(f"GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
             task = asyncio.create_task(
                 _auto_initialize_graphrag_background(
                     schema_name=schema_name or "default",
@@ -228,10 +225,7 @@ async def analyze_schema(
                     ctx=ctx,
                 )
             )
-            # Store task reference for tracking (create placeholder if needed)
-            if not hasattr(session, '_graphrag_init_task'):
-                session._graphrag_init_task = None
-            session._graphrag_init_task = task
+            session.graphrag._init_task = task
             logger.info("GraphRAG auto-initialization started in background")
             lightweight_result["graphrag_auto_init"] = "started in background"
 
@@ -371,13 +365,13 @@ async def analyze_schema(
     auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
 
     # Debug logging to diagnose auto-init issues
-    logger.info(f"🔍 GraphRAG auto-init check (FULL MODE path):")
-    logger.info(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
-    logger.info(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
-    logger.info(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")
+    logger.debug(f"GraphRAG auto-init check (FULL MODE path):")
+    logger.debug(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
+    logger.debug(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
+    logger.debug(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")
 
     if auto_graphrag == "true" and table_info_objects:
-        logger.info(f"🤖 GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
+        logger.info(f"GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
         task = asyncio.create_task(
             _auto_initialize_graphrag_background(
                 schema_name=schema_name or "default",
@@ -386,11 +380,8 @@ async def analyze_schema(
                 ctx=ctx,
             )
         )
-        # Store task reference for tracking
         session = get_session_data(ctx)
-        if not hasattr(session, '_graphrag_init_task'):
-            session._graphrag_init_task = None
-        session._graphrag_init_task = task
+        session.graphrag._init_task = task
         logger.info("GraphRAG auto-initialization started in background (full mode)")
         schema_result["graphrag_auto_init"] = "started in background"
 

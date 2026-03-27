@@ -214,9 +214,9 @@ async def execute_sql_query(
                 details="Available connection methods: connect_database('postgresql'), connect_database('snowflake'), connect_database('dremio')",
             ).to_response()
 
-        if limit <= 0 or limit > 10000:
+        if limit <= 0 or limit > 5000:
             return ParameterError(
-                f"Invalid limit value '{limit}'. Must be between 1 and 10000.",
+                f"Invalid limit value '{limit}'. Must be between 1 and 5000.",
                 details="Use a reasonable limit to prevent memory exhaustion while allowing comprehensive analysis.",
             ).to_response()
 

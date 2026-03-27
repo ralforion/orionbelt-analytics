@@ -211,6 +211,10 @@ class TestMCPToolsAsync:
         session.obqc_validator = None
         session.loaded_ontology = None
         session.loaded_ontology_path = None
+        session.connection_id = None
+        session.connected_at = None
+        session.graphrag_initialized = False
+        session.graphrag_manager = None
         # Mock cache methods - return None to simulate no cache
         session.get_cached_schema = Mock(return_value=None)
         session.cache_schema_analysis = Mock()
@@ -226,6 +230,7 @@ class TestMCPToolsAsync:
 
         with patch('src.main.get_session_data', return_value=mock_session_data), \
              patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
+             patch('src.main._get_connection_fingerprint', return_value="test1234abcd"), \
              patch.dict('os.environ', {
                  'POSTGRES_HOST': 'localhost',
                  'POSTGRES_PORT': '5432',
@@ -234,7 +239,7 @@ class TestMCPToolsAsync:
                  'POSTGRES_PASSWORD': 'testpass'
              }):
 
-            result = await main_module.connect_database.fn(
+            result = await main_module.connect_database(
                 mock_ctx,
                 db_type="postgresql"
             )
@@ -266,13 +271,13 @@ class TestMCPToolsAsync:
                  'POSTGRES_PASSWORD': 'wrongpass'
              }):
 
-            result = await main_module.connect_database.fn(
+            result = await main_module.connect_database(
                 mock_ctx,
                 db_type="postgresql"
             )
 
-        # Should return error JSON
-        error_data = json.loads(result)
+        # Error responses are dicts from .to_response()
+        error_data = json.loads(result) if isinstance(result, str) else result
         assert error_data["error_type"] == "connection_error"
         assert "Failed to connect" in error_data["error"]
 
@@ -284,6 +289,7 @@ class TestMCPToolsAsync:
 
         with patch('src.main.get_session_data', return_value=mock_session_data), \
              patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
+             patch('src.main._get_connection_fingerprint', return_value="test5678efgh"), \
              patch.dict('os.environ', {
                  'SNOWFLAKE_ACCOUNT': 'test-account',
                  'SNOWFLAKE_USERNAME': 'testuser',
@@ -293,7 +299,7 @@ class TestMCPToolsAsync:
                  'SNOWFLAKE_SCHEMA': 'PUBLIC'
              }):
 
-            result = await main_module.connect_database.fn(
+            result = await main_module.connect_database(
                 mock_ctx,
                 db_type="snowflake"
             )
@@ -303,12 +309,12 @@ class TestMCPToolsAsync:
 
     async def test_connect_database_unsupported_type(self, mock_ctx):
         """Test connection with unsupported database type returns proper validation error."""
-        result = await main_module.connect_database.fn(mock_ctx, db_type="mysql")
+        result = await main_module.connect_database(mock_ctx, db_type="oracle")
 
-        error_data = json.loads(result)
+        error_data = json.loads(result) if isinstance(result, str) else result
         assert error_data["error_type"] == "validation_error"
         assert "Invalid database type" in error_data["error"]
-        assert "mysql" in error_data["error"]
+        assert "oracle" in error_data["error"]
 
     async def test_connect_database_missing_parameters(self, mock_ctx, mock_session_data):
         """Test connection with missing required environment variables."""
@@ -327,12 +333,12 @@ class TestMCPToolsAsync:
                 return env_map.get(key, default)
             mock_getenv.side_effect = getenv_side_effect
 
-            result = await main_module.connect_database.fn(
+            result = await main_module.connect_database(
                 mock_ctx,
                 db_type="postgresql"
             )
 
-        error_data = json.loads(result)
+        error_data = json.loads(result) if isinstance(result, str) else result
         assert error_data["error_type"] == "validation_error"
         assert "Missing required environment variables" in error_data["error"]
 
@@ -354,7 +360,7 @@ class TestMCPToolsAsync:
 
             # The function raises exception (no internal error handling)
             with pytest.raises(Exception, match="Connection error"):
-                await main_module.connect_database.fn(
+                await main_module.connect_database(
                     mock_ctx,
                     db_type="postgresql"
                 )
@@ -368,7 +374,7 @@ class TestMCPToolsAsync:
         with patch('src.main.get_session_data', return_value=mock_session_data), \
              patch('src.main.get_session_db_manager', return_value=mock_db_manager):
 
-            result = await main_module.list_schemas.fn(mock_ctx)
+            result = await main_module.list_schemas(mock_ctx)
 
         assert isinstance(result, list)
         assert len(result) == 3
@@ -387,7 +393,7 @@ class TestMCPToolsAsync:
 
             # The function raises exception (no internal error handling)
             with pytest.raises(RuntimeError, match="No database connection"):
-                await main_module.list_schemas.fn(mock_ctx)
+                await main_module.list_schemas(mock_ctx)
 
     async def test_analyze_schema_success(self, mock_ctx, mock_session_data, sample_users_table, sample_orders_table):
         """Test successful schema analysis with session isolation."""
@@ -406,7 +412,7 @@ class TestMCPToolsAsync:
              patch('builtins.open', MagicMock()), \
              patch('json.dump'):
 
-            result = await main_module.analyze_schema.fn(mock_ctx, "public", lightweight=False)
+            result = await main_module.analyze_schema(mock_ctx, "public", lightweight=False)
 
         assert isinstance(result, dict)
         assert result["schema"] == "public"
@@ -435,7 +441,7 @@ class TestMCPToolsAsync:
 
             # The function raises exception (no internal error handling)
             with pytest.raises(RuntimeError, match="No database connection"):
-                await main_module.analyze_schema.fn(mock_ctx, "public")
+                await main_module.analyze_schema(mock_ctx, "public")
 
     async def test_generate_ontology_success(self, mock_ctx, mock_session_data, sample_users_table):
         """Test successful ontology generation with session isolation."""
@@ -456,7 +462,7 @@ class TestMCPToolsAsync:
              patch('src.main.OntologyGenerator', return_value=mock_generator), \
              patch('builtins.open', MagicMock()):
 
-            result = await main_module.generate_ontology.fn(
+            result = await main_module.generate_ontology(
                 mock_ctx,
                 schema_name="public",
                 base_uri="http://example.com/ontology/"
@@ -474,13 +480,13 @@ class TestMCPToolsAsync:
         with patch('src.main.get_session_data', return_value=mock_session_data), \
              patch('src.main.get_session_db_manager', return_value=mock_db_manager):
 
-            result = await main_module.generate_ontology.fn(
+            result = await main_module.generate_ontology(
                 mock_ctx,
                 schema_name="public"
             )
 
-        # Result is JSON error response
-        error_data = json.loads(result)
+        # Error responses are dicts from .to_response()
+        error_data = json.loads(result) if isinstance(result, str) else result
         assert error_data["error_type"] == "data_error"
         assert "No tables found" in error_data["error"]
 
@@ -497,7 +503,7 @@ class TestMCPToolsAsync:
         with patch('src.main.get_session_data', return_value=mock_session_data), \
              patch('src.main.get_session_db_manager', return_value=mock_db_manager):
 
-            result = await main_module.sample_table_data.fn(mock_ctx, "users", "public", 10)
+            result = await main_module.sample_table_data(mock_ctx, "users", "public", 10)
 
         assert isinstance(result, list)
         assert len(result) == 2
@@ -511,7 +517,7 @@ class TestMCPToolsAsync:
         """Test table data sampling with invalid table name returns error."""
         with patch('src.main.get_session_data', return_value=mock_session_data):
             # Empty table name returns error list
-            result = await main_module.sample_table_data.fn(mock_ctx, "", "public", 10)
+            result = await main_module.sample_table_data(mock_ctx, "", "public", 10)
 
         assert isinstance(result, list)
         assert len(result) == 1
@@ -529,7 +535,7 @@ class TestMCPToolsAsync:
 
             # The function raises exception (no internal error handling)
             with pytest.raises(ValueError, match="Invalid table name format"):
-                await main_module.sample_table_data.fn(mock_ctx, "invalid-table", "public", 10)
+                await main_module.sample_table_data(mock_ctx, "invalid-table", "public", 10)
 
 
 class TestOntologyGenerator(unittest.TestCase):

@@ -9,6 +9,7 @@ from ..exceptions import (
     DependencyError,
     StoreNotInitializedError,
     RDFError,
+    ValidationError,
 )
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..paths import ensure_output_dir
@@ -38,19 +39,18 @@ async def store_ontology_in_rdf(
     effective_schema = schema_name or session.get_last_analyzed_schema() or "default"
 
     if not session.ontology_file:
-        return create_error_response(
-            "No ontology generated. Please call generate_ontology() first.",
-            "ontology_not_found",
-        )
+        return ValidationError(
+            "No ontology generated. Please call generate_ontology() first."
+        ).to_response()
 
     try:
         output_dir = ensure_output_dir()
         ontology_path = output_dir / session.ontology_file
 
         if not ontology_path.exists():
-            return create_error_response(
-                f"Ontology file not found: {session.ontology_file}", "file_not_found"
-            )
+            return ValidationError(
+                f"Ontology file not found: {session.ontology_file}"
+            ).to_response()
 
         ontology_ttl = ontology_path.read_text(encoding="utf-8")
 

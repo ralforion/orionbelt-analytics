@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastmcp import Context
 
+from ..constants import SUPPORTED_DB_TYPES
 from ..exceptions import ConnectionError, ValidationError, ParameterError
 from ..session import SessionData
 
@@ -37,9 +38,9 @@ async def connect_database(
         Connection status message or error JSON
     """
     # Validate input parameters
-    if not db_type or db_type not in ["postgresql", "snowflake", "dremio", "clickhouse"]:
+    if not db_type or db_type not in SUPPORTED_DB_TYPES:
         return ValidationError(
-            f"Invalid database type '{db_type}'. Use 'postgresql', 'snowflake', 'dremio', or 'clickhouse'."
+            f"Invalid database type '{db_type}'. Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
         ).to_response()
 
     db_manager = get_session_db_manager(ctx)
@@ -124,10 +125,9 @@ async def connect_database(
                 f"Missing required environment variables for Dremio: {', '.join(missing_params)}. Please check your .env file."
             ).to_response()
 
-        success = db_manager.connect_postgresql(
+        success = db_manager.connect_dremio(
             host=str(host),
             port=int(port),
-            database="DREMIO",
             username=str(username),
             password=str(password),
         )
@@ -160,6 +160,96 @@ async def connect_database(
             password=str(password),
             protocol=protocol,
             secure=secure,
+        )
+        db_name = database
+
+    elif db_type == "bigquery":
+        project_id = os.getenv("BIGQUERY_PROJECT_ID")
+        dataset = os.getenv("BIGQUERY_DATASET", "")
+        credentials_path = os.getenv("BIGQUERY_CREDENTIALS_PATH")
+        credentials_json = os.getenv("BIGQUERY_CREDENTIALS_JSON")
+
+        required_params = {"BIGQUERY_PROJECT_ID": project_id}
+        missing_params = [k for k, v in required_params.items() if not v]
+        if missing_params:
+            return ValidationError(
+                f"Missing required environment variables for BigQuery: {', '.join(missing_params)}. Please check your .env file."
+            ).to_response()
+
+        success = db_manager.connect_bigquery(
+            project_id=str(project_id),
+            dataset=dataset or "",
+            credentials_path=credentials_path,
+            credentials_json=credentials_json,
+        )
+        db_name = f"{project_id}/{dataset}" if dataset else project_id
+
+    elif db_type == "duckdb":
+        database_path = os.getenv("DUCKDB_DATABASE_PATH", ":memory:")
+        motherduck_token = os.getenv("MOTHERDUCK_TOKEN")
+        read_only = os.getenv("DUCKDB_READ_ONLY", "false").lower() == "true"
+
+        success = db_manager.connect_duckdb(
+            database_path=database_path,
+            motherduck_token=motherduck_token,
+            read_only=read_only,
+        )
+        db_name = database_path
+
+    elif db_type == "databricks":
+        server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+        http_path = os.getenv("DATABRICKS_HTTP_PATH")
+        access_token = os.getenv("DATABRICKS_ACCESS_TOKEN")
+        catalog = os.getenv("DATABRICKS_CATALOG", "hive_metastore")
+        schema = os.getenv("DATABRICKS_SCHEMA", "default")
+
+        required_params = {
+            "DATABRICKS_SERVER_HOSTNAME": server_hostname,
+            "DATABRICKS_HTTP_PATH": http_path,
+            "DATABRICKS_ACCESS_TOKEN": access_token,
+        }
+        missing_params = [k for k, v in required_params.items() if not v]
+        if missing_params:
+            return ValidationError(
+                f"Missing required environment variables for Databricks: {', '.join(missing_params)}. Please check your .env file."
+            ).to_response()
+
+        success = db_manager.connect_databricks(
+            server_hostname=str(server_hostname),
+            http_path=str(http_path),
+            access_token=str(access_token),
+            catalog=catalog,
+            schema=schema,
+        )
+        db_name = f"{catalog}.{schema}"
+
+    elif db_type == "mysql":
+        host = os.getenv("MYSQL_HOST")
+        port = os.getenv("MYSQL_PORT", "3306")
+        database = os.getenv("MYSQL_DATABASE")
+        username = os.getenv("MYSQL_USERNAME")
+        password = os.getenv("MYSQL_PASSWORD")
+        charset = os.getenv("MYSQL_CHARSET", "utf8mb4")
+
+        required_params = {
+            "MYSQL_HOST": host,
+            "MYSQL_DATABASE": database,
+            "MYSQL_USERNAME": username,
+            "MYSQL_PASSWORD": password,
+        }
+        missing_params = [k for k, v in required_params.items() if not v]
+        if missing_params:
+            return ValidationError(
+                f"Missing required environment variables for MySQL: {', '.join(missing_params)}. Please check your .env file."
+            ).to_response()
+
+        success = db_manager.connect_mysql(
+            host=str(host),
+            port=int(port),
+            database=str(database),
+            username=str(username),
+            password=str(password),
+            charset=charset,
         )
         db_name = database
 

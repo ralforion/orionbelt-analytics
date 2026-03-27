@@ -12,7 +12,9 @@ from pathlib import Path
 src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
 
-from src.main import mcp
+import atexit
+
+from src.main import mcp, cleanup_server
 from src.config import config_manager
 from src.utils import setup_logging
 from src import __version__, __name__ as SERVER_NAME
@@ -84,24 +86,22 @@ def cleanup_tmp_folder():
     tmp_dir = Path(__file__).parent / "tmp"
     if tmp_dir.exists():
         try:
-            # Remove all files in tmp directory but keep the directory
-            for file_path in tmp_dir.glob("*"):
-                if file_path.is_file():
-                    file_path.unlink()
-                    logger.debug(f"Removed temporary file: {file_path.name}")
-            
-            file_count = len(list(tmp_dir.glob("*")))
-            if file_count == 0:
-                logger.info("🧹 Cleaned up temporary files from previous runs")
-            else:
-                logger.info(f"🧹 Cleaned up temporary files, {file_count} items remain")
-                
+            # Remove all contents (files and subdirectories) but keep tmp/ itself
+            for item in tmp_dir.iterdir():
+                if item.is_file():
+                    item.unlink()
+                    logger.debug(f"Removed temporary file: {item.name}")
+                elif item.is_dir():
+                    shutil.rmtree(item)
+                    logger.debug(f"Removed temporary directory: {item.name}")
+
+            logger.info("Cleaned up temporary files from previous runs")
+
         except Exception as e:
             logger.warning(f"Failed to clean tmp directory: {e}")
     else:
-        # Create tmp directory if it doesn't exist
         tmp_dir.mkdir(exist_ok=True)
-        logger.info("📁 Created tmp directory for ontology files")
+        logger.info("Created tmp directory for ontology files")
 
 def main():
     """Start the OrionBelt Analytics MCP server."""
@@ -111,6 +111,9 @@ def main():
 
         # Setup signal handlers for graceful shutdown
         shutdown_event = setup_signal_handlers()
+
+        # Register cleanup for session resources on exit
+        atexit.register(cleanup_server)
 
         # Clean up temporary files from previous runs
         cleanup_tmp_folder()

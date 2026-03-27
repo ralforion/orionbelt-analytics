@@ -25,6 +25,31 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _escape_sparql_literal(value: str) -> str:
+    """Escape a string for safe use as a SPARQL literal value.
+
+    Prevents SPARQL injection by escaping special characters.
+    """
+    return (
+        value
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("'", "\\'")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+
+
+def _escape_sparql_iri(value: str) -> str:
+    """Escape a string for safe use as a SPARQL IRI.
+
+    Prevents SPARQL injection by rejecting dangerous characters in IRIs.
+    """
+    forbidden = set('<>"{}|\\^`')
+    return "".join(c for c in value if c not in forbidden)
+
+
 class OxigraphStoreManager:
     """Manages persistent RDF storage using Oxigraph."""
 
@@ -353,10 +378,11 @@ class OxigraphStoreManager:
         try:
             if graph_uri:
                 # Count triples in specific graph
+                safe_uri = _escape_sparql_iri(graph_uri)
                 query = f"""
                     SELECT (COUNT(*) AS ?count)
                     WHERE {{
-                        GRAPH <{graph_uri}> {{
+                        GRAPH <{safe_uri}> {{
                             ?s ?p ?o .
                         }}
                     }}
@@ -402,12 +428,13 @@ class OxigraphStoreManager:
         Returns:
             List of table names
         """
+        safe_graph = _escape_sparql_iri(schema_graph)
         query = f"""
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
             PREFIX db: <http://example.com/db#>
 
             SELECT DISTINCT ?tableName
-            FROM <{schema_graph}>
+            FROM <{safe_graph}>
             WHERE {{
                 ?table a db:Table .
                 ?table db:tableName ?tableName .
@@ -433,7 +460,9 @@ class OxigraphStoreManager:
         Returns:
             List of {table, column, type} dicts
         """
-        graph_clause = f"FROM <{schema_graph}>" if schema_graph else ""
+        safe_graph = _escape_sparql_iri(schema_graph) if schema_graph else ""
+        graph_clause = f"FROM <{safe_graph}>" if schema_graph else ""
+        safe_type = _escape_sparql_literal(data_type)
 
         query = f"""
             PREFIX db: <http://example.com/db#>
@@ -445,7 +474,7 @@ class OxigraphStoreManager:
                 ?column db:tableName ?tableName .
                 ?column db:columnName ?columnName .
                 ?column db:dataType ?dataType .
-                FILTER (LCASE(STR(?dataType)) = LCASE("{data_type}"))
+                FILTER (LCASE(STR(?dataType)) = LCASE("{safe_type}"))
             }}
             ORDER BY ?tableName ?columnName
         """
@@ -477,13 +506,16 @@ class OxigraphStoreManager:
         Returns:
             List of relationship dicts
         """
-        graph_clause = f"FROM <{schema_graph}>" if schema_graph else ""
+        safe_graph = _escape_sparql_iri(schema_graph) if schema_graph else ""
+        graph_clause = f"FROM <{safe_graph}>" if schema_graph else ""
 
         filters = []
         if from_table:
-            filters.append(f'FILTER (?fromTable = "{from_table}")')
+            safe_from = _escape_sparql_literal(from_table)
+            filters.append(f'FILTER (?fromTable = "{safe_from}")')
         if to_table:
-            filters.append(f'FILTER (?toTable = "{to_table}")')
+            safe_to = _escape_sparql_literal(to_table)
+            filters.append(f'FILTER (?toTable = "{safe_to}")')
 
         filter_clause = "\n".join(filters)
 
@@ -529,10 +561,11 @@ class OxigraphStoreManager:
         Returns:
             Serialized RDF
         """
+        safe_uri = _escape_sparql_iri(graph_uri)
         query = f"""
             CONSTRUCT {{ ?s ?p ?o }}
             WHERE {{
-                GRAPH <{graph_uri}> {{
+                GRAPH <{safe_uri}> {{
                     ?s ?p ?o
                 }}
             }}
@@ -548,7 +581,8 @@ class OxigraphStoreManager:
             graph_uri: Graph to clear
         """
         try:
-            self.store.update(f"CLEAR GRAPH <{graph_uri}>")
+            safe_uri = _escape_sparql_iri(graph_uri)
+            self.store.update(f"CLEAR GRAPH <{safe_uri}>")
             logger.info(f"Cleared graph: {graph_uri}")
         except Exception as e:
             logger.error(f"Failed to clear graph: {e}", exc_info=True)

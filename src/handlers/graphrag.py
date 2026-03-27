@@ -17,6 +17,38 @@ from ..paths import ensure_output_dir
 logger = logging.getLogger(__name__)
 
 
+def _table_info_to_dict(table_info: Any) -> Dict[str, Any]:
+    """Convert a TableInfo object to a dictionary for GraphRAG/ontology consumption."""
+    return {
+        "name": table_info.name,
+        "schema": table_info.schema,
+        "columns": [
+            {
+                "name": col.name,
+                "data_type": col.data_type,
+                "is_nullable": col.is_nullable,
+                "is_primary_key": getattr(col, "is_primary_key", False),
+                "is_foreign_key": getattr(col, "is_foreign_key", False),
+                "foreign_key_table": getattr(col, "foreign_key_table", None),
+                "foreign_key_column": getattr(col, "foreign_key_column", None),
+                "comment": col.comment,
+            }
+            for col in table_info.columns
+        ],
+        "primary_keys": table_info.primary_keys,
+        "foreign_keys": [
+            {
+                "column": fk["column"],
+                "referenced_table": fk["referenced_table"],
+                "referenced_column": fk["referenced_column"],
+            }
+            for fk in table_info.foreign_keys
+        ],
+        "comment": table_info.comment,
+        "row_count": getattr(table_info, "row_count", None),
+    }
+
+
 async def _auto_generate_ontology_background(
     schema_name: str,
     tables_info: List[Any],
@@ -33,33 +65,10 @@ async def _auto_generate_ontology_background(
         config = config_manager.get_server_config()
         base_uri = config.ontology_base_uri
 
-        schema_data = {"schema": schema_name, "tables": []}
-
-        for table_info in tables_info:
-            table_dict = {
-                "name": table_info.name,
-                "schema": table_info.schema,
-                "columns": [
-                    {
-                        "name": col.name,
-                        "data_type": col.data_type,
-                        "nullable": col.is_nullable,
-                        "comment": col.comment,
-                    }
-                    for col in table_info.columns
-                ],
-                "primary_keys": table_info.primary_keys,
-                "foreign_keys": [
-                    {
-                        "column": fk["column"],
-                        "referenced_table": fk["referenced_table"],
-                        "referenced_column": fk["referenced_column"],
-                    }
-                    for fk in table_info.foreign_keys
-                ],
-                "comment": table_info.comment,
-            }
-            schema_data["tables"].append(table_dict)
+        schema_data = {
+            "schema": schema_name,
+            "tables": [_table_info_to_dict(t) for t in tables_info],
+        }
 
         ontology_generator = OntologyGenerator(base_uri=base_uri)
         ontology_ttl = ontology_generator.generate_ontology(schema_data)
@@ -114,32 +123,7 @@ async def _auto_initialize_graphrag_background(
                 schema_name=schema_name,
             )
 
-        tables_dict = []
-        for table_info in tables_info:
-            table_dict = {
-                "name": table_info.name,
-                "schema": table_info.schema,
-                "columns": [
-                    {
-                        "name": col.name,
-                        "data_type": col.data_type,
-                        "nullable": col.is_nullable,
-                        "comment": col.comment,
-                    }
-                    for col in table_info.columns
-                ],
-                "primary_keys": table_info.primary_keys,
-                "foreign_keys": [
-                    {
-                        "column": fk["column"],
-                        "referenced_table": fk["referenced_table"],
-                        "referenced_column": fk["referenced_column"],
-                    }
-                    for fk in table_info.foreign_keys
-                ],
-                "comment": table_info.comment,
-            }
-            tables_dict.append(table_dict)
+        tables_dict = [_table_info_to_dict(t) for t in tables_info]
 
         session.graphrag_manager.initialize_from_schema(
             tables_info=tables_dict, schema_name=schema_name
@@ -167,8 +151,6 @@ async def _auto_initialize_graphrag_background(
 
     except Exception as e:
         logger.error(f"GraphRAG auto-initialization failed: {type(e).__name__}: {e}", exc_info=True)
-        session.graphrag_initialized = False
-        logger.debug("GraphRAG auto-init traceback:", exc_info=True)
         session.graphrag_initialized = False
 
 
@@ -225,30 +207,7 @@ async def initialize_graphrag(
         )
 
     # Convert TableInfo objects to dictionaries
-    tables_dict = []
-    for table_info in tables_info:
-        table_dict = {
-            "name": table_info.name,
-            "schema": table_info.schema,
-            "columns": [
-                {
-                    "name": col.name,
-                    "data_type": col.data_type,
-                    "is_nullable": col.is_nullable,
-                    "is_primary_key": col.is_primary_key,
-                    "is_foreign_key": col.is_foreign_key,
-                    "foreign_key_table": col.foreign_key_table,
-                    "foreign_key_column": col.foreign_key_column,
-                    "comment": col.comment,
-                }
-                for col in table_info.columns
-            ],
-            "primary_keys": table_info.primary_keys,
-            "foreign_keys": table_info.foreign_keys,
-            "comment": table_info.comment,
-            "row_count": table_info.row_count,
-        }
-        tables_dict.append(table_dict)
+    tables_dict = [_table_info_to_dict(t) for t in tables_info]
 
     try:
         if session.graphrag_manager is None:

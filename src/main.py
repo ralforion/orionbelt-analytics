@@ -84,7 +84,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 
 ## Core Capabilities
 
-- **Database Connectivity:** PostgreSQL, Snowflake, Dremio
+- **Database Connectivity:** PostgreSQL, Snowflake, Dremio, ClickHouse, BigQuery, DuckDB, Databricks, MySQL
 - **Schema Intelligence:** Table/column analysis with relationship mapping
 - **Ontology Generation:** RDF/OWL with db: namespace linking to SQL tables
 - **Safe SQL Execution:** Fan-trap detection, injection prevention, query validation
@@ -116,7 +116,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 - SQL injection prevention
 - Read-only enforcement
 - Query timeout protection
-- Result size limits (max 10,000 rows)
+- Result size limits (max 5,000 rows)
 
 **Performance:**
 - Connection pooling
@@ -131,7 +131,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 - For multi-fact aggregation, use UNION ALL pattern (see /fan-trap-prevention)
 
 Version: {__version__}
-Supported Databases: PostgreSQL, Snowflake, Dremio
+Supported Databases: PostgreSQL, Snowflake, Dremio, ClickHouse, BigQuery, DuckDB, Databricks, MySQL
 Primary Use Case: Semantic database analysis with ontology-enhanced Text-to-SQL
 """.format(
         __version__=__version__
@@ -201,6 +201,7 @@ def get_session_id(ctx: Context) -> str:
         return str(ctx.session_id)
     if hasattr(ctx, "session") and ctx.session:
         return f"session_{id(ctx.session)}"
+    logger.warning("Could not determine session ID from context, using default_session")
     return "default_session"
 
 
@@ -470,7 +471,7 @@ async def connect_database(ctx: Context, db_type: str) -> str:
     """Connect to a database using credentials from environment variables.
 
     Args:
-        db_type: Database type - either 'postgresql', 'snowflake', 'dremio', or 'clickhouse'
+        db_type: Database type - 'postgresql', 'snowflake', 'dremio', 'clickhouse', 'bigquery', 'duckdb', 'databricks', or 'mysql'
 
     Returns:
         Connection status message or error JSON
@@ -747,7 +748,7 @@ async def execute_sql_query(
 
     Args:
         sql_query: SQL SELECT statement (fully qualified identifiers required)
-        limit: Maximum rows to return (default: 1000, max: 10,000)
+        limit: Maximum rows to return (default: 1000, max: 5,000)
         checklist_completed: Confirmation that pre-execution checklist is complete
         query_intent: Optional natural language description of query intent
 
@@ -801,6 +802,7 @@ async def generate_chart(
         ctx, data_source, chart_type, x_column, y_column,
         color_column, title, chart_style, width, height,
         sort_by, sort_order, output_format,
+        get_session_data=get_session_data,
     )
 
 
