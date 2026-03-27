@@ -28,6 +28,7 @@ async def generate_chart(
     sort_by: Optional[str],
     sort_order: Optional[str],
     output_format: str,
+    get_session_data=None,
 ) -> Union[List[UIResource], Image]:
     """Generate interactive or static charts from query results.
 
@@ -167,9 +168,8 @@ async def generate_chart(
         image_bytes, chart_id = result
 
         # Get connection_id from session for scoped storage
-        from ..main import get_session_data
-        session = get_session_data(ctx)
-        connection_id = session.connection_id
+        session = get_session_data(ctx) if get_session_data else None
+        connection_id = session.connection_id if session else None
 
         image_file_path = save_image_to_tmp(
             image_bytes,

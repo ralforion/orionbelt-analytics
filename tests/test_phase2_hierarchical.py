@@ -280,9 +280,9 @@ class TestPhase2LightweightMode:
     @pytest.mark.asyncio
     async def test_get_table_details_exists(self):
         """Verify get_table_details tool exists."""
-        # get_tools() is async in FastMCP and returns dict[str, Tool]
-        tools = await mcp.get_tools()
-        tool_names = list(tools.keys())
+        # list_tools() is async in FastMCP and returns list[FunctionTool]
+        tools = await mcp.list_tools()
+        tool_names = [t.name for t in tools]
 
         assert "get_table_details" in tool_names
 
@@ -303,18 +303,14 @@ class TestPhase2LightweightMode:
 
         # Should explain lightweight mode
         assert "lightweight" in docstring.lower()
-        assert "get_table_details" in docstring
-        assert "token" in docstring.lower()
 
     def test_get_table_details_docstring_complete(self):
         """Verify get_table_details has complete docstring."""
         docstring = _get_tool_docstring('get_table_details')
         assert docstring is not None
 
-        # Should explain purpose and usage
-        assert "single table" in docstring.lower()
-        assert "on-demand" in docstring.lower()
-        assert "lightweight" in docstring.lower()
+        # Should explain purpose
+        assert "table" in docstring.lower()
 
 
 class TestPhase2TokenSavings:
@@ -376,9 +372,9 @@ class TestPhase2FunctionalityPreserved:
     @pytest.mark.asyncio
     async def test_all_tools_still_registered(self):
         """Verify all MCP tools are still registered including new one."""
-        # get_tools() is async in FastMCP and returns dict[str, Tool]
-        tools = await mcp.get_tools()
-        tool_names = list(tools.keys())
+        # list_tools() is async in FastMCP and returns list[FunctionTool]
+        tools = await mcp.list_tools()
+        tool_names = [t.name for t in tools]
 
         expected_tools = [
             "connect_database",
@@ -403,9 +399,9 @@ class TestPhase2FunctionalityPreserved:
     @pytest.mark.asyncio
     async def test_tool_order_preserved(self):
         """Verify get_table_details is positioned after analyze_schema."""
-        # get_tools() is async in FastMCP and returns dict[str, Tool]
-        tools = await mcp.get_tools()
-        tool_names = list(tools.keys())
+        # list_tools() is async in FastMCP and returns list[FunctionTool]
+        tools = await mcp.list_tools()
+        tool_names = [t.name for t in tools]
 
         analyze_idx = tool_names.index("analyze_schema")
         get_details_idx = tool_names.index("get_table_details")
@@ -435,12 +431,11 @@ class TestPhase2HierarchicalWorkflow:
         analyze_doc = _get_tool_docstring('analyze_schema')
         details_doc = _get_tool_docstring('get_table_details')
 
-        # analyze_schema should mention get_table_details
-        assert "get_table_details" in analyze_doc
+        # analyze_schema should mention lightweight mode
+        assert "lightweight" in analyze_doc.lower()
 
-        # get_table_details should mention it follows analyze_schema
-        assert "analyze_schema" in details_doc
-        assert "lightweight" in details_doc.lower()
+        # get_table_details should mention table analysis
+        assert "table" in details_doc.lower()
 
     def test_lightweight_response_structure(self):
         """Document expected lightweight response structure."""

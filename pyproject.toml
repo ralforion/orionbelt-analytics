@@ -1,6 +1,6 @@
 [project]
 name = "orionbelt-analytics"
-version = "1.1.1"
+version = "1.1.2"
 description = "OrionBelt Analytics - the Ontology-based MCP server for your Text-2-SQL convenience"
 authors = [{name = "Ralf Becher, RALFORION d.o.o.", email = "ralf.becher@web.de"}]
 readme = "README.md"
@@ -13,9 +13,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "License :: Other/Proprietary License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [

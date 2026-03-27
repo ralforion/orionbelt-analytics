@@ -142,7 +142,7 @@ async def test_lightweight_caches_for_ontology(mock_context, mock_db_manager, tm
 
     with patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
          patch('src.main.get_session_data') as mock_session_data, \
-         patch('src.main.get_output_dir', return_value=tmp_path), \
+         patch('src.handlers.ontology.ensure_output_dir', return_value=tmp_path), \
          patch('src.main.get_session_safe_filename', return_value="test"):
 
         # Mock session data
@@ -192,7 +192,7 @@ async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tm
 
     with patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
          patch('src.main.get_session_data') as mock_session_data, \
-         patch('src.main.get_output_dir', return_value=tmp_path), \
+         patch('src.handlers.ontology.ensure_output_dir', return_value=tmp_path), \
          patch('src.main.get_session_safe_filename', return_value="test"), \
          patch('src.main._server_state') as mock_server_state:
 
@@ -272,7 +272,7 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
 
     with patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
          patch('src.main.get_session_data') as mock_session_data, \
-         patch('src.main.get_output_dir', return_value=tmp_path), \
+         patch('src.handlers.ontology.ensure_output_dir', return_value=tmp_path), \
          patch('src.main.get_session_safe_filename', return_value="test"), \
          patch('src.main._server_state') as mock_server_state:
 
@@ -284,6 +284,10 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
                 self.schema_file = None
                 self.ontology_file = None
                 self.obqc_validator = None
+                self.connection_id = None
+                self.graphrag_initialized = False
+                self.graphrag_manager = None
+                self.graphrag = Mock()
                 self._cache = cached_data
 
             def get_cached_schema(self, schema_name):

@@ -102,8 +102,6 @@ class DatabaseManager:
         self._cache_ttl = 300  # 5 minutes
         self._connection_id: Optional[str] = None
 
-        # Thread pool for concurrent operations
-        self._thread_pool = ThreadPoolExecutor(max_workers=5)
 
     # ------------------------------------------------------------------
     # Cache helpers
@@ -1174,15 +1172,6 @@ class DatabaseManager:
 
     def disconnect(self):
         """Close the database connection and clear stored parameters."""
-        # Shutdown thread pool
-        if hasattr(self, '_thread_pool') and self._thread_pool:
-            try:
-                self._thread_pool.shutdown(wait=False)
-                logger.debug("Thread pool shut down")
-            except Exception as e:
-                logger.warning(f"Error shutting down thread pool: {e}")
-            self._thread_pool = None
-
         # Clear metadata cache
         if hasattr(self, '_metadata_cache'):
             self._metadata_cache.clear()
