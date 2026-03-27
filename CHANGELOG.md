@@ -5,6 +5,30 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-03-27
+
+### Fixed
+- Fix Dremio routing bug calling connect_postgresql instead of connect_dremio
+- Add SPARQL injection escaping for pyoxigraph f-string queries
+- Register atexit cleanup handler for session/store teardown
+- Clean tmp/ subdirectories on startup, not just files
+- Align execute_sql_query row limit from 10000 to 5000 (matching docstring)
+- Fix GraphRAG init task tracking via session attribute instead of monkey-patch
+- Remove circular import in chart handler
+- Use typed exceptions in RDF handler
+- Fix all failing tests (pytest shebang, FastMCP API changes, mock fixtures)
+
+### Added
+- Expose all 8 database drivers in connection handler (BigQuery, DuckDB, Databricks, MySQL)
+- Extract _table_info_to_dict() utility for GraphRAG handler
+- Update get_server_info to list all 8 databases, 28 tools, 10 features
+
+### Changed
+- Downgrade verbose schema analysis logs from INFO to DEBUG
+- Remove unused ThreadPoolExecutor from DatabaseManager
+- Remove stale Python 3.10-3.12 classifiers from pyproject.toml
+- Remove outdated test_integration.py
+
 ## [1.1.1] - 2026-03-27
 
 ### Fixed
