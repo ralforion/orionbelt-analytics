@@ -108,30 +108,41 @@ async def connect_database(
         db_name = database
 
     elif db_type == "dremio":
-        host = os.getenv("DREMIO_HOST")
-        port = os.getenv("DREMIO_PORT")
-        username = os.getenv("DREMIO_USERNAME")
-        password = os.getenv("DREMIO_PASSWORD")
+        # Prefer PAT-based authentication (DREMIO_URI + DREMIO_PAT)
+        dremio_uri = os.getenv("DREMIO_URI")
+        dremio_pat = os.getenv("DREMIO_PAT")
 
-        required_params = {
-            "DREMIO_HOST": host,
-            "DREMIO_PORT": port,
-            "DREMIO_USERNAME": username,
-            "DREMIO_PASSWORD": password,
-        }
-        missing_params = [k for k, v in required_params.items() if not v]
-        if missing_params:
-            return ValidationError(
-                f"Missing required environment variables for Dremio: {', '.join(missing_params)}. Please check your .env file."
-            ).to_response()
+        if dremio_uri and dremio_pat:
+            success = db_manager.connect_dremio(uri=dremio_uri, pat=dremio_pat)
+            db_name = "DREMIO"
+        else:
+            # Fall back to legacy username/password authentication
+            host = os.getenv("DREMIO_HOST")
+            port = os.getenv("DREMIO_PORT")
+            username = os.getenv("DREMIO_USERNAME")
+            password = os.getenv("DREMIO_PASSWORD")
 
-        success = db_manager.connect_dremio(
-            host=str(host),
-            port=int(port),
-            username=str(username),
-            password=str(password),
-        )
-        db_name = "DREMIO"
+            required_params = {
+                "DREMIO_HOST": host,
+                "DREMIO_PORT": port,
+                "DREMIO_USERNAME": username,
+                "DREMIO_PASSWORD": password,
+            }
+            missing_params = [k for k, v in required_params.items() if not v]
+            if missing_params:
+                return ValidationError(
+                    f"Missing required environment variables for Dremio: {', '.join(missing_params)}. "
+                    "Please check your .env file. "
+                    "For PAT-based auth, set DREMIO_URI and DREMIO_PAT instead."
+                ).to_response()
+
+            success = db_manager.connect_dremio(
+                host=str(host),
+                port=int(port),
+                username=str(username),
+                password=str(password),
+            )
+            db_name = "DREMIO"
 
     elif db_type == "clickhouse":
         host = os.getenv("CLICKHOUSE_HOST")
