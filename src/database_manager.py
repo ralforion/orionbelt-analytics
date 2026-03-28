@@ -315,6 +315,29 @@ class DatabaseManager:
                     params.get("username"), params.get("password"),
                     params.get("ssl", True),
                 )
+        elif params["type"] == "bigquery":
+            success = self.connect_bigquery(
+                params["project_id"], params.get("dataset", ""),
+                params.get("credentials_path"), params.get("credentials_json"),
+            )
+        elif params["type"] == "duckdb":
+            success = self.connect_duckdb(
+                params.get("database_path", ":memory:"),
+                params.get("motherduck_token"),
+                params.get("read_only", False),
+            )
+        elif params["type"] == "databricks":
+            success = self.connect_databricks(
+                params["server_hostname"], params["http_path"],
+                params["access_token"], params.get("catalog", "hive_metastore"),
+                params.get("schema", "default"),
+            )
+        elif params["type"] == "mysql":
+            success = self.connect_mysql(
+                params["host"], params["port"], params["database"],
+                params["username"], params["password"],
+                params.get("charset", "utf8mb4"),
+            )
         else:
             raise RuntimeError(f"Unsupported database type for reconnection: {params['type']}")
 

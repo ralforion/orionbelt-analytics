@@ -268,6 +268,11 @@ def _clear_session_state(session: SessionData, reason: str = "connection change"
     session.loaded_ontology = None
     session.loaded_ontology_path = None
 
+    session.obqc_validator = None
+
+    session.oxigraph_store = None
+    session.oxigraph_initialized = False
+
     session.graphrag_manager = None
     session.graphrag_initialized = False
 
