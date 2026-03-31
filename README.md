@@ -1,6 +1,6 @@
 <!-- mcp-name: io.github.ralfbecher/orionbelt-analytics -->
 <p align="center">
-  <img src="assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
+  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-analytics/main/assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
 </p>
 
 <h1 align="center">OrionBelt Analytics</h1>
@@ -73,7 +73,7 @@ Our main analysis tool `get_analysis_context()` automatically includes ontology 
 ## Architecture Overview
 
 <p align="center">
-  <img src="assets/architecture.png" alt="OrionBelt Analytics Architecture" width="900">
+  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-analytics/main/assets/architecture.png" alt="OrionBelt Analytics Architecture" width="900">
 </p>
 
 OrionBelt Analytics combines multiple AI-powered technologies to provide intelligent database understanding:
@@ -1191,6 +1191,6 @@ For commercial licensing inquiries, contact: licensing@ralforion.com
 
 <p align="center">
   <a href="https://ralforion.com">
-    <img src="assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
+    <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-analytics/main/assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
   </a>
 </p>
