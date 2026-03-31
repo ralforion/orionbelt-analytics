@@ -1,6 +1,6 @@
 <!-- mcp-name: io.github.ralfbecher/orionbelt-analytics -->
 <p align="center">
-  <img src="assets/ORIONBELT Logo.png" alt="OrionBelt Logo" width="400">
+  <img src="assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
 </p>
 
 <h1 align="center">OrionBelt Analytics</h1>
@@ -1191,6 +1191,6 @@ For commercial licensing inquiries, contact: licensing@ralforion.com
 
 <p align="center">
   <a href="https://ralforion.com">
-    <img src="assets/RALFORION doo Logo.png" alt="RALFORION d.o.o." width="200">
+    <img src="assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
   </a>
 </p>
