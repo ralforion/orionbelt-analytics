@@ -2,6 +2,7 @@
 __pycache__/
 *.py[oc]
 design/
+scripts/
 build/
 dist/
 wheels/

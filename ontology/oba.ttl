@@ -1,0 +1,222 @@
+@prefix oba:  <https://ralforion.com/ns/oba#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix vann: <http://purl.org/vocab/vann/> .
+
+# =============================================================================
+# OBA --- OrionBelt Analytics Ontology 0.1
+#
+# A vocabulary of OWL annotation properties for describing physical database
+# schema metadata.  OBA annotates OWL classes (tables), datatype properties
+# (columns), and object properties (foreign-key relationships) with SQL-level
+# information needed for Text-to-SQL generation, quality validation, and
+# graph-based schema discovery.
+#
+# Published at: https://ralforion.com/ns/oba/
+# Namespace:    https://ralforion.com/ns/oba#
+# =============================================================================
+
+<https://ralforion.com/ns/oba> a owl:Ontology ;
+    owl:versionIRI <https://ralforion.com/ns/oba/0.1> ;
+    owl:versionInfo "0.1" ;
+    rdfs:label "OrionBelt Analytics Ontology" ;
+    rdfs:comment "Annotation vocabulary for physical database schema metadata.  Complements OBSL (OrionBelt Semantic Layer) which describes business-level concepts." ;
+    dcterms:creator "Ralf Becher" ;
+    dcterms:created "2026-04-03"^^xsd:date ;
+    dcterms:license <https://creativecommons.org/licenses/by/4.0/> ;
+    vann:preferredNamespacePrefix "oba" ;
+    vann:preferredNamespaceUri "https://ralforion.com/ns/oba#" .
+
+# =============================================================================
+# 1. TABLE PROPERTIES (used on owl:Class)
+# =============================================================================
+
+oba:tableName a owl:AnnotationProperty ;
+    rdfs:label "table name" ;
+    rdfs:comment "Exact SQL table name as it appears in the database catalog." ;
+    rdfs:range xsd:string .
+
+oba:schemaName a owl:AnnotationProperty ;
+    rdfs:label "schema name" ;
+    rdfs:comment "Database schema containing the table (e.g., 'public', 'dbo')." ;
+    rdfs:range xsd:string .
+
+oba:database a owl:AnnotationProperty ;
+    rdfs:label "database" ;
+    rdfs:comment "Database or catalog name." ;
+    rdfs:range xsd:string .
+
+oba:primaryKey a owl:AnnotationProperty ;
+    rdfs:label "primary key" ;
+    rdfs:comment "Name of a primary-key column.  Repeating property --- one triple per PK column for composite keys." ;
+    rdfs:range xsd:string .
+
+oba:rowCount a owl:AnnotationProperty ;
+    rdfs:label "row count" ;
+    rdfs:comment "Approximate number of rows in the table." ;
+    rdfs:range xsd:integer .
+
+# =============================================================================
+# 2. COLUMN PROPERTIES (used on owl:DatatypeProperty)
+# =============================================================================
+
+oba:columnName a owl:AnnotationProperty ;
+    rdfs:label "column name" ;
+    rdfs:comment "Exact SQL column name." ;
+    rdfs:range xsd:string .
+
+oba:sqlDataType a owl:AnnotationProperty ;
+    rdfs:label "SQL data type" ;
+    rdfs:comment "Raw SQL data type string as reported by the database (e.g., 'VARCHAR(255)', 'BIGINT')." ;
+    rdfs:range xsd:string .
+
+oba:sqlReference a owl:AnnotationProperty ;
+    rdfs:label "SQL reference" ;
+    rdfs:comment "Fully-qualified 'table.column' string for use in SQL generation." ;
+    rdfs:range xsd:string .
+
+oba:isPrimaryKey a owl:AnnotationProperty ;
+    rdfs:label "is primary key" ;
+    rdfs:comment "True if this column is a member of the table's primary key." ;
+    rdfs:range xsd:boolean .
+
+oba:isForeignKey a owl:AnnotationProperty ;
+    rdfs:label "is foreign key" ;
+    rdfs:comment "True if this column is a foreign key referencing another table." ;
+    rdfs:range xsd:boolean .
+
+oba:isNullable a owl:AnnotationProperty ;
+    rdfs:label "is nullable" ;
+    rdfs:comment "True if this column allows NULL values." ;
+    rdfs:range xsd:boolean .
+
+# Note: oba:tableName is reused on columns (see Section 1) to make column
+# triples self-contained for SQL generation without graph traversal.
+
+# =============================================================================
+# 3. RELATIONSHIP PROPERTIES (used on owl:ObjectProperty)
+# =============================================================================
+
+oba:foreignKeyColumn a owl:AnnotationProperty ;
+    rdfs:label "foreign key column" ;
+    rdfs:comment "Name of the foreign-key column in the source (domain) table." ;
+    rdfs:range xsd:string .
+
+oba:referencedTable a owl:AnnotationProperty ;
+    rdfs:label "referenced table" ;
+    rdfs:comment "Name of the target table that the foreign key references." ;
+    rdfs:range xsd:string .
+
+oba:referencedColumn a owl:AnnotationProperty ;
+    rdfs:label "referenced column" ;
+    rdfs:comment "Name of the column in the target table (usually its primary key)." ;
+    rdfs:range xsd:string .
+
+oba:referencedSchema a owl:AnnotationProperty ;
+    rdfs:label "referenced schema" ;
+    rdfs:comment "Database schema of the referenced table.  Only emitted for cross-schema foreign keys." ;
+    rdfs:range xsd:string .
+
+oba:sqlJoinCondition a owl:AnnotationProperty ;
+    rdfs:label "SQL join condition" ;
+    rdfs:comment "Ready-to-use SQL JOIN ON clause (e.g., 'orders.customer_id = customers.id')." ;
+    rdfs:range xsd:string .
+
+oba:relationshipType a owl:AnnotationProperty ;
+    rdfs:label "relationship type" ;
+    rdfs:comment "Cardinality direction of the relationship: 'many_to_one' (FK side) or 'one_to_many' (inverse side)." ;
+    rdfs:range xsd:string .
+
+# =============================================================================
+# 4. INFERENCE PROPERTIES (used on owl:ObjectProperty, inferred FKs only)
+# =============================================================================
+
+oba:isInferredRelationship a owl:AnnotationProperty ;
+    rdfs:label "is inferred relationship" ;
+    rdfs:comment "True when the relationship was inferred from naming patterns rather than declared as a foreign key in the database." ;
+    rdfs:range xsd:boolean .
+
+oba:inferenceConfidence a owl:AnnotationProperty ;
+    rdfs:label "inference confidence" ;
+    rdfs:comment "Confidence level of the inferred relationship: 'high', 'medium', or 'low'." ;
+    rdfs:range xsd:string .
+
+oba:inferencePattern a owl:AnnotationProperty ;
+    rdfs:label "inference pattern" ;
+    rdfs:comment "Naming pattern that triggered relationship inference (e.g., 'embedded_table_name', 'suffix_id', 'prefix_fk')." ;
+    rdfs:range xsd:string .
+
+# =============================================================================
+# 5. DENORMALIZATION PROPERTIES (used on owl:DatatypeProperty, flagged columns)
+# =============================================================================
+
+oba:isDenormalized a owl:AnnotationProperty ;
+    rdfs:label "is denormalized" ;
+    rdfs:comment "True when this column appears to duplicate data from another table." ;
+    rdfs:range xsd:boolean .
+
+oba:likelySourceTable a owl:AnnotationProperty ;
+    rdfs:label "likely source table" ;
+    rdfs:comment "Probable source table from which the denormalized data originates." ;
+    rdfs:range xsd:string .
+
+oba:denormalizationWarning a owl:AnnotationProperty ;
+    rdfs:label "denormalization warning" ;
+    rdfs:comment "Human-readable warning about data duplication from denormalization." ;
+    rdfs:range xsd:string .
+
+# =============================================================================
+# 6. TYPE OVERRIDE (used on owl:DatatypeProperty)
+# =============================================================================
+
+oba:typeOverrideReason a owl:AnnotationProperty ;
+    rdfs:label "type override reason" ;
+    rdfs:comment "Explanation for why the XSD range type differs from what the raw SQL type would normally produce." ;
+    rdfs:range xsd:string .
+
+# =============================================================================
+# 7. SEMANTIC ENRICHMENT (LLM-applied, on any OWL entity)
+# =============================================================================
+
+oba:semanticName a owl:AnnotationProperty ;
+    rdfs:label "semantic name" ;
+    rdfs:comment "Business-friendly display name generated by an LLM during semantic enrichment." ;
+    rdfs:range xsd:string .
+
+oba:tableType a owl:AnnotationProperty ;
+    rdfs:label "table type" ;
+    rdfs:comment "LLM-classified table role: 'fact', 'dimension', or 'lookup'." ;
+    rdfs:range xsd:string .
+
+oba:usageNotes a owl:AnnotationProperty ;
+    rdfs:label "usage notes" ;
+    rdfs:comment "LLM-generated guidance on how to use this table in queries." ;
+    rdfs:range xsd:string .
+
+oba:dataCharacteristics a owl:AnnotationProperty ;
+    rdfs:label "data characteristics" ;
+    rdfs:comment "LLM-generated description of value patterns and distributions for this column." ;
+    rdfs:range xsd:string .
+
+oba:businessRules a owl:AnnotationProperty ;
+    rdfs:label "business rules" ;
+    rdfs:comment "LLM-generated business rules governing this column's values." ;
+    rdfs:range xsd:string .
+
+oba:relationshipDescription a owl:AnnotationProperty ;
+    rdfs:label "relationship description" ;
+    rdfs:comment "LLM-generated description of the business meaning of this relationship." ;
+    rdfs:range xsd:string .
+
+oba:cardinality a owl:AnnotationProperty ;
+    rdfs:label "cardinality" ;
+    rdfs:comment "LLM-assigned cardinality description for a relationship." ;
+    rdfs:range xsd:string .
+
+oba:businessRule a owl:AnnotationProperty ;
+    rdfs:label "business rule" ;
+    rdfs:comment "LLM-generated business rule governing this relationship." ;
+    rdfs:range xsd:string .
