@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set, Tuple
 
 from rdflib import Graph, Literal, Namespace, URIRef
+from rdflib.collection import Collection
 from rdflib.namespace import RDF, RDFS, OWL, XSD
 
 from .constants import DEFAULT_BASE_URI, ONTOLOGY_TITLE, ONTOLOGY_DESCRIPTION
@@ -219,6 +220,10 @@ class OntologyGenerator:
                 self._add_denormalized_field_annotation(denorm)
                 logger.info(f"Annotated denormalized field: {denorm.table}.{denorm.column}")
 
+        # Generate OWL axioms from relationship structure
+        self._add_disjoint_axioms(tables_info)
+        self._add_property_chain_axioms(tables_info)
+
         # Log quality summary
         if self.quality_report.inferred_relationships:
             logger.info(
@@ -345,6 +350,8 @@ class OntologyGenerator:
         referenced_schema = fk.get('referenced_schema')
 
         self.graph.add((prop_uri, RDF.type, OWL.ObjectProperty))
+        # Many-to-one: each source row references at most one target row
+        self.graph.add((prop_uri, RDF.type, OWL.FunctionalProperty))
         self.graph.add((prop_uri, RDFS.domain, table_uri))
         self.graph.add((prop_uri, RDFS.range, referenced_table_uri))
         self.graph.add((prop_uri, RDFS.label, Literal(f"{table_name} has {referenced_table}")))
@@ -721,6 +728,8 @@ class OntologyGenerator:
             return  # Already exists, skip
 
         self.graph.add((prop_uri, RDF.type, OWL.ObjectProperty))
+        # Many-to-one: each source row references at most one target row
+        self.graph.add((prop_uri, RDF.type, OWL.FunctionalProperty))
         self.graph.add((prop_uri, RDFS.domain, source_table_uri))
         self.graph.add((prop_uri, RDFS.range, target_table_uri))
         self.graph.add((prop_uri, RDFS.label, Literal(
@@ -786,6 +795,147 @@ class OntologyGenerator:
                 self.db_ns.denormalizationWarning,
                 Literal(denorm.warning)
             ))
+
+    def _add_disjoint_axioms(self, tables_info: List[TableInfo]) -> None:
+        """Add owl:disjointWith axioms between sibling tables that share a dimension.
+
+        Two tables are considered siblings when they both hold foreign keys to
+        the same referenced table but have no FK relationship between each other.
+        Declaring them disjoint formalizes that their row populations are distinct,
+        which directly supports fan-trap detection in Text-to-SQL.
+
+        Args:
+            tables_info: List of table information
+        """
+        # Build mapping: referenced_table -> set of source tables that FK into it
+        dimension_to_sources: Dict[str, Set[str]] = {}
+        for table in tables_info:
+            for fk in table.foreign_keys:
+                ref = fk.get("referenced_table", "")
+                if ref:
+                    dimension_to_sources.setdefault(ref, set()).add(table.name)
+
+        # Also include inferred relationships already in the graph
+        for subj in self.graph.subjects(RDF.type, OWL.ObjectProperty):
+            rel_type = self.graph.value(subj, self.db_ns.relationshipType)
+            if str(rel_type) != "many_to_one":
+                continue
+            ref_table = self.graph.value(subj, self.db_ns.referencedTable)
+            domain = self.graph.value(subj, RDFS.domain)
+            if ref_table and domain:
+                source_name = self.graph.value(domain, self.db_ns.tableName)
+                if source_name:
+                    dimension_to_sources.setdefault(
+                        str(ref_table), set()
+                    ).add(str(source_name))
+
+        # Build set of tables that have a direct FK relationship between them
+        fk_pairs: Set[Tuple[str, str]] = set()
+        for table in tables_info:
+            for fk in table.foreign_keys:
+                ref = fk.get("referenced_table", "")
+                if ref:
+                    fk_pairs.add((table.name, ref))
+                    fk_pairs.add((ref, table.name))
+
+        # Declare disjoint pairs: siblings sharing a dimension, no FK between them
+        declared: Set[Tuple[str, str]] = set()
+        for _dim, sources in dimension_to_sources.items():
+            source_list = sorted(sources)
+            for i, a in enumerate(source_list):
+                for b in source_list[i + 1:]:
+                    if (a, b) in fk_pairs or (a, b) in declared:
+                        continue
+                    uri_a = self.base_uri[self._clean_name(a)]
+                    uri_b = self.base_uri[self._clean_name(b)]
+                    # Only add if both are actual classes in the graph
+                    if (
+                        (uri_a, RDF.type, OWL.Class) in self.graph
+                        and (uri_b, RDF.type, OWL.Class) in self.graph
+                    ):
+                        self.graph.add((uri_a, OWL.disjointWith, uri_b))
+                        declared.add((a, b))
+                        declared.add((b, a))
+                        logger.info(
+                            f"Added owl:disjointWith: {a} <-> {b} "
+                            f"(sibling tables sharing a dimension)"
+                        )
+
+    def _add_property_chain_axioms(self, tables_info: List[TableInfo]) -> None:
+        """Add owl:propertyChainAxiom for transitive multi-hop join paths.
+
+        When A→B and B→C are FK relationships but A→C has no direct FK,
+        a derived property is created with a property-chain axiom linking the
+        two hops.  This gives SPARQL reasoners and the query planner explicit
+        multi-hop traversal paths.
+
+        Args:
+            tables_info: List of table information
+        """
+        # Collect all many-to-one relationships currently in the graph
+        # as (source_table_name, target_table_name, property_uri)
+        relationships: List[Tuple[str, str, URIRef]] = []
+        for subj in self.graph.subjects(RDF.type, OWL.ObjectProperty):
+            rel_type = self.graph.value(subj, self.db_ns.relationshipType)
+            if str(rel_type) != "many_to_one":
+                continue
+            domain = self.graph.value(subj, RDFS.domain)
+            range_ = self.graph.value(subj, RDFS.range)
+            if domain and range_:
+                src = self.graph.value(domain, self.db_ns.tableName)
+                tgt = self.graph.value(range_, self.db_ns.tableName)
+                if src and tgt:
+                    relationships.append((str(src), str(tgt), subj))
+
+        # Build lookup: (source, target) -> property URI
+        rel_lookup: Dict[Tuple[str, str], URIRef] = {}
+        for src, tgt, uri in relationships:
+            rel_lookup[(src, tgt)] = uri
+
+        # Find 2-hop chains A→B→C where A→C has no direct relationship
+        declared: Set[Tuple[str, str]] = set()
+        for src_ab, tgt_ab, uri_ab in relationships:
+            for src_bc, tgt_bc, uri_bc in relationships:
+                if tgt_ab != src_bc:
+                    continue  # B must match
+                a, c = src_ab, tgt_bc
+                if a == c:
+                    continue  # Skip cycles
+                if (a, c) in rel_lookup:
+                    continue  # Direct FK exists, no chain needed
+                if (a, c) in declared:
+                    continue  # Already created
+
+                # Create the derived chain property
+                chain_name = (
+                    f"{self._clean_name(a)}_via_"
+                    f"{self._clean_name(tgt_ab)}_has_"
+                    f"{self._clean_name(c)}"
+                )
+                chain_uri = self.base_uri[chain_name]
+
+                uri_a = self.base_uri[self._clean_name(a)]
+                uri_c = self.base_uri[self._clean_name(c)]
+
+                self.graph.add((chain_uri, RDF.type, OWL.ObjectProperty))
+                self.graph.add((chain_uri, RDFS.domain, uri_a))
+                self.graph.add((chain_uri, RDFS.range, uri_c))
+                self.graph.add((chain_uri, RDFS.label, Literal(
+                    f"{a} via {tgt_ab} has {c}"
+                )))
+
+                # Build the RDF list for the property chain
+                chain_list = Collection(self.graph, None, [uri_ab, uri_bc])
+                self.graph.add((
+                    chain_uri,
+                    OWL.propertyChainAxiom,
+                    chain_list.uri,
+                ))
+
+                declared.add((a, c))
+                logger.info(
+                    f"Added owl:propertyChainAxiom: {a} -> {tgt_ab} -> {c}"
+                )
 
     def validate_enrichment_completeness(self) -> Dict[str, Any]:
         """Check that all classes and properties have semantic descriptions.

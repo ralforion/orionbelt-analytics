@@ -370,6 +370,56 @@ oba:ForwardRelationshipShape a sh:NodeShape ;
     ] .
 
 # -----------------------------------------------------------------------------
+# Disjoint Sibling Shape --- informational validation for owl:disjointWith
+#
+# owl:disjointWith is a standard OWL axiom applied between sibling tables
+# that share a dimension (FK target) but have no FK between each other.
+# SHACL cannot validate the semantic correctness of disjointness (that
+# requires reasoning), but we ensure the target of owl:disjointWith is an
+# owl:Class.
+# -----------------------------------------------------------------------------
+
+oba:DisjointSiblingShape a sh:NodeShape ;
+    sh:targetSubjectsOf owl:disjointWith ;
+    rdfs:label "OBA Disjoint Sibling Shape" ;
+    rdfs:comment "Validates that owl:disjointWith targets are OWL classes." ;
+
+    sh:property [
+        sh:path owl:disjointWith ;
+        sh:class owl:Class ;
+        sh:name "disjoint with" ;
+        sh:message "owl:disjointWith must reference an owl:Class."
+    ] .
+
+# -----------------------------------------------------------------------------
+# Property Chain Shape --- validates owl:propertyChainAxiom structure
+#
+# Property chain axioms link multi-hop FK join paths (A->B->C).  The axiom
+# value must be an RDF list of owl:ObjectProperty instances.
+# Note: SHACL cannot fully validate RDF list contents; this shape only
+# checks the property is present on ObjectProperty instances.
+# -----------------------------------------------------------------------------
+
+oba:PropertyChainShape a sh:NodeShape ;
+    sh:targetSubjectsOf owl:propertyChainAxiom ;
+    rdfs:label "OBA Property Chain Shape" ;
+    rdfs:comment "Validates that property chain axioms are attached to ObjectProperty instances." ;
+
+    sh:property [
+        sh:path rdf:type ;
+        sh:hasValue owl:ObjectProperty ;
+        sh:name "type" ;
+        sh:message "Property chain axioms must be on owl:ObjectProperty instances."
+    ] ;
+    sh:property [
+        sh:path owl:propertyChainAxiom ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:name "property chain axiom" ;
+        sh:message "Each chain property must have exactly one owl:propertyChainAxiom."
+    ] .
+
+# -----------------------------------------------------------------------------
 # Ontology Header Shape --- validates the ontology declaration itself
 # -----------------------------------------------------------------------------
 
