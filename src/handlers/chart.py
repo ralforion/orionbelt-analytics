@@ -6,8 +6,6 @@ from typing import Optional, Union, List, Dict, Any
 
 from fastmcp import Context
 from fastmcp.utilities.types import Image
-from mcp_ui_server import create_ui_resource
-from mcp_ui_server.core import UIResource
 
 from ..chart_utils import save_image_to_tmp
 
@@ -29,7 +27,7 @@ async def generate_chart(
     sort_order: Optional[str],
     output_format: str,
     get_session_data=None,
-) -> Union[List[UIResource], Image]:
+) -> Union[str, Image]:
     """Generate interactive or static charts from query results.
 
     This handler delegates to tools.chart.generate_chart for the core charting
@@ -106,59 +104,18 @@ async def generate_chart(
         await ctx.info("Chart generation failed")
         raise RuntimeError(result.get("error", "Chart generation failed"))
 
-    # Handle interactive output
+    # Handle interactive output - return JSON chart data for MCP Apps viewer
     if output_format == "interactive":
         if isinstance(result, dict) and "traces" in result:
             data_points = result.get("metadata", {}).get("data_points", 0)
-            chart_id = result.get("metadata", {}).get("chart_id", "chart")
+            chart_type_display = result.get("metadata", {}).get("chart_type", chart_type)
 
+            # Return the chart data as JSON string
+            # The MCP Apps framework will pass this to the chart viewer iframe
             chart_json = json.dumps(result, cls=NumpyEncoder)
 
-            html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: system-ui, sans-serif; background: #fff; }}
-        #chart {{ width: 100%; height: 100vh; min-height: 400px; }}
-    </style>
-</head>
-<body>
-    <div id="chart"></div>
-    <script>
-        const chartData = {chart_json};
-        const {{ traces, layout, config }} = chartData;
-        const finalConfig = {{
-            displayModeBar: true,
-            responsive: true,
-            scrollZoom: true,
-            displaylogo: false,
-            modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-            ...config
-        }};
-        const finalLayout = {{
-            autosize: true,
-            margin: {{ l: 60, r: 60, t: 60, b: 60 }},
-            ...layout
-        }};
-        Plotly.newPlot('chart', traces, finalLayout, finalConfig);
-        window.addEventListener('resize', () => Plotly.Plots.resize(document.getElementById('chart')));
-    </script>
-</body>
-</html>"""
-
-            ui_resource = create_ui_resource(
-                {
-                    "uri": f"ui://orionbelt/chart/{chart_id}",
-                    "content": {"type": "rawHtml", "htmlString": html_content},
-                    "encoding": "text",
-                }
-            )
-
-            await ctx.info(f"Interactive chart generated: {chart_type} with {data_points} data points")
-            return [ui_resource]
+            await ctx.info(f"Interactive chart generated: {chart_type_display} with {data_points} data points")
+            return chart_json
         else:
             await ctx.info("Chart generation failed")
             raise RuntimeError("Chart generation failed: unexpected result format for interactive mode")

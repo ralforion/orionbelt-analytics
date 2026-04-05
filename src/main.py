@@ -16,8 +16,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastmcp import FastMCP, Context
 from fastmcp.utilities.types import Image
-from mcp_ui_server import create_ui_resource
-from mcp_ui_server.core import UIResource
+from fastmcp.apps import AppConfig, ResourceCSP
 
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator
@@ -140,7 +139,15 @@ Primary Use Case: Semantic database analysis with ontology-enhanced Text-to-SQL
 
 
 # --- MCP Apps: Register Chart Viewer Resource ---
-@mcp.resource("ui://orionbelt/chart-viewer", mime_type="text/html+mcp")
+@mcp.resource(
+    "ui://orionbelt/chart-viewer",
+    app=AppConfig(
+        csp=ResourceCSP(
+            resource_domains=["https://cdn.plot.ly", "https://unpkg.com"],
+            connect_domains=[],
+        )
+    ),
+)
 def chart_viewer_resource() -> str:
     """Serve the interactive chart viewer app for MCP Apps."""
     if CHART_VIEWER_HTML is None:
@@ -768,7 +775,7 @@ async def execute_sql_query(
     )
 
 
-@mcp.tool()
+@mcp.tool(app=AppConfig(resource_uri="ui://orionbelt/chart-viewer"))
 async def generate_chart(
     ctx: Context,
     data_source: Union[List[Dict[str, Any]], str],
@@ -783,7 +790,7 @@ async def generate_chart(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
     output_format: str = "image",
-) -> Union[List[UIResource], Image]:
+) -> Union[str, Image]:
     """Generate interactive or static charts from query results.
 
     Args:
