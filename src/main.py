@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastmcp import FastMCP, Context
 from fastmcp.utilities.types import Image
-from fastmcp.apps import AppConfig, ResourceCSP
+from fastmcp.server.apps import AppConfig, ResourceCSP
 
 from .database_manager import DatabaseManager, TableInfo, ColumnInfo
 from .ontology_generator import OntologyGenerator

@@ -72,7 +72,18 @@ class OxigraphStoreManager:
 
         if store_path:
             store_path.mkdir(parents=True, exist_ok=True)
-            self.store = Store(str(store_path))
+            try:
+                self.store = Store(str(store_path))
+            except OSError:
+                lock_file = store_path / "store" / "LOCK"
+                if lock_file.exists():
+                    logger.warning(
+                        f"Removing stale Oxigraph lock file: {lock_file}"
+                    )
+                    lock_file.unlink()
+                    self.store = Store(str(store_path))
+                else:
+                    raise
             logger.info(f"Initialized Oxigraph persistent store at: {store_path}")
         else:
             self.store = Store()
