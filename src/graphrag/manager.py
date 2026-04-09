@@ -6,7 +6,7 @@ to provide intelligent schema navigation and context-aware query generation.
 """
 
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 
@@ -21,11 +21,9 @@ try:
         logger = logging.getLogger(__name__)
         logger.info("ChromaDB available - using high-performance vector storage")
     else:
-        from .vector_store import VectorStore
         logger = logging.getLogger(__name__)
         logger.warning("ChromaDB not available - falling back to JSON-based vector storage")
 except ImportError:
-    from .vector_store import VectorStore
     CHROMADB_AVAILABLE = False
     logger = logging.getLogger(__name__)
     logger.warning("ChromaDB not available - falling back to JSON-based vector storage")

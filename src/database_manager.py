@@ -13,18 +13,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
-from urllib.parse import quote_plus
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError, ProgrammingError
+from sqlalchemy.exc import OperationalError, DatabaseError
 
 from .constants import (
-    CONNECTION_TIMEOUT,
     QUERY_TIMEOUT,
     IDENTIFIER_PATTERN,
-    MIN_SAMPLE_LIMIT,
-    MAX_SAMPLE_LIMIT,
     DEFAULT_SAMPLE_LIMIT,
 )
 from .security import (

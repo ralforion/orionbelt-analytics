@@ -13,7 +13,7 @@ R2RML mappings enable:
 
 import logging
 import re
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 
 from .database_manager import TableInfo, ColumnInfo
 
@@ -255,7 +255,6 @@ class R2RMLGenerator:
         lines = []
         predicate_name = self._safe_identifier(column.name)
         ref_table = fk['referenced_table']
-        ref_column = fk['referenced_column']
 
         # Build the referenced IRI template
         # Use the FK column value to construct the referenced resource IRI

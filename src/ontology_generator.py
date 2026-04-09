@@ -1,8 +1,6 @@
 """Ontology generator for creating RDF graphs from database schemas."""
 
-import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set, Tuple

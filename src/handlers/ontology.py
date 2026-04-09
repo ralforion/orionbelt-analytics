@@ -1,18 +1,16 @@
 """Ontology generation, semantic names, and loading handler implementations."""
 
-import glob
 import json
 import logging
 import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, Any
 
 from fastmcp import Context
 
 from ..database_manager import TableInfo, ColumnInfo
-from ..exceptions import ConnectionError, ParameterError
 from ..ontology_generator import OntologyGenerator
 from ..paths import ensure_output_dir, PROJECT_ROOT
 from ..oxigraph_store import OXIGRAPH_AVAILABLE

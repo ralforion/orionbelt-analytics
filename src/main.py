@@ -9,7 +9,6 @@ import json
 import logging
 import os
 from datetime import datetime
-from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 
 from dotenv import load_dotenv
@@ -18,13 +17,10 @@ from fastmcp import FastMCP, Context
 from fastmcp.utilities.types import Image
 from fastmcp.server.apps import AppConfig, ResourceCSP
 
-from .database_manager import DatabaseManager, TableInfo, ColumnInfo
+from .database_manager import DatabaseManager
 from .ontology_generator import OntologyGenerator
-from .r2rml_generator import R2RMLGenerator
 from .obqc_validator import OBQCValidator
-from .config import config_manager
 from . import __version__, __name__ as SERVER_NAME
-from .graphrag import GraphRAGManager
 from .oxigraph_store import OxigraphStoreManager, OXIGRAPH_AVAILABLE
 
 # --- Centralized path and env loading (Task 1 & 2) ---
@@ -34,7 +30,6 @@ from .paths import (
     get_oxigraph_store_dir,
     get_chart_viewer_path,
     get_skills_dir,
-    OUTPUT_DIR,
 )
 
 # Load environment variables using centralized path resolution (Task 1: C4 fix)

@@ -2,7 +2,6 @@
 
 import logging
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, text, MetaData, inspect
 from sqlalchemy.engine import Engine
@@ -201,7 +200,7 @@ class BigQueryDriver(DatabaseDriver):
                 logger.error("No dataset specified for table analysis")
                 return None
 
-            with self.engine.connect() as conn:
+            with self.engine.connect():
                 inspector = inspect(self.engine)
 
                 # Check if table exists

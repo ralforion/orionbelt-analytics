@@ -60,8 +60,7 @@ def generate_chart(
             missing_libs.append("pandas")
 
         try:
-            import plotly.express as px
-            import plotly.graph_objects as go
+            import plotly  # noqa: F401
         except ImportError:
             missing_libs.append("plotly")
 
@@ -116,7 +115,6 @@ def generate_chart(
 
         # Detect time series and auto-switch to line chart
         if x_column in df.columns and is_time_based_column(df[x_column]):
-            original_chart_type = chart_type
             if chart_type == "bar":
                 chart_type = "line"
                 logger.info(f"Auto-switched from bar to line chart due to time-based x-axis: {x_column}")

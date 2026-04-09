@@ -1,7 +1,6 @@
 """SQL validation and execution handler implementations."""
 
 import logging
-import os
 import re
 from typing import Optional, Dict, Any
 

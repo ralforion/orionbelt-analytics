@@ -2,12 +2,9 @@
 
 import asyncio
 import logging
-import json
 import time
-from typing import Dict, Any, List, Optional, Union
-from datetime import datetime
+from typing import Dict, Any, List
 import aiohttp
-import pandas as pd
 
 from .constants import QUERY_TIMEOUT
 
@@ -57,7 +54,7 @@ class DremioClient:
             await self._authenticate()
         return self
         
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
         if self.session:
             await self.session.close()
     

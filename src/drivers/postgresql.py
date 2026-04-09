@@ -1,8 +1,6 @@
 """PostgreSQL database driver."""
 
-import hashlib
 import logging
-import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
@@ -178,7 +176,7 @@ class PostgreSQLDriver(DatabaseDriver):
         self, table_name: str, schema_name: Optional[str] = None
     ) -> Optional[TableInfo]:
         try:
-            with self.engine.connect() as conn:
+            with self.engine.connect():
                 inspector = inspect(self.engine)
 
                 if schema_name:

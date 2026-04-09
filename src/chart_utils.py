@@ -1,11 +1,7 @@
 """Chart generation utilities for OrionBelt Analytics."""
 
 import logging
-import base64
-import io
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

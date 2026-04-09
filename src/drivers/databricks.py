@@ -251,7 +251,7 @@ class DatabricksDriver(DatabaseDriver):
                 logger.error("No schema specified for table analysis")
                 return None
 
-            with self.engine.connect() as conn:
+            with self.engine.connect():
                 inspector = inspect(self.engine)
 
                 # Check if table exists

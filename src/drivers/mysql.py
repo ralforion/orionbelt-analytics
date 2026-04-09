@@ -4,9 +4,7 @@ Supports MySQL 8.0+ and MariaDB 10.5+.
 MySQL 5.7 reached EOL in October 2023 and is not supported.
 """
 
-import hashlib
 import logging
-import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
@@ -182,7 +180,7 @@ class MySQLDriver(DatabaseDriver):
         self, table_name: str, schema_name: Optional[str] = None
     ) -> Optional[TableInfo]:
         try:
-            with self.engine.connect() as conn:
+            with self.engine.connect():
                 inspector = inspect(self.engine)
 
                 if schema_name:

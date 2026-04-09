@@ -13,7 +13,7 @@ This implementation offers:
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 import json
 

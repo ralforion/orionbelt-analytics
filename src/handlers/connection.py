@@ -8,8 +8,7 @@ from typing import Optional
 from fastmcp import Context
 
 from ..constants import SUPPORTED_DB_TYPES
-from ..exceptions import ConnectionError, ValidationError, ParameterError
-from ..session import SessionData
+from ..exceptions import ConnectionError, ValidationError
 
 logger = logging.getLogger(__name__)
 

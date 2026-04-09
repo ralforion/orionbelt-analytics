@@ -102,6 +102,8 @@ dev-dependencies = [
     "testcontainers>=3.7.0,<4.0.0",
     # Performance testing
     "locust>=2.20.0,<3.0.0",
+    "ruff>=0.15.10",
+    "vulture>=2.16",
 ]
 
 # Tool configurations

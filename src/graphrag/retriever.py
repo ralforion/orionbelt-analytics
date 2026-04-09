@@ -6,7 +6,7 @@ of foreign key relationships and semantic similarity.
 """
 
 import logging
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Any, Optional
 from collections import defaultdict, deque
 import networkx as nx
 

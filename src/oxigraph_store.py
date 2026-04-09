@@ -7,12 +7,10 @@ Stores ontologies, schema metadata, and accumulated knowledge across sessions.
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
+from typing import List, Dict, Any, Optional
 
 try:
     from pyoxigraph import Store, NamedNode, Literal, Triple, RdfFormat
-    from pyoxigraph import parse as oxigraph_parse
     OXIGRAPH_AVAILABLE = True
 except ImportError:
     OXIGRAPH_AVAILABLE = False

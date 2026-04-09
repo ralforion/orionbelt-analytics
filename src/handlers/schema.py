@@ -8,7 +8,6 @@ from typing import Optional, Dict, List, Any
 
 from fastmcp import Context
 
-from ..exceptions import ConnectionError, ParameterError
 from ..paths import ensure_output_dir
 from ..r2rml_generator import R2RMLGenerator
 
