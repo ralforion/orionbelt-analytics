@@ -85,7 +85,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 
 - **Database Connectivity:** PostgreSQL, Snowflake, Dremio, ClickHouse, BigQuery, DuckDB, Databricks, MySQL
 - **Schema Intelligence:** Table/column analysis with relationship mapping
-- **Ontology Generation:** RDF/OWL with db: namespace linking to SQL tables
+- **Ontology Generation:** RDF/OWL with oba: namespace linking to SQL tables
 - **Safe SQL Execution:** Fan-trap detection, injection prevention, query validation
 - **Data Visualization:** Interactive charts (Matplotlib, Plotly)
 
@@ -94,7 +94,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 1. `connect_database()` -> Establish secure connection
 2. `list_schemas()` -> Discover available schemas
 3. `analyze_schema()` -> Get schema structure with relationships
-4. `generate_ontology()` -> Create semantic ontology with db: annotations
+4. `generate_ontology()` -> Create semantic ontology with oba: annotations
 5. `execute_sql_query()` -> Run validated SQL with fan-trap protection
 6. `generate_chart()` -> Visualize results
 
@@ -107,7 +107,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 ## Key Features
 
 **Ontology-Enhanced SQL:**
-- db: namespace annotations link ontology classes to SQL tables
+- oba: namespace annotations link ontology classes to SQL tables
 - Automatic JOIN condition generation from relationships
 - Business-friendly semantic layer over technical schemas
 
@@ -641,6 +641,7 @@ async def apply_semantic_names(
         get_session_safe_filename=get_session_safe_filename,
         load_ontology_from_session=load_ontology_from_session,
         create_error_response=create_error_response,
+        get_oxigraph_store=get_oxigraph_store,
     )
 
 

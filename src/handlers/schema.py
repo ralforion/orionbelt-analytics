@@ -348,7 +348,7 @@ async def analyze_schema(
             "The schema is CACHED - generate_ontology will use it automatically.\n"
             "Do NOT call analyze_schema again.\n\n"
             "This will create an ontology with:\n"
-            "- Database schema linking (db: namespace)\n"
+            "- Database schema linking (oba: namespace)\n"
             "- SQL column references for queries\n"
             "- JOIN conditions for relationships\n"
             "- Metadata for fan-trap prevention\n\n"

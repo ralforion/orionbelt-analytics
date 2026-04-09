@@ -107,7 +107,7 @@ OrionBelt Analytics combines multiple AI-powered technologies to provide intelli
 
 ### 🧠 Automatic Ontology Generation
 
-- **Self-sufficient ontologies** with direct database references (`db:sqlReference`, `db:sqlJoinCondition`)
+- **Self-sufficient ontologies** with direct database references (`oba:sqlReference`, `oba:sqlJoinCondition`)
 - **Business context inference** from table and column naming patterns
 - **Complete SQL mappings** embedded directly in ontology
 - **Fan-trap detection** and query safety validation
@@ -122,7 +122,7 @@ OrionBelt Analytics combines multiple AI-powered technologies to provide intelli
 ### 🔍 SPARQL Query Support
 
 - **Persistent RDF store** via Oxigraph with SPARQL 1.1 support
-- **Semantic schema queries** using the `db:` namespace ontology annotations
+- **Semantic schema queries** using the `oba:` (OrionBelt Analytics) namespace ontology annotations
 - **Connection-scoped storage** - each database gets isolated RDF store
 - **7 SPARQL tools** for semantic exploration:
   - `query_sparql()` - Execute custom SPARQL SELECT queries
@@ -135,20 +135,19 @@ OrionBelt Analytics combines multiple AI-powered technologies to provide intelli
 
 **Key ontology properties for SPARQL queries:**
 
-- `db:sqlReference` - Maps properties to SQL columns (e.g., `"customers.customer_id"`)
-- `db:sqlJoinCondition` - Stores JOIN conditions (e.g., `"orders.customer_id = customers.customer_id"`)
-- `db:hasColumn`, `db:columnName`, `db:dataType` - Column metadata
-- `db:tableName`, `db:relationshipType` - Schema structure
+- `oba:sqlReference` - Maps properties to SQL columns (e.g., `"customers.customer_id"`)
+- `oba:sqlJoinCondition` - Stores JOIN conditions (e.g., `"orders.customer_id = customers.customer_id"`)
+- `oba:columnName`, `oba:sqlDataType` - Column metadata
+- `oba:tableName`, `oba:relationshipType` - Schema structure
 
 **Example SPARQL query:**
 
 ```sparql
-PREFIX db: <http://example.com/db#>
+PREFIX oba: <https://ralforion.com/ns/oba#>
 SELECT ?table ?column ?dataType
 WHERE {
-    ?table db:hasColumn ?column .
-    ?column db:columnName ?columnName .
-    ?column db:dataType ?dataType .
+    ?table oba:columnName ?columnName .
+    ?table oba:sqlDataType ?dataType .
     FILTER(CONTAINS(LCASE(?columnName), "revenue"))
 }
 ```
@@ -599,7 +598,7 @@ Generate RDF/OWL ontology from database schema with SQL mapping annotations.
 - `schema_name` (optional): Name of schema to generate ontology from
 - `base_uri` (optional): Base URI for ontology (default: http://example.com/ontology/)
 
-**Returns:** RDF ontology in Turtle format with `db:` namespace annotations
+**Returns:** RDF ontology in Turtle format with `oba:` namespace annotations
 
 **Output:** Ontology is saved to `tmp/ontology_{schema}_{timestamp}.ttl`
 
@@ -667,9 +666,9 @@ Apply LLM-suggested semantic names to the ontology, updating labels and adding b
 **What Gets Updated:**
 
 - `rdfs:label` → suggested business-friendly name
-- `db:semanticName` → new semantic annotation
+- `oba:semanticName` → new semantic annotation
 - `rdfs:comment` → provided description (standard RDF property)
-- Original `db:tableName`/`db:columnName` preserved for SQL generation
+- Original `oba:tableName`/`oba:columnName` preserved for SQL generation
 
 **Workflow Example:**
 

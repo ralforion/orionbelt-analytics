@@ -16,6 +16,8 @@ from sqlglot.errors import ParseError
 from rdflib import Graph, Namespace, URIRef
 from rdflib.namespace import RDF, RDFS, OWL, XSD
 
+from .constants import OBA_NAMESPACE
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +67,7 @@ class OBQCResult:
     has_aggregation: bool = False
     has_group_by: bool = False
     fan_trap_risk: bool = False
-    ontology_compatible: bool = True  # Whether ontology has db: annotations
+    ontology_compatible: bool = True  # Whether ontology has oba: annotations
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to dictionary for JSON serialization."""
@@ -166,8 +168,8 @@ class OBQCValidator:
         self._schema_cache: Optional[OntologySchema] = None
         self._graph: Optional[Graph] = None
         self._base_uri: Optional[Namespace] = None
-        self._db_ns: Optional[Namespace] = None
-        self._is_compatible: bool = False  # Whether ontology has db: annotations
+        self._oba_ns: Optional[Namespace] = None
+        self._is_compatible: bool = False  # Whether ontology has oba: annotations
 
     def load_ontology(self, ontology_graph: Graph, base_uri: str) -> None:
         """Load and cache schema from ontology graph.
@@ -178,10 +180,10 @@ class OBQCValidator:
         """
         self._graph = ontology_graph
         self._base_uri = Namespace(base_uri)
-        self._db_ns = Namespace(f"{base_uri}db/")
+        self._oba_ns = Namespace(OBA_NAMESPACE)
         self._schema_cache = self._extract_schema_from_ontology()
 
-        # Check if ontology has required db: annotations for OBQC
+        # Check if ontology has required oba: annotations for OBQC
         self._is_compatible = self._check_ontology_compatibility()
 
         if self._is_compatible:
@@ -191,21 +193,21 @@ class OBQCValidator:
             )
         else:
             logger.warning(
-                "OBQC: Ontology lacks db: namespace annotations - semantic validation disabled. "
+                "OBQC: Ontology lacks oba: namespace annotations - semantic validation disabled. "
                 "Use generate_ontology to create a compatible ontology."
             )
 
     def _check_ontology_compatibility(self) -> bool:
-        """Check if ontology has required db: namespace annotations for OBQC.
+        """Check if ontology has required oba: namespace annotations for OBQC.
 
         Returns:
-            True if ontology has db:tableName annotations, False otherwise
+            True if ontology has oba:tableName annotations, False otherwise
         """
         if self._schema_cache is None:
             return False
 
-        # Ontology is compatible if it has at least one table with db:tableName
-        # and at least one column with db:columnName
+        # Ontology is compatible if it has at least one table with oba:tableName
+        # and at least one column with oba:columnName
         has_tables = len(self._schema_cache.tables) > 0
         has_columns = any(
             len(table.columns) > 0 for table in self._schema_cache.tables.values()
@@ -222,30 +224,30 @@ class OBQCValidator:
         """Extract schema information from ontology graph."""
         schema = OntologySchema()
 
-        if self._graph is None or self._db_ns is None:
+        if self._graph is None or self._oba_ns is None:
             return schema
 
-        # Extract tables (owl:Class with db:tableName)
+        # Extract tables (owl:Class with oba:tableName)
         for subject in self._graph.subjects(RDF.type, OWL.Class):
             if subject == OWL.Class:
                 continue
-            table_name = self._get_literal(subject, self._db_ns.tableName)
+            table_name = self._get_literal(subject, self._oba_ns.tableName)
             if table_name:
                 schema_name = (
-                    self._get_literal(subject, self._db_ns.schemaName) or "public"
+                    self._get_literal(subject, self._oba_ns.schemaName) or "public"
                 )
                 table_schema = TableSchema(name=table_name, schema_name=schema_name)
 
                 # Get primary keys
-                for pk in self._graph.objects(subject, self._db_ns.primaryKey):
+                for pk in self._graph.objects(subject, self._oba_ns.primaryKey):
                     table_schema.primary_keys.append(str(pk))
 
                 schema.tables[table_name.lower()] = table_schema
 
-        # Extract columns (owl:DatatypeProperty with db:columnName)
+        # Extract columns (owl:DatatypeProperty with oba:columnName)
         for subject in self._graph.subjects(RDF.type, OWL.DatatypeProperty):
-            column_name = self._get_literal(subject, self._db_ns.columnName)
-            table_name = self._get_literal(subject, self._db_ns.tableName)
+            column_name = self._get_literal(subject, self._oba_ns.columnName)
+            table_name = self._get_literal(subject, self._oba_ns.tableName)
 
             if column_name and table_name:
                 table_key = table_name.lower()
@@ -253,14 +255,14 @@ class OBQCValidator:
                     col_schema = ColumnSchema(
                         name=column_name,
                         table_name=table_name,
-                        sql_data_type=self._get_literal(subject, self._db_ns.sqlDataType)
+                        sql_data_type=self._get_literal(subject, self._oba_ns.sqlDataType)
                         or "VARCHAR",
-                        is_nullable=self._get_bool(subject, self._db_ns.isNullable, True),
+                        is_nullable=self._get_bool(subject, self._oba_ns.isNullable, True),
                         is_primary_key=self._get_bool(
-                            subject, self._db_ns.isPrimaryKey, False
+                            subject, self._oba_ns.isPrimaryKey, False
                         ),
                         is_foreign_key=self._get_bool(
-                            subject, self._db_ns.isForeignKey, False
+                            subject, self._oba_ns.isForeignKey, False
                         ),
                     )
 
@@ -271,19 +273,19 @@ class OBQCValidator:
 
                     schema.tables[table_key].columns[column_name.lower()] = col_schema
 
-        # Extract relationships (owl:ObjectProperty with db:foreignKeyColumn)
+        # Extract relationships (owl:ObjectProperty with oba:foreignKeyColumn)
         for subject in self._graph.subjects(RDF.type, OWL.ObjectProperty):
-            fk_column = self._get_literal(subject, self._db_ns.foreignKeyColumn)
-            ref_table = self._get_literal(subject, self._db_ns.referencedTable)
-            ref_column = self._get_literal(subject, self._db_ns.referencedColumn)
-            rel_type = self._get_literal(subject, self._db_ns.relationshipType)
-            join_cond = self._get_literal(subject, self._db_ns.sqlJoinCondition)
+            fk_column = self._get_literal(subject, self._oba_ns.foreignKeyColumn)
+            ref_table = self._get_literal(subject, self._oba_ns.referencedTable)
+            ref_column = self._get_literal(subject, self._oba_ns.referencedColumn)
+            rel_type = self._get_literal(subject, self._oba_ns.relationshipType)
+            join_cond = self._get_literal(subject, self._oba_ns.sqlJoinCondition)
 
             if fk_column and ref_table:
                 # Determine from_table from domain
                 from_table = None
                 for domain in self._graph.objects(subject, RDFS.domain):
-                    from_table = self._get_literal(domain, self._db_ns.tableName)
+                    from_table = self._get_literal(domain, self._oba_ns.tableName)
                     break
 
                 if from_table:
@@ -350,16 +352,16 @@ class OBQCValidator:
             )
             return result
 
-        # Check if ontology has required db: namespace annotations
+        # Check if ontology has required oba: namespace annotations
         if not self._is_compatible:
             result.ontology_compatible = False
             result.issues.append(
                 OBQCIssue(
                     issue_type=OBQCIssueType.TABLE_NOT_FOUND,
                     severity=OBQCSeverity.INFO,
-                    message="Ontology lacks db: namespace annotations - OBQC validation skipped",
+                    message="Ontology lacks oba: namespace annotations - OBQC validation skipped",
                     suggestion=(
-                        "The loaded ontology does not contain db:tableName/db:columnName annotations. "
+                        "The loaded ontology does not contain oba:tableName/oba:columnName annotations. "
                         "Use generate_ontology to create a compatible ontology from your database schema."
                     ),
                 )

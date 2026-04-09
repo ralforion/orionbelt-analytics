@@ -25,7 +25,7 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
         "features": [
             "Database connection management (8 databases)",
             "Schema analysis with relationship mapping",
-            "RDF/OWL ontology generation with db: namespace",
+            "RDF/OWL ontology generation with oba: namespace",
             "Load custom ontologies from file",
             "Semantic name resolution (abbreviation expansion)",
             "Interactive data visualization (charts)",

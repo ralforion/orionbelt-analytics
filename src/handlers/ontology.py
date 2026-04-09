@@ -20,6 +20,74 @@ from ..oxigraph_store import OXIGRAPH_AVAILABLE
 logger = logging.getLogger(__name__)
 
 
+def _build_minimal_graph_summary(ontology_ttl: str) -> str:
+    """Build a compact class-and-relationship summary from a Turtle ontology.
+
+    Parses the TTL with rdflib and returns a human-readable summary listing
+    class names and relationship edges — enough for an LLM to understand the
+    schema structure without consuming the full serialization.
+    """
+    from rdflib import Graph, Namespace
+    from rdflib.namespace import RDF, RDFS, OWL
+
+    g = Graph()
+    g.parse(data=ontology_ttl, format="turtle")
+
+    oba_ns = None
+    for prefix, ns in g.namespaces():
+        if prefix == "oba":
+            oba_ns = Namespace(str(ns))
+            break
+
+    # Collect class names
+    class_names = []
+    for subj in g.subjects(RDF.type, OWL.Class):
+        if subj == OWL.Class:
+            continue
+        label = None
+        for lbl in g.objects(subj, RDFS.label):
+            label = str(lbl)
+        if not label:
+            label = str(subj).split("/")[-1]
+        row_count = None
+        if oba_ns:
+            for rc in g.objects(subj, oba_ns.rowCount):
+                row_count = str(rc)
+        entry = label
+        if row_count:
+            entry += f" ({row_count} rows)"
+        class_names.append(entry)
+
+    # Collect relationships
+    rels = []
+    for subj in g.subjects(RDF.type, OWL.ObjectProperty):
+        label = None
+        for lbl in g.objects(subj, RDFS.label):
+            label = str(lbl)
+        if not label:
+            label = str(subj).split("/")[-1]
+        domain_name = ref_table = None
+        if oba_ns:
+            for tn in g.objects(subj, oba_ns.tableName):
+                domain_name = str(tn)
+            for rt in g.objects(subj, oba_ns.referencedTable):
+                ref_table = str(rt)
+        if domain_name and ref_table:
+            rels.append(f"  {domain_name} -> {ref_table}  ({label})")
+
+    lines = ["\n## Minimal Graph Summary\n"]
+    lines.append(f"### Classes ({len(class_names)})")
+    for cn in sorted(class_names):
+        lines.append(f"  - {cn}")
+    lines.append(f"\n### Relationships ({len(rels)})")
+    for r in sorted(set(rels)):
+        lines.append(r)
+    lines.append(
+        "\nUse download_ontology() to retrieve the full Turtle serialization."
+    )
+    return "\n".join(lines)
+
+
 async def generate_ontology(
     ctx: Context,
     schema_info: Optional[str],
@@ -179,7 +247,7 @@ async def generate_ontology(
         generator = _server_state.get_ontology_generator(base_uri=base_uri)
         generator.graph.parse(data=ontology_ttl, format="turtle")
         generator.graph.bind("ns", generator.base_uri)
-        generator.graph.bind("db", generator.db_ns)
+        generator.graph.bind("oba", generator.oba_ns)
         name_analysis = generator.extract_names_for_review()
 
         cryptic_count = (
@@ -236,25 +304,17 @@ To improve ontology for business users:
             except Exception as e:
                 logger.warning(f"Auto-persist to Oxigraph failed: {e}, falling back to full TTL return")
 
-        # Legacy behavior: return full ontology TTL
-        result = ontology_ttl
-        result += f"\n\n# Ontology file: {ontology_filename}"
+        # Fallback: return minimal graph summary instead of full TTL
+        result = f"Ontology generated and saved to file: {ontology_filename}\n"
+        result += f"Schema: {schema_name or 'default'}, Tables: {len(tables_info)}\n"
+        result += _build_minimal_graph_summary(ontology_ttl)
 
         if cryptic_count > 0:
-            result += f"\n\n# SEMANTIC NAME RESOLUTION RECOMMENDED"
-            result += f"\n# Found {cryptic_count} names that may be abbreviations or cryptic identifiers."
-            result += f"\n# To improve ontology readability for business users:"
-            result += f"\n# 1. Call suggest_semantic_names() - NO parameters needed, ontology is CACHED"
-            result += f"\n# 2. Review the suggestions and provide business-friendly alternatives"
-            result += f"\n# 3. Call apply_semantic_names() with your suggestions"
-            result += f"\n#"
-            result += f"\n# IMPORTANT: Do NOT call analyze_schema or generate_ontology again!"
-            result += f"\n# The ontology is CACHED in session. Just call suggest_semantic_names() directly."
-            result += f"\n#"
-            result += f"\n# Analysis summary:"
-            result += f"\n#   - Classes needing review: {name_analysis['summary']['classes_needing_review']}"
-            result += f"\n#   - Properties needing review: {name_analysis['summary']['properties_needing_review']}"
-            result += f"\n#   - Relationships needing review: {name_analysis['summary']['relationships_needing_review']}"
+            result += f"\n\nSEMANTIC NAME RESOLUTION RECOMMENDED"
+            result += f"\nFound {cryptic_count} names that may be abbreviations or cryptic identifiers."
+            result += f"\n1. Call suggest_semantic_names() - NO parameters needed, ontology is CACHED"
+            result += f"\n2. Review the suggestions and provide business-friendly alternatives"
+            result += f"\n3. Call apply_semantic_names() with your suggestions"
 
         return result
 
@@ -263,7 +323,7 @@ To improve ontology for business users:
         await ctx.info(
             "Ontology file save failed but ontology generated; next call should be suggest_semantic_names to improve cryptic names"
         )
-        return ontology_ttl
+        return _build_minimal_graph_summary(ontology_ttl)
 
 
 async def suggest_semantic_names(
@@ -297,7 +357,7 @@ async def suggest_semantic_names(
                 "hint": "Pass ontology_file parameter from generate_ontology response",
             }
 
-        extraction_result = generator.extract_names_for_review()
+        extraction_result = generator.extract_names_for_review(compact=True)
 
         extraction_result["llm_instructions"] = {
             "task": "Review the extracted names and provide business-friendly alternatives",
@@ -328,7 +388,7 @@ async def suggest_semantic_names(
                 "Use Title Case for class names",
                 "Use descriptive phrases for properties",
                 "Provide meaningful descriptions that explain business context",
-                "Keep the original db:tableName and db:columnName for SQL generation",
+                "Keep the original oba:tableName and oba:columnName for SQL generation",
             ],
         }
 
@@ -360,6 +420,7 @@ async def apply_semantic_names(
     get_session_safe_filename,
     load_ontology_from_session,
     create_error_response,
+    get_oxigraph_store=None,
 ) -> str:
     """Apply LLM-suggested semantic names to an existing ontology."""
     try:
@@ -435,7 +496,28 @@ async def apply_semantic_names(
             result += f"\n## ontology_file: {new_ontology_filename}\n"
             result += f"\nThe ontology file '{new_ontology_filename}' has been saved and is now the active ontology in session context.\n"
 
-        result += f"\n{updated_ontology}"
+        # Auto-persist to Oxigraph to avoid returning the full TTL
+        persisted = False
+        if OXIGRAPH_AVAILABLE and get_oxigraph_store is not None:
+            try:
+                store = get_oxigraph_store(ctx)
+                if store:
+                    session = get_session_data(ctx)
+                    schema_name = getattr(session, "schema_name", "default") or "default"
+                    schema_safe = schema_name.replace(" ", "_").replace(".", "_")
+                    graph_uri = f"http://example.com/schema/{schema_safe}"
+                    triple_count = store.load_ontology(updated_ontology, graph_uri, schema_name)
+                    result += f"\nPersisted to Oxigraph: {triple_count:,} triples in <{graph_uri}>"
+                    result += f"\nToken savings: ~{len(updated_ontology) // 4} tokens saved by auto-persisting to RDF store!"
+                    result += "\nUse query_sparql() to explore or download_ontology() to get the TTL file."
+                    persisted = True
+            except Exception as e:
+                logger.warning(f"Auto-persist semantic ontology to Oxigraph failed: {e}")
+
+        if not persisted:
+            # Without Oxigraph, return a minimal graph summary instead of full TTL
+            result += _build_minimal_graph_summary(updated_ontology)
+
         return result
 
     except Exception as e:

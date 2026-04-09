@@ -11,8 +11,18 @@ from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.collection import Collection
 from rdflib.namespace import RDF, RDFS, OWL, XSD
 
-from .constants import DEFAULT_BASE_URI, ONTOLOGY_TITLE, ONTOLOGY_DESCRIPTION
+from wordfreq import word_frequency
+
+from .constants import DEFAULT_BASE_URI, OBA_NAMESPACE, ONTOLOGY_TITLE, ONTOLOGY_DESCRIPTION
 from .database_manager import TableInfo, ColumnInfo
+
+# Minimum word frequency threshold (in Zipf scale ~1e-6).
+# Words below this are considered non-English / abbreviations.
+_WORD_FREQ_THRESHOLD = 1e-6
+
+# Common DB column suffixes that are not English words but are well-understood.
+# These should NOT be flagged as cryptic on their own.
+_KNOWN_DB_SUFFIXES = {"id", "pk", "fk", "idx", "seq"}
 
 logger = logging.getLogger(__name__)
 
@@ -114,11 +124,11 @@ class OntologyGenerator:
         self.graph = Graph()
         self.base_uri = Namespace(base_uri)
 
-        # Define custom namespace for database-specific annotations
-        self.db_ns = Namespace(f"{base_uri}db/")
+        # OBA (OrionBelt Analytics) namespace for database schema annotations
+        self.oba_ns = Namespace(OBA_NAMESPACE)
 
         self.graph.bind("ns", self.base_uri)
-        self.graph.bind("db", self.db_ns)
+        self.graph.bind("oba", self.oba_ns)
         self.graph.bind("rdf", RDF)
         self.graph.bind("rdfs", RDFS)
         self.graph.bind("owl", OWL)
@@ -140,7 +150,7 @@ class OntologyGenerator:
 
         # Re-bind namespaces
         self.graph.bind("ns", self.base_uri)
-        self.graph.bind("db", self.db_ns)
+        self.graph.bind("oba", self.oba_ns)
         self.graph.bind("rdf", RDF)
         self.graph.bind("rdfs", RDFS)
         self.graph.bind("owl", OWL)
@@ -159,7 +169,7 @@ class OntologyGenerator:
 
         # Re-bind namespaces
         self.graph.bind("ns", self.base_uri)
-        self.graph.bind("db", self.db_ns)
+        self.graph.bind("oba", self.oba_ns)
         self.graph.bind("rdf", RDF)
         self.graph.bind("rdfs", RDFS)
         self.graph.bind("owl", OWL)
@@ -261,11 +271,11 @@ class OntologyGenerator:
         self.graph.add((table_uri, RDFS.label, Literal(table_info.name)))
         
         # Add comprehensive database-specific annotations
-        self.graph.add((table_uri, self.db_ns.tableName, Literal(table_info.name)))
-        self.graph.add((table_uri, self.db_ns.schemaName, Literal(table_info.schema)))
+        self.graph.add((table_uri, self.oba_ns.tableName, Literal(table_info.name)))
+        self.graph.add((table_uri, self.oba_ns.schemaName, Literal(table_info.schema)))
         
         if table_info.row_count is not None:
-            self.graph.add((table_uri, self.db_ns.rowCount, Literal(table_info.row_count)))
+            self.graph.add((table_uri, self.oba_ns.rowCount, Literal(table_info.row_count)))
             
         if table_info.comment:
             self.graph.add((table_uri, RDFS.comment, Literal(table_info.comment)))
@@ -273,7 +283,7 @@ class OntologyGenerator:
         # Add primary key information
         if table_info.primary_keys:
             for pk in table_info.primary_keys:
-                self.graph.add((table_uri, self.db_ns.primaryKey, Literal(pk)))
+                self.graph.add((table_uri, self.oba_ns.primaryKey, Literal(pk)))
 
         # Add columns as properties
         for column in table_info.columns:
@@ -297,16 +307,16 @@ class OntologyGenerator:
         self.graph.add((prop_uri, RDFS.label, Literal(column.name)))
 
         # Add comprehensive database-specific annotations
-        self.graph.add((prop_uri, self.db_ns.columnName, Literal(column.name)))
-        self.graph.add((prop_uri, self.db_ns.tableName, Literal(table_name)))
-        self.graph.add((prop_uri, self.db_ns.sqlDataType, Literal(column.data_type)))
-        self.graph.add((prop_uri, self.db_ns.isNullable, Literal(column.is_nullable)))
-        self.graph.add((prop_uri, self.db_ns.isPrimaryKey, Literal(column.is_primary_key)))
-        self.graph.add((prop_uri, self.db_ns.isForeignKey, Literal(column.is_foreign_key)))
+        self.graph.add((prop_uri, self.oba_ns.columnName, Literal(column.name)))
+        self.graph.add((prop_uri, self.oba_ns.tableName, Literal(table_name)))
+        self.graph.add((prop_uri, self.oba_ns.sqlDataType, Literal(column.data_type)))
+        self.graph.add((prop_uri, self.oba_ns.isNullable, Literal(column.is_nullable)))
+        self.graph.add((prop_uri, self.oba_ns.isPrimaryKey, Literal(column.is_primary_key)))
+        self.graph.add((prop_uri, self.oba_ns.isForeignKey, Literal(column.is_foreign_key)))
 
         # Add SQL query generation hints
         full_column_ref = f"{table_name}.{column.name}"
-        self.graph.add((prop_uri, self.db_ns.sqlReference, Literal(full_column_ref)))
+        self.graph.add((prop_uri, self.oba_ns.sqlReference, Literal(full_column_ref)))
 
         # Map SQL data types to proper XSD types (with semantic awareness)
         xsd_type, type_override = self._map_sql_to_xsd(
@@ -321,12 +331,12 @@ class OntologyGenerator:
             # Also add annotation to the property
             self.graph.add((
                 prop_uri,
-                self.db_ns.typeOverrideReason,
+                self.oba_ns.typeOverrideReason,
                 Literal(type_override["reason"])
             ))
 
         # Note: Primary key and nullability constraints are already captured
-        # in the metadata annotations (db:isPrimaryKey, db:isNullable).
+        # in the metadata annotations (oba:isPrimaryKey, oba:isNullable).
         # We don't create OWL restriction classes as that would incorrectly
         # make table classes subclasses of restrictions.
 
@@ -357,18 +367,18 @@ class OntologyGenerator:
         self.graph.add((prop_uri, RDFS.label, Literal(f"{table_name} has {referenced_table}")))
 
         # Add comprehensive database-specific annotations for foreign keys
-        self.graph.add((prop_uri, self.db_ns.foreignKeyColumn, Literal(fk_column)))
-        self.graph.add((prop_uri, self.db_ns.referencedTable, Literal(referenced_table)))
-        self.graph.add((prop_uri, self.db_ns.referencedColumn, Literal(referenced_column)))
+        self.graph.add((prop_uri, self.oba_ns.foreignKeyColumn, Literal(fk_column)))
+        self.graph.add((prop_uri, self.oba_ns.referencedTable, Literal(referenced_table)))
+        self.graph.add((prop_uri, self.oba_ns.referencedColumn, Literal(referenced_column)))
         if referenced_schema:
-            self.graph.add((prop_uri, self.db_ns.referencedSchema, Literal(referenced_schema)))
+            self.graph.add((prop_uri, self.oba_ns.referencedSchema, Literal(referenced_schema)))
 
         # Add SQL join condition
         join_condition = f"{table_name}.{fk_column} = {referenced_table}.{referenced_column}"
-        self.graph.add((prop_uri, self.db_ns.sqlJoinCondition, Literal(join_condition)))
+        self.graph.add((prop_uri, self.oba_ns.sqlJoinCondition, Literal(join_condition)))
 
         # Add relationship type annotation
-        self.graph.add((prop_uri, self.db_ns.relationshipType, Literal("many_to_one")))
+        self.graph.add((prop_uri, self.oba_ns.relationshipType, Literal("many_to_one")))
 
         # Add inverse relationship
         inverse_rel_name = f"{self._clean_name(referenced_table)}_referenced_by_{self._clean_name(table_name)}"
@@ -379,7 +389,7 @@ class OntologyGenerator:
         self.graph.add((inverse_prop_uri, RDFS.label, Literal(f"{referenced_table} referenced by {table_name}")))
 
         # Add database annotations for inverse relationship
-        self.graph.add((inverse_prop_uri, self.db_ns.relationshipType, Literal("one_to_many")))
+        self.graph.add((inverse_prop_uri, self.oba_ns.relationshipType, Literal("one_to_many")))
 
         # Link them as inverses
         self.graph.add((prop_uri, OWL.inverseOf, inverse_prop_uri))
@@ -737,22 +747,22 @@ class OntologyGenerator:
         )))
 
         # Add database-specific annotations
-        self.graph.add((prop_uri, self.db_ns.foreignKeyColumn, Literal(inferred_rel.column)))
-        self.graph.add((prop_uri, self.db_ns.referencedTable, Literal(inferred_rel.target_table)))
-        self.graph.add((prop_uri, self.db_ns.referencedColumn, Literal(inferred_rel.target_column)))
+        self.graph.add((prop_uri, self.oba_ns.foreignKeyColumn, Literal(inferred_rel.column)))
+        self.graph.add((prop_uri, self.oba_ns.referencedTable, Literal(inferred_rel.target_table)))
+        self.graph.add((prop_uri, self.oba_ns.referencedColumn, Literal(inferred_rel.target_column)))
 
         # Add SQL join condition
         join_condition = (
             f"{inferred_rel.source_table}.{inferred_rel.column} = "
             f"{inferred_rel.target_table}.{inferred_rel.target_column}"
         )
-        self.graph.add((prop_uri, self.db_ns.sqlJoinCondition, Literal(join_condition)))
+        self.graph.add((prop_uri, self.oba_ns.sqlJoinCondition, Literal(join_condition)))
 
         # Mark as inferred (not declared FK)
-        self.graph.add((prop_uri, self.db_ns.isInferredRelationship, Literal(True)))
-        self.graph.add((prop_uri, self.db_ns.inferenceConfidence, Literal(inferred_rel.confidence)))
-        self.graph.add((prop_uri, self.db_ns.inferencePattern, Literal(inferred_rel.pattern_matched)))
-        self.graph.add((prop_uri, self.db_ns.relationshipType, Literal("many_to_one")))
+        self.graph.add((prop_uri, self.oba_ns.isInferredRelationship, Literal(True)))
+        self.graph.add((prop_uri, self.oba_ns.inferenceConfidence, Literal(inferred_rel.confidence)))
+        self.graph.add((prop_uri, self.oba_ns.inferencePattern, Literal(inferred_rel.pattern_matched)))
+        self.graph.add((prop_uri, self.oba_ns.relationshipType, Literal("many_to_one")))
 
         # Add inverse relationship
         inverse_rel_name = (
@@ -768,8 +778,8 @@ class OntologyGenerator:
             self.graph.add((inverse_prop_uri, RDFS.label, Literal(
                 f"{inferred_rel.target_table} referenced by {inferred_rel.source_table}"
             )))
-            self.graph.add((inverse_prop_uri, self.db_ns.relationshipType, Literal("one_to_many")))
-            self.graph.add((inverse_prop_uri, self.db_ns.isInferredRelationship, Literal(True)))
+            self.graph.add((inverse_prop_uri, self.oba_ns.relationshipType, Literal("one_to_many")))
+            self.graph.add((inverse_prop_uri, self.oba_ns.isInferredRelationship, Literal(True)))
 
             # Link as inverses
             self.graph.add((prop_uri, OWL.inverseOf, inverse_prop_uri))
@@ -784,15 +794,15 @@ class OntologyGenerator:
         prop_uri = self.base_uri[prop_name]
 
         if (prop_uri, RDF.type, OWL.DatatypeProperty) in self.graph:
-            self.graph.add((prop_uri, self.db_ns.isDenormalized, Literal(True)))
+            self.graph.add((prop_uri, self.oba_ns.isDenormalized, Literal(True)))
             self.graph.add((
                 prop_uri,
-                self.db_ns.likelySourceTable,
+                self.oba_ns.likelySourceTable,
                 Literal(denorm.likely_source_table)
             ))
             self.graph.add((
                 prop_uri,
-                self.db_ns.denormalizationWarning,
+                self.oba_ns.denormalizationWarning,
                 Literal(denorm.warning)
             ))
 
@@ -817,13 +827,13 @@ class OntologyGenerator:
 
         # Also include inferred relationships already in the graph
         for subj in self.graph.subjects(RDF.type, OWL.ObjectProperty):
-            rel_type = self.graph.value(subj, self.db_ns.relationshipType)
+            rel_type = self.graph.value(subj, self.oba_ns.relationshipType)
             if str(rel_type) != "many_to_one":
                 continue
-            ref_table = self.graph.value(subj, self.db_ns.referencedTable)
+            ref_table = self.graph.value(subj, self.oba_ns.referencedTable)
             domain = self.graph.value(subj, RDFS.domain)
             if ref_table and domain:
-                source_name = self.graph.value(domain, self.db_ns.tableName)
+                source_name = self.graph.value(domain, self.oba_ns.tableName)
                 if source_name:
                     dimension_to_sources.setdefault(
                         str(ref_table), set()
@@ -876,14 +886,14 @@ class OntologyGenerator:
         # as (source_table_name, target_table_name, property_uri)
         relationships: List[Tuple[str, str, URIRef]] = []
         for subj in self.graph.subjects(RDF.type, OWL.ObjectProperty):
-            rel_type = self.graph.value(subj, self.db_ns.relationshipType)
+            rel_type = self.graph.value(subj, self.oba_ns.relationshipType)
             if str(rel_type) != "many_to_one":
                 continue
             domain = self.graph.value(subj, RDFS.domain)
             range_ = self.graph.value(subj, RDFS.range)
             if domain and range_:
-                src = self.graph.value(domain, self.db_ns.tableName)
-                tgt = self.graph.value(range_, self.db_ns.tableName)
+                src = self.graph.value(domain, self.oba_ns.tableName)
+                tgt = self.graph.value(range_, self.oba_ns.tableName)
                 if src and tgt:
                     relationships.append((str(src), str(tgt), subj))
 
@@ -950,14 +960,14 @@ class OntologyGenerator:
         total_props = 0
         total_rels = 0
 
-        # Check classes (OWL Classes that have db:tableName annotation)
+        # Check classes (OWL Classes that have oba:tableName annotation)
         for subject in self.graph.subjects(RDF.type, OWL.Class):
             # Skip the OWL.Class itself and anonymous nodes
             if subject == OWL.Class or not isinstance(subject, URIRef):
                 continue
 
-            # Only count classes that have db:tableName (i.e., actual table classes)
-            table_names = list(self.graph.objects(subject, self.db_ns.tableName))
+            # Only count classes that have oba:tableName (i.e., actual table classes)
+            table_names = list(self.graph.objects(subject, self.oba_ns.tableName))
             if not table_names:
                 continue
 
@@ -976,9 +986,9 @@ class OntologyGenerator:
             if not has_comment:
                 table_name = None
                 col_name = None
-                for tn in self.graph.objects(subject, self.db_ns.tableName):
+                for tn in self.graph.objects(subject, self.oba_ns.tableName):
                     table_name = str(tn)
-                for cn in self.graph.objects(subject, self.db_ns.columnName):
+                for cn in self.graph.objects(subject, self.oba_ns.columnName):
                     col_name = str(cn)
                 if table_name and col_name:
                     properties_without_desc.append(f"{table_name}.{col_name}")
@@ -991,7 +1001,7 @@ class OntologyGenerator:
             total_rels += 1
             has_comment = any(self.graph.objects(subject, RDFS.comment))
             # Also check for relationship description
-            has_rel_desc = any(self.graph.objects(subject, self.db_ns.relationshipDescription))
+            has_rel_desc = any(self.graph.objects(subject, self.oba_ns.relationshipDescription))
             if not has_comment and not has_rel_desc:
                 for label in self.graph.objects(subject, RDFS.label):
                     relationships_without_desc.append(str(label))
@@ -1129,11 +1139,11 @@ class OntologyGenerator:
                                       Literal(table_desc["business_description"])))
                     
                     if "table_type" in table_desc:
-                        self.graph.add((table_uri, self.db_ns.tableType, 
+                        self.graph.add((table_uri, self.oba_ns.tableType, 
                                       Literal(table_desc["table_type"])))
                     
                     if "usage_notes" in table_desc:
-                        self.graph.add((table_uri, self.db_ns.usageNotes, 
+                        self.graph.add((table_uri, self.oba_ns.usageNotes, 
                                       Literal(table_desc["usage_notes"])))
         
         # Apply column descriptions
@@ -1156,11 +1166,11 @@ class OntologyGenerator:
                                           Literal(column_desc["business_description"])))
                         
                         if "data_characteristics" in column_desc:
-                            self.graph.add((prop_uri, self.db_ns.dataCharacteristics, 
+                            self.graph.add((prop_uri, self.oba_ns.dataCharacteristics, 
                                           Literal(column_desc["data_characteristics"])))
                         
                         if "business_rules" in column_desc:
-                            self.graph.add((prop_uri, self.db_ns.businessRules, 
+                            self.graph.add((prop_uri, self.oba_ns.businessRules, 
                                           Literal(column_desc["business_rules"])))
         
         # Apply relationship descriptions
@@ -1178,15 +1188,15 @@ class OntologyGenerator:
                     
                     if (rel_uri, RDF.type, OWL.ObjectProperty) in self.graph:
                         if "description" in rel_desc:
-                            self.graph.add((rel_uri, self.db_ns.relationshipDescription, 
+                            self.graph.add((rel_uri, self.oba_ns.relationshipDescription, 
                                           Literal(rel_desc["description"])))
                         
                         if "cardinality" in rel_desc:
-                            self.graph.add((rel_uri, self.db_ns.cardinality, 
+                            self.graph.add((rel_uri, self.oba_ns.cardinality, 
                                           Literal(rel_desc["cardinality"])))
                         
                         if "business_rule" in rel_desc:
-                            self.graph.add((rel_uri, self.db_ns.businessRule, 
+                            self.graph.add((rel_uri, self.oba_ns.businessRule, 
                                           Literal(rel_desc["business_rule"])))
         
         logger.info("Finished applying semantic descriptions")
@@ -1382,12 +1392,17 @@ class OntologyGenerator:
         logger.info("Generating basic ontology (LLM enrichment handled by MCP tools)")
         return self.generate_from_schema(tables_info)
 
-    def extract_names_for_review(self) -> Dict[str, Any]:
+    def extract_names_for_review(self, compact: bool = False) -> Dict[str, Any]:
         """Extract all class, property, and relationship names from the ontology for LLM review.
 
         This method analyzes the current ontology graph and extracts all names that might
         need improvement - abbreviations, cryptic identifiers, or technical names that
         could be made more business-friendly.
+
+        Args:
+            compact: If True, return full metadata only for cryptic items.
+                Non-cryptic items are listed as name-only entries to reduce
+                token usage for LLM clients with limited context windows.
 
         Returns:
             Dictionary containing:
@@ -1421,11 +1436,11 @@ class OntologyGenerator:
                 class_info["current_label"] = str(label)
 
             # Get database annotations
-            for table_name in self.graph.objects(subject, self.db_ns.tableName):
+            for table_name in self.graph.objects(subject, self.oba_ns.tableName):
                 class_info["table_name"] = str(table_name)
-            for schema_name in self.graph.objects(subject, self.db_ns.schemaName):
+            for schema_name in self.graph.objects(subject, self.oba_ns.schemaName):
                 class_info["schema_name"] = str(schema_name)
-            for row_count in self.graph.objects(subject, self.db_ns.rowCount):
+            for row_count in self.graph.objects(subject, self.oba_ns.rowCount):
                 class_info["row_count"] = int(row_count)
             for comment in self.graph.objects(subject, RDFS.comment):
                 class_info["comment"] = str(comment)
@@ -1455,15 +1470,15 @@ class OntologyGenerator:
                 prop_info["current_label"] = str(label)
 
             # Get database annotations
-            for col_name in self.graph.objects(subject, self.db_ns.columnName):
+            for col_name in self.graph.objects(subject, self.oba_ns.columnName):
                 prop_info["column_name"] = str(col_name)
-            for table_name in self.graph.objects(subject, self.db_ns.tableName):
+            for table_name in self.graph.objects(subject, self.oba_ns.tableName):
                 prop_info["table_name"] = str(table_name)
-            for sql_type in self.graph.objects(subject, self.db_ns.sqlDataType):
+            for sql_type in self.graph.objects(subject, self.oba_ns.sqlDataType):
                 prop_info["sql_data_type"] = str(sql_type)
-            for is_pk in self.graph.objects(subject, self.db_ns.isPrimaryKey):
+            for is_pk in self.graph.objects(subject, self.oba_ns.isPrimaryKey):
                 prop_info["is_primary_key"] = str(is_pk).lower() == "true"
-            for is_fk in self.graph.objects(subject, self.db_ns.isForeignKey):
+            for is_fk in self.graph.objects(subject, self.oba_ns.isForeignKey):
                 prop_info["is_foreign_key"] = str(is_fk).lower() == "true"
             for comment in self.graph.objects(subject, RDFS.comment):
                 prop_info["comment"] = str(comment)
@@ -1491,11 +1506,11 @@ class OntologyGenerator:
                 rel_info["current_label"] = str(label)
 
             # Get database annotations
-            for fk_col in self.graph.objects(subject, self.db_ns.foreignKeyColumn):
+            for fk_col in self.graph.objects(subject, self.oba_ns.foreignKeyColumn):
                 rel_info["foreign_key_column"] = str(fk_col)
-            for ref_table in self.graph.objects(subject, self.db_ns.referencedTable):
+            for ref_table in self.graph.objects(subject, self.oba_ns.referencedTable):
                 rel_info["referenced_table"] = str(ref_table)
-            for rel_type in self.graph.objects(subject, self.db_ns.relationshipType):
+            for rel_type in self.graph.objects(subject, self.oba_ns.relationshipType):
                 rel_info["relationship_type"] = str(rel_type)
             for comment in self.graph.objects(subject, RDFS.comment):
                 rel_info["comment"] = str(comment)
@@ -1518,6 +1533,29 @@ class OntologyGenerator:
         if cryptic_rels:
             analysis_hints.append(f"Found {len(cryptic_rels)} relationship names that may need improvement")
 
+        # In compact mode, return full metadata only for cryptic items.
+        # Non-cryptic items are reduced to name-only entries so LLM clients
+        # with limited context windows can still see all names at a glance.
+        if compact:
+            def _compact_class(c: Dict[str, Any]) -> Dict[str, Any]:
+                if c.get("needs_review", {}).get("is_cryptic"):
+                    return c
+                return {"local_name": c["local_name"], "table_name": c.get("table_name")}
+
+            def _compact_prop(p: Dict[str, Any]) -> Dict[str, Any]:
+                if p.get("needs_review", {}).get("is_cryptic"):
+                    return p
+                return {"local_name": p["local_name"], "table_name": p.get("table_name")}
+
+            def _compact_rel(r: Dict[str, Any]) -> Dict[str, Any]:
+                if r.get("needs_review", {}).get("is_cryptic"):
+                    return r
+                return {"local_name": r["local_name"]}
+
+            classes = [_compact_class(c) for c in classes]
+            properties = [_compact_prop(p) for p in properties]
+            relationships = [_compact_rel(r) for r in relationships]
+
         return {
             "classes": classes,
             "properties": properties,
@@ -1533,8 +1571,29 @@ class OntologyGenerator:
             }
         }
 
+    @staticmethod
+    def _is_known_word(token: str) -> bool:
+        """Check if a token is a recognised English word using word frequency data.
+
+        Args:
+            token: Lowercase alphabetic token to check.
+
+        Returns:
+            True if the token appears in the wordfreq corpus above the threshold.
+        """
+        if not token or not token.isalpha():
+            return False
+        if token in _KNOWN_DB_SUFFIXES:
+            return True
+        return word_frequency(token, "en") >= _WORD_FREQ_THRESHOLD
+
     def _analyze_name_quality(self, name: str) -> Dict[str, Any]:
         """Analyze if a name looks like an abbreviation or cryptic identifier.
+
+        Uses a combination of structural heuristics (length, casing, suffix
+        patterns) **and** NLP word-frequency lookup via *wordfreq* to catch
+        concatenated abbreviations (e.g. ``acctbal``, ``custaddr``) that pure
+        regex would miss.
 
         Args:
             name: The name to analyze
@@ -1545,29 +1604,23 @@ class OntologyGenerator:
         if not name:
             return {"is_cryptic": True, "reasons": ["Empty name"]}
 
-        reasons = []
+        reasons: list[str] = []
         is_cryptic = False
 
-        # Check for very short names (likely abbreviations)
-        if len(name) <= 3:
+        # --- structural checks ------------------------------------------
+
+        # Very short names (likely abbreviations)
+        if len(name) <= 3 and name.lower() not in _KNOWN_DB_SUFFIXES:
             is_cryptic = True
             reasons.append("Very short name (≤3 chars) - likely abbreviation")
 
-        # Check for all uppercase (common for abbreviations)
+        # All uppercase (common for abbreviations/acronyms)
         if name.isupper() and len(name) > 1:
             is_cryptic = True
             reasons.append("All uppercase - likely acronym")
 
-        # Check for underscore-separated abbreviations (e.g., cust_id, ord_dt)
-        parts = name.split("_")
-        short_parts = [p for p in parts if len(p) <= 3 and p.isalpha()]
-        if len(short_parts) > len(parts) / 2:
-            is_cryptic = True
-            reasons.append("Contains multiple abbreviations")
-
-        # Check for common cryptic patterns
+        # Common cryptic suffix/prefix patterns
         cryptic_patterns = [
-            (r"_id$", "Ends with '_id' - consider more descriptive name"),
             (r"_dt$", "Ends with '_dt' (date abbreviation)"),
             (r"_cd$", "Ends with '_cd' (code abbreviation)"),
             (r"_no$", "Ends with '_no' (number abbreviation)"),
@@ -1593,19 +1646,34 @@ class OntologyGenerator:
                 is_cryptic = True
                 reasons.append(reason)
 
-        # Check for numeric suffixes that might indicate versions or partitions
+        # Numeric suffix (versions / partitions)
         if re.search(r"\d+$", name):
             reasons.append("Contains numeric suffix")
 
-        # Check for mixed case that looks like system-generated names
-        if re.match(r"^[a-z]+[A-Z]", name) and "_" not in name:
-            # camelCase is OK, but some system names are cryptic camelCase
-            pass
+        # --- NLP word-frequency check ------------------------------------
+        # Split on underscores, then check each token against the corpus.
+        parts = [p for p in name.lower().split("_") if p.isalpha()]
+        if parts:
+            non_words = [
+                p for p in parts
+                if not self._is_known_word(p)
+            ]
+            # If more than half the tokens are not real words → cryptic
+            if len(non_words) > len(parts) / 2:
+                is_cryptic = True
+                reasons.append(
+                    f"Contains non-dictionary tokens: {', '.join(non_words)}"
+                )
+            elif non_words:
+                # Some tokens unrecognised — mention but don't auto-flag
+                reasons.append(
+                    f"Possible abbreviations: {', '.join(non_words)}"
+                )
 
         return {
             "is_cryptic": is_cryptic,
             "reasons": reasons,
-            "confidence": "high" if len(reasons) >= 2 else "medium" if len(reasons) == 1 else "low"
+            "confidence": "high" if len(reasons) >= 2 else "medium" if len(reasons) == 1 else "low",
         }
 
     def apply_semantic_names(self, name_suggestions: Dict[str, Any]) -> str:
@@ -1646,7 +1714,7 @@ class OntologyGenerator:
                         self.graph.remove((class_uri, RDFS.label, None))
                         self.graph.add((class_uri, RDFS.label, Literal(suggested)))
                         # Also add a semantic name annotation
-                        self.graph.add((class_uri, self.db_ns.semanticName, Literal(suggested)))
+                        self.graph.add((class_uri, self.oba_ns.semanticName, Literal(suggested)))
                         changes_made += 1
 
                     if description:
@@ -1681,7 +1749,7 @@ class OntologyGenerator:
                         self.graph.remove((prop_uri, RDFS.label, None))
                         self.graph.add((prop_uri, RDFS.label, Literal(suggested)))
                         # Also add a semantic name annotation
-                        self.graph.add((prop_uri, self.db_ns.semanticName, Literal(suggested)))
+                        self.graph.add((prop_uri, self.oba_ns.semanticName, Literal(suggested)))
                         changes_made += 1
 
                     if description:
@@ -1709,7 +1777,7 @@ class OntologyGenerator:
                         self.graph.remove((rel_uri, RDFS.label, None))
                         self.graph.add((rel_uri, RDFS.label, Literal(suggested)))
                         # Also add a semantic name annotation
-                        self.graph.add((rel_uri, self.db_ns.semanticName, Literal(suggested)))
+                        self.graph.add((rel_uri, self.oba_ns.semanticName, Literal(suggested)))
                         changes_made += 1
 
                     if description:

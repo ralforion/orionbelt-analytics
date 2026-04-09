@@ -469,7 +469,8 @@ class TestMCPToolsAsync:
             )
 
         assert isinstance(result, str)
-        assert "@prefix ns:" in result
+        # Result is now a minimal graph summary or Oxigraph persisted summary
+        assert "Minimal Graph Summary" in result or "Ontology generated" in result or "triples" in result.lower()
 
     async def test_generate_ontology_no_tables(self, mock_ctx, mock_session_data):
         """Test ontology generation with no tables."""

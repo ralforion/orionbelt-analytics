@@ -168,7 +168,7 @@ class TestInferredRelationships(unittest.TestCase):
         self.generator.generate_from_schema(tables, include_inferred_relationships=True)
 
         # Check that the inferred relationship exists
-        db_ns = self.generator.db_ns
+        oba_ns = self.generator.oba_ns
         base = self.generator.base_uri
 
         rel_uri = base["suppliers_has_countries"]
@@ -181,7 +181,7 @@ class TestInferredRelationships(unittest.TestCase):
 
         # Should be marked as inferred
         self.assertIn(
-            (rel_uri, db_ns.isInferredRelationship, Literal(True)),
+            (rel_uri, oba_ns.isInferredRelationship, Literal(True)),
             self.generator.graph
         )
 
@@ -388,17 +388,17 @@ class TestDenormalizedFieldDetection(unittest.TestCase):
         self.generator.generate_from_schema(tables, annotate_denormalized=True)
 
         # Check that the denormalized annotation exists
-        db_ns = self.generator.db_ns
+        oba_ns = self.generator.oba_ns
         base = self.generator.base_uri
 
         prop_uri = base["shipments_shipmentclient"]
 
         self.assertIn(
-            (prop_uri, db_ns.isDenormalized, Literal(True)),
+            (prop_uri, oba_ns.isDenormalized, Literal(True)),
             self.generator.graph
         )
         self.assertIn(
-            (prop_uri, db_ns.likelySourceTable, Literal("clients")),
+            (prop_uri, oba_ns.likelySourceTable, Literal("clients")),
             self.generator.graph
         )
 
@@ -632,7 +632,7 @@ class TestTPCDSPatterns(unittest.TestCase):
 
         self.generator.generate_from_schema(tables, include_inferred_relationships=True)
 
-        db_ns = self.generator.db_ns
+        oba_ns = self.generator.oba_ns
         base = self.generator.base_uri
 
         # Check STORE_SALES -> CUSTOMER relationship

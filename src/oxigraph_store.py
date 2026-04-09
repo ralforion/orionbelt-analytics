@@ -174,11 +174,11 @@ class OxigraphStoreManager:
         Example:
             ```python
             results = store.query_sparql('''
-                PREFIX db: <http://example.com/db#>
+                PREFIX oba: <https://ralforion.com/ns/oba#>
                 SELECT ?table ?column
                 WHERE {
-                    ?table db:hasColumn ?column .
-                    ?column db:dataType "INTEGER"
+                    ?table oba:hasColumn ?column .
+                    ?column oba:dataType "INTEGER"
                 }
                 LIMIT 10
             ''')
@@ -217,10 +217,10 @@ class OxigraphStoreManager:
         Example:
             ```python
             exists = store.query_sparql_ask('''
-                PREFIX db: <http://example.com/db#>
+                PREFIX oba: <https://ralforion.com/ns/oba#>
                 ASK {
-                    ?table db:hasColumn ?column .
-                    ?column db:dataType "INTEGER"
+                    ?table oba:hasColumn ?column .
+                    ?column oba:dataType "INTEGER"
                 }
             ''')
             ```
@@ -254,13 +254,13 @@ class OxigraphStoreManager:
         Example:
             ```python
             ttl = store.query_sparql_construct('''
-                PREFIX db: <http://example.com/db#>
+                PREFIX oba: <https://ralforion.com/ns/oba#>
                 CONSTRUCT {
-                    ?table a db:IntegerTable
+                    ?table a oba:IntegerTable
                 }
                 WHERE {
-                    ?table db:hasColumn ?column .
-                    ?column db:dataType "INTEGER"
+                    ?table oba:hasColumn ?column .
+                    ?column oba:dataType "INTEGER"
                 }
             ''')
             ```
@@ -442,13 +442,13 @@ class OxigraphStoreManager:
         safe_graph = _escape_sparql_iri(schema_graph)
         query = f"""
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-            PREFIX db: <http://example.com/db#>
+            PREFIX oba: <https://ralforion.com/ns/oba#>
 
             SELECT DISTINCT ?tableName
             FROM <{safe_graph}>
             WHERE {{
-                ?table a db:Table .
-                ?table db:tableName ?tableName .
+                ?table a oba:Table .
+                ?table oba:tableName ?tableName .
             }}
             ORDER BY ?tableName
         """
@@ -476,15 +476,15 @@ class OxigraphStoreManager:
         safe_type = _escape_sparql_literal(data_type)
 
         query = f"""
-            PREFIX db: <http://example.com/db#>
+            PREFIX oba: <https://ralforion.com/ns/oba#>
 
             SELECT ?tableName ?columnName ?dataType
             {graph_clause}
             WHERE {{
-                ?column a db:Column .
-                ?column db:tableName ?tableName .
-                ?column db:columnName ?columnName .
-                ?column db:dataType ?dataType .
+                ?column a oba:Column .
+                ?column oba:tableName ?tableName .
+                ?column oba:columnName ?columnName .
+                ?column oba:dataType ?dataType .
                 FILTER (LCASE(STR(?dataType)) = LCASE("{safe_type}"))
             }}
             ORDER BY ?tableName ?columnName
@@ -531,16 +531,16 @@ class OxigraphStoreManager:
         filter_clause = "\n".join(filters)
 
         query = f"""
-            PREFIX db: <http://example.com/db#>
+            PREFIX oba: <https://ralforion.com/ns/oba#>
 
             SELECT ?fromTable ?fromColumn ?toTable ?toColumn
             {graph_clause}
             WHERE {{
-                ?rel a db:ForeignKey .
-                ?rel db:fromTable ?fromTable .
-                ?rel db:fromColumn ?fromColumn .
-                ?rel db:toTable ?toTable .
-                ?rel db:toColumn ?toColumn .
+                ?rel a oba:ForeignKey .
+                ?rel oba:fromTable ?fromTable .
+                ?rel oba:fromColumn ?fromColumn .
+                ?rel oba:toTable ?toTable .
+                ?rel oba:toColumn ?toColumn .
                 {filter_clause}
             }}
             ORDER BY ?fromTable ?toTable

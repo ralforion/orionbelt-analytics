@@ -304,11 +304,11 @@ User: "Find all columns with INTEGER type"
 Claude calls:
 query_sparql(
   sparql_query="""
-    PREFIX db: <http://example.com/db#>
+    PREFIX oba: <https://ralforion.com/ns/oba#>
     SELECT ?table ?column
     WHERE {
-      ?table db:hasColumn ?column .
-      ?column db:dataType "INTEGER"
+      ?table oba:hasColumn ?column .
+      ?column oba:sqlDataType "INTEGER"
     }
   """
 )

@@ -19,6 +19,7 @@ QUERY_TIMEOUT = 60
 
 # Ontology generation constants
 DEFAULT_BASE_URI = "http://example.com/ontology/"
+OBA_NAMESPACE = "https://ralforion.com/ns/oba#"
 ONTOLOGY_TITLE = "Database Schema Ontology"
 ONTOLOGY_DESCRIPTION = "Ontology generated from database schema"
 

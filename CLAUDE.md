@@ -62,7 +62,7 @@ server.py → src/main.py (@mcp.tool decorators)
 - **`src/main.py`** - FastMCP server setup, tool registration, resource/prompt definitions
 - **`src/session.py`** - `SessionData` class for per-session state isolation
 - **`src/database_manager.py`** - Connection pooling, schema analysis, SQLAlchemy integration
-- **`src/ontology_generator.py`** - RDF/OWL generation using rdflib with `db:` namespace annotations
+- **`src/ontology_generator.py`** - RDF/OWL generation using rdflib with `oba:` (OrionBelt Analytics) namespace annotations
 - **`src/oxigraph_store.py`** - Persistent RDF storage with SPARQL 1.1 query support
 - **`src/obqc_validator.py`** - Ontology Basic Quality Criteria validation using sqlglot
 - **`src/r2rml_generator.py`** - W3C R2RML mapping generation
@@ -117,8 +117,8 @@ Graph-based Retrieval Augmented Generation for schema intelligence:
 3. Suggests UNION ALL patterns for multi-fact aggregation
 
 **Ontology Triple Storage**: RDF graphs link back to SQL:
-- `ns:TableName` → OWL:Class with `db:tableName`, `db:primaryKey`
-- `ns:relationship` → OWL:ObjectProperty with `db:joinCondition`
+- `ns:TableName` → OWL:Class with `oba:tableName`, `oba:primaryKey`
+- `ns:relationship` → OWL:ObjectProperty with `oba:sqlJoinCondition`
 - Persistent SPARQL queries via Oxigraph (`src/oxigraph_store.py`)
 
 **MCP Resources**: Skills in `.claude/skills/` (fan-trap-prevention, sql-best-practices, chart-examples, analytical-workflow) are exposed as MCP resources via `@mcp.resource()` decorators in `main.py`.

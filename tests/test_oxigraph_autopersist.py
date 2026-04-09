@@ -211,7 +211,7 @@ class TestAutoPersistBehavior:
     async def test_auto_persist_fallback_when_oxigraph_unavailable(
         self, mock_session, mock_context, sample_tables
     ):
-        """Test fallback to full TTL when Oxigraph is not available."""
+        """Test fallback to minimal graph summary when Oxigraph is not available."""
         from src.main import generate_ontology
 
         # Mock session with proper cached schema data
@@ -230,15 +230,16 @@ class TestAutoPersistBehavior:
             auto_persist=True
         )
 
-        # Should return some result (TTL or summary)
+        # Should return minimal graph summary (not full TTL)
         assert isinstance(result, str)
         assert len(result) > 0
+        assert "Minimal Graph Summary" in result or "Classes" in result
 
     @patch('src.main.get_session_data')
-    async def test_auto_persist_false_returns_full_ttl(
+    async def test_auto_persist_false_returns_minimal_summary(
         self, mock_session, mock_context, sample_tables
     ):
-        """Test that auto_persist=False returns full TTL (legacy behavior)."""
+        """Test that auto_persist=False returns minimal graph summary."""
         from src.main import generate_ontology
 
         # Mock session with proper cached schema data
@@ -257,10 +258,10 @@ class TestAutoPersistBehavior:
             auto_persist=False
         )
 
-        # Should return full TTL
+        # Should return minimal graph summary instead of full TTL
         assert isinstance(result, str)
-        assert "@prefix" in result
-        # Should contain ontology content
+        assert "Minimal Graph Summary" in result or "Classes" in result
+        # Should reference table names from the schema
         assert "users" in result.lower() or "User" in result
 
 
