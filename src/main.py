@@ -4,11 +4,12 @@ This module is a thin registration layer for MCP tools. The actual
 implementation logic lives in src/handlers/ modules.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
 
 from dotenv import load_dotenv
@@ -282,17 +283,26 @@ def _clear_session_state(session: SessionData, reason: str = "connection change"
 
 
 class ServerState:
-    """Manages server state with per-session isolation."""
+    """Manages server state with per-session isolation and idle eviction."""
 
     def __init__(self):
         self._sessions: Dict[str, SessionData] = {}
+        self._eviction_task: Optional[asyncio.Task] = None
+
+    @property
+    def session_count(self) -> int:
+        """Number of active sessions."""
+        return len(self._sessions)
 
     def get_session(self, session_id: str) -> SessionData:
         """Get or create session data for a given session ID."""
         if session_id not in self._sessions:
             self._sessions[session_id] = SessionData()
             logger.debug(f"Created new session: {session_id}")
-        return self._sessions[session_id]
+        session = self._sessions[session_id]
+        session.touch()
+        self._ensure_eviction_task()
+        return session
 
     def get_ontology_generator(
         self, base_uri: str = "http://example.com/ontology/"
@@ -305,14 +315,98 @@ class ServerState:
         if session_id in self._sessions:
             session = self._sessions[session_id]
             if session.db_manager:
-                session.db_manager.disconnect()
+                try:
+                    session.db_manager.disconnect()
+                except Exception as e:
+                    logger.warning(f"Error disconnecting db for session {session_id}: {e}")
+            if session.rdf_store.oxigraph_store:
+                try:
+                    session.rdf_store.oxigraph_store.close()
+                except Exception as e:
+                    logger.warning(f"Error closing Oxigraph for session {session_id}: {e}")
             del self._sessions[session_id]
             logger.debug(f"Cleaned up session: {session_id}")
 
     def cleanup(self):
         """Clean up all resources."""
+        if self._eviction_task and not self._eviction_task.done():
+            self._eviction_task.cancel()
+            logger.debug("Cancelled session eviction task")
         for session_id in list(self._sessions.keys()):
             self.cleanup_session(session_id)
+
+    # --- Idle eviction ---
+
+    def _ensure_eviction_task(self):
+        """Lazily start the eviction background task if not already running."""
+        if self._eviction_task is not None and not self._eviction_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            self._eviction_task = loop.create_task(self._eviction_loop())
+            logger.info("Started session eviction background task")
+        except RuntimeError:
+            pass  # No event loop (e.g. tests or sync context)
+
+    async def _eviction_loop(self):
+        """Periodically scan for and evict idle sessions."""
+        from .config import config_manager
+
+        config = config_manager.get_server_config()
+        idle_timeout = config.session_idle_timeout
+        scan_interval = config.session_scan_interval
+
+        if idle_timeout <= 0:
+            logger.info("Session idle eviction disabled (timeout=0)")
+            return
+
+        logger.info(
+            f"Session eviction active: timeout={idle_timeout}s, "
+            f"scan_interval={scan_interval}s"
+        )
+
+        while True:
+            try:
+                await asyncio.sleep(scan_interval)
+                self._evict_idle_sessions(idle_timeout)
+            except asyncio.CancelledError:
+                logger.info("Session eviction task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in session eviction loop: {e}", exc_info=True)
+                await asyncio.sleep(scan_interval)
+
+    def _evict_idle_sessions(self, idle_timeout: int):
+        """Scan sessions and evict those idle beyond the timeout."""
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=idle_timeout)
+
+        to_evict = []
+        for session_id, session in self._sessions.items():
+            if session.last_activity < cutoff:
+                idle_secs = (now - session.last_activity).total_seconds()
+                to_evict.append((session_id, idle_secs))
+
+        total = len(self._sessions)
+        evicting = len(to_evict)
+        if total > 0:
+            logger.debug(
+                f"Session scan: {total} total, {evicting} idle "
+                f"(timeout={idle_timeout}s)"
+            )
+
+        for session_id, idle_secs in to_evict:
+            logger.info(
+                f"Evicting idle session {session_id} "
+                f"(idle {idle_secs:.0f}s, timeout={idle_timeout}s)"
+            )
+            self.cleanup_session(session_id)
+
+        if evicting > 0:
+            logger.info(
+                f"Evicted {evicting} idle session(s). "
+                f"Remaining: {len(self._sessions)}"
+            )
 
 
 # Global server state

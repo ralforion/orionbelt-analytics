@@ -17,6 +17,10 @@ MAX_ENRICHMENT_SAMPLES = 3
 CONNECTION_TIMEOUT = 30
 QUERY_TIMEOUT = 60
 
+# Session idle timeout defaults
+DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 1800  # 30 minutes
+DEFAULT_SESSION_SCAN_INTERVAL_SECONDS = 60
+
 # Ontology generation constants
 DEFAULT_BASE_URI = "http://example.com/ontology/"
 OBA_NAMESPACE = "https://ralforion.com/ns/oba#"

@@ -6,7 +6,15 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-from .constants import DEFAULT_BASE_URI, DEFAULT_POSTGRES_PORT, DEFAULT_SNOWFLAKE_SCHEMA, DEFAULT_DREMIO_PORT, DEFAULT_CLICKHOUSE_PORT
+from .constants import (
+    DEFAULT_BASE_URI,
+    DEFAULT_POSTGRES_PORT,
+    DEFAULT_SNOWFLAKE_SCHEMA,
+    DEFAULT_DREMIO_PORT,
+    DEFAULT_CLICKHOUSE_PORT,
+    DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS,
+    DEFAULT_SESSION_SCAN_INTERVAL_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +27,8 @@ class ServerConfig:
     mcp_transport: str = "http"  # Default to http transport
     mcp_server_host: str = "localhost"
     mcp_server_port: int = 9000
+    session_idle_timeout: int = DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS
+    session_scan_interval: int = DEFAULT_SESSION_SCAN_INTERVAL_SECONDS
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -91,7 +101,15 @@ class ConfigManager:
                 ontology_base_uri=os.getenv("ONTOLOGY_BASE_URI", DEFAULT_BASE_URI),
                 mcp_transport=os.getenv("MCP_TRANSPORT", "http").lower(),
                 mcp_server_host=os.getenv("MCP_SERVER_HOST", "localhost"),
-                mcp_server_port=int(os.getenv("MCP_SERVER_PORT", "9000"))
+                mcp_server_port=int(os.getenv("MCP_SERVER_PORT", "9000")),
+                session_idle_timeout=int(os.getenv(
+                    "SESSION_IDLE_TIMEOUT_SECONDS",
+                    str(DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS),
+                )),
+                session_scan_interval=int(os.getenv(
+                    "SESSION_SCAN_INTERVAL_SECONDS",
+                    str(DEFAULT_SESSION_SCAN_INTERVAL_SECONDS),
+                ))
             )
             logger.info("Server configuration loaded")
         return self._server_config
