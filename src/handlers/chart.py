@@ -1,8 +1,8 @@
 """Chart generation handler implementation."""
 
-import json
 import logging
 from typing import Optional, Union, List, Dict, Any
+from uuid import uuid4
 
 from fastmcp import Context
 
@@ -26,23 +26,15 @@ async def generate_chart(
     sort_order: Optional[str],
     output_format: str,
     get_session_data=None,
+    add_resource=None,
 ) -> str:
     """Generate interactive or static charts from query results.
 
     This handler delegates to tools.chart.generate_chart for the core charting
-    logic and handles MCP-specific concerns (UIResource, Image, ctx.info).
+    logic and handles MCP Apps resource registration.
     """
+    import json
     from ..tools.chart import generate_chart as generate_chart_impl
-    import numpy as np
-
-    # Custom JSON encoder for numpy arrays from Plotly
-    class NumpyEncoder(json.JSONEncoder):
-        def default(self, obj):
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            if isinstance(obj, (np.integer, np.floating)):
-                return obj.item()
-            return super().default(obj)
 
     # Parse data_source if it's a string
     if data_source and isinstance(data_source, str):
@@ -103,18 +95,31 @@ async def generate_chart(
         await ctx.info("Chart generation failed")
         raise RuntimeError(result.get("error", "Chart generation failed"))
 
-    # Handle interactive output - return JSON chart data for MCP Apps viewer
+    # Handle interactive output — generate HTML and register as ui:// resource
     if output_format == "interactive":
-        if isinstance(result, dict) and "traces" in result:
-            data_points = result.get("metadata", {}).get("data_points", 0)
-            chart_type_display = result.get("metadata", {}).get("chart_type", chart_type)
+        if isinstance(result, dict) and "figure" in result:
+            fig = result["figure"]
+            metadata = result.get("metadata", {})
+            data_points = metadata.get("data_points", 0)
+            chart_type_display = metadata.get("chart_type", chart_type)
 
-            # Return the chart data as JSON string
-            # The MCP Apps framework will pass this to the chart viewer iframe
-            chart_json = json.dumps(result, cls=NumpyEncoder)
+            # Generate self-contained HTML with Plotly.js from CDN
+            html = fig.to_html(include_plotlyjs="cdn", full_html=True)
 
-            await ctx.info(f"Interactive chart generated: {chart_type_display} with {data_points} data points")
-            return chart_json
+            # Register as a FastMCP Apps resource
+            chart_uri = f"ui://orionbelt/chart/{uuid4()}"
+            if add_resource:
+                from fastmcp.resources import TextResource
+                add_resource(TextResource(
+                    uri=chart_uri,
+                    name=f"Chart: {title or chart_type_display}",
+                    text=html,
+                    mime_type="text/html",
+                ))
+                logger.info(f"Registered chart resource: {chart_uri}")
+
+            await ctx.info(f"Interactive {chart_type_display} chart with {data_points} data points")
+            return f"Chart generated: {chart_uri}"
         else:
             await ctx.info("Chart generation failed")
             raise RuntimeError("Chart generation failed: unexpected result format for interactive mode")

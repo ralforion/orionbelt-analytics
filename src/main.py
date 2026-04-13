@@ -15,7 +15,6 @@ from typing import Optional, List, Dict, Any, Union
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastmcp import FastMCP, Context
-from fastmcp.apps import AppConfig, ResourceCSP
 
 from .database_manager import DatabaseManager
 from .ontology_generator import OntologyGenerator
@@ -28,7 +27,6 @@ from .paths import (
     get_env_file_path,
     ensure_output_dir,
     get_oxigraph_store_dir,
-    get_chart_viewer_path,
     get_skills_dir,
 )
 
@@ -55,16 +53,6 @@ else:
 
 # Ensure output directory exists (Task 2: S3)
 ensure_output_dir()
-
-
-# --- MCP Apps: Load Chart Viewer HTML (Task 2: S3 - use paths.py) ---
-_CHART_VIEWER_HTML_PATH = get_chart_viewer_path()
-try:
-    CHART_VIEWER_HTML = _CHART_VIEWER_HTML_PATH.read_text(encoding="utf-8")
-    logger.info(f"Loaded chart viewer HTML app from {_CHART_VIEWER_HTML_PATH}")
-except FileNotFoundError:
-    CHART_VIEWER_HTML = None
-    logger.warning(f"Chart viewer HTML app not found at {_CHART_VIEWER_HTML_PATH}")
 
 
 # --- MCP Server Setup ---
@@ -131,27 +119,6 @@ Primary Use Case: Semantic database analysis with ontology-enhanced Text-to-SQL
         __version__=__version__
     ),
 )
-
-
-# --- MCP Apps: Register Chart Viewer Resource ---
-@mcp.resource(
-    "ui://orionbelt/chart-viewer",
-    app=AppConfig(
-        csp=ResourceCSP(
-            resource_domains=["https://cdn.plot.ly", "https://unpkg.com"],
-            connect_domains=[],
-        )
-    ),
-)
-def chart_viewer_resource() -> str:
-    """Serve the interactive chart viewer app for MCP Apps."""
-    if CHART_VIEWER_HTML is None:
-        return """<!DOCTYPE html>
-<html><body>
-<h1>Chart Viewer Not Available</h1>
-<p>The chart viewer HTML app was not found at startup.</p>
-</body></html>"""
-    return CHART_VIEWER_HTML
 
 
 # --- MCP Resources: Skills (Task 2: S3 - use get_skills_dir()) ---
@@ -872,7 +839,7 @@ async def execute_sql_query(
     )
 
 
-@mcp.tool(app=AppConfig(resource_uri="ui://orionbelt/chart-viewer"))
+@mcp.tool()
 async def generate_chart(
     ctx: Context,
     data_source: Union[List[Dict[str, Any]], str],
@@ -888,10 +855,10 @@ async def generate_chart(
     sort_order: Optional[str] = None,
     output_format: str = "interactive",
 ) -> str:
-    """Generate interactive or static charts from query results.
+    """Generate an interactive chart rendered via MCP Apps.
 
     Args:
-        data_source: List of dicts from execute_sql_query()['data']
+        data_source: JSON array of objects, e.g. [{"name": "A", "value": 10}, ...] — pass as array, not string
         chart_type: 'bar', 'line', 'scatter', or 'heatmap'
         x_column: Column name for X-axis
         y_column: Column name(s) for Y-axis
@@ -903,15 +870,13 @@ async def generate_chart(
         sort_by: Column to sort by
         sort_order: 'ascending' or 'descending'
         output_format: "interactive" (default, renders via MCP Apps) or "image" (saves PNG file)
-
-    Returns:
-        Interactive chart JSON via MCP Apps or file path to saved PNG
     """
     return await _h_chart.generate_chart(
         ctx, data_source, chart_type, x_column, y_column,
         color_column, title, chart_style, width, height,
         sort_by, sort_order, output_format,
         get_session_data=get_session_data,
+        add_resource=mcp.add_resource,
     )
 
 
