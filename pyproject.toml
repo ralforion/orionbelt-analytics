@@ -17,7 +17,7 @@ classifiers = [
 ]
 dependencies = [
     # Core MCP Framework with Apps support
-    "fastmcp[apps]>=3.1.0",
+    "fastmcp[apps]>=3.2.3",
     # Database connectivity - latest versions
     "sqlalchemy>=2.0.46",
     "psycopg2-binary>=2.9.11",
