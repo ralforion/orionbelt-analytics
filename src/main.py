@@ -862,7 +862,7 @@ async def generate_chart(
         chart_type: 'bar', 'line', 'scatter', or 'heatmap'
         x_column: Column name for X-axis
         y_column: Column name(s) for Y-axis
-        color_column: Optional column for grouping/coloring
+        color_column: Optional column for grouping/coloring (heatmap: numeric value column for color intensity)
         title: Chart title
         chart_style: 'default', 'stacked', or 'grouped'
         width: Chart width in pixels

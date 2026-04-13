@@ -374,7 +374,18 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     elif chart_type == "heatmap":
         if y_column:
             # Pivot table heatmap
-            pivot_df = df.pivot_table(index=x_column, columns=y_column, aggfunc='size', fill_value=0)
+            if color_column and color_column in df.columns:
+                # Use color_column as the z-values (color intensity)
+                pivot_df = df.pivot_table(
+                    index=x_column, columns=y_column,
+                    values=color_column, aggfunc='sum', fill_value=0
+                )
+            else:
+                # No value column — count occurrences (frequency heatmap)
+                pivot_df = df.pivot_table(
+                    index=x_column, columns=y_column,
+                    aggfunc='size', fill_value=0
+                )
 
             # Sort heatmap: x_column ascending (index), y_column descending (columns)
             # Default behavior, can be overridden

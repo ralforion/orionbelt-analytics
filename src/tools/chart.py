@@ -32,7 +32,8 @@ def generate_chart(
         y_column: Column name(s) for Y-axis. Can be:
             - String: single measure (all chart types)
             - List of strings: multiple measures (line charts only - creates multi-line comparison)
-        color_column: Column for color grouping (for stacked/grouped bar charts)
+        color_column: Column for color grouping (bar: stacked/grouped series;
+            heatmap: numeric value column for color intensity / z-axis)
         title: Chart title
         chart_style: "grouped" or "stacked" (for bar charts)
         width: Chart width in pixels
