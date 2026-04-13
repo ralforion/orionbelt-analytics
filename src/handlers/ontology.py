@@ -64,10 +64,12 @@ def _build_minimal_graph_summary(ontology_ttl: str) -> str:
             label = str(lbl)
         if not label:
             label = str(subj).split("/")[-1]
-        domain_name = ref_table = None
+        # Get source table from rdfs:domain (oba:tableName is not set on ObjectProperties)
+        domain_name = None
+        for dom in g.objects(subj, RDFS.domain):
+            domain_name = str(dom).split("/")[-1]
+        ref_table = None
         if oba_ns:
-            for tn in g.objects(subj, oba_ns.tableName):
-                domain_name = str(tn)
             for rt in g.objects(subj, oba_ns.referencedTable):
                 ref_table = str(rt)
         if domain_name and ref_table:
