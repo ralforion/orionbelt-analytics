@@ -421,21 +421,23 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     elif chart_type == "heatmap":
         if y_column:
             # Pivot table heatmap
+            # px.imshow maps: pivot index → y-axis, pivot columns → x-axis
+            # So use y_column as index and x_column as columns
             if color_column and color_column in df.columns:
                 # Use color_column as the z-values (color intensity)
                 pivot_df = df.pivot_table(
-                    index=x_column, columns=y_column,
+                    index=y_column, columns=x_column,
                     values=color_column, aggfunc='sum', fill_value=0
                 )
             else:
                 # No value column — count occurrences (frequency heatmap)
                 pivot_df = df.pivot_table(
-                    index=x_column, columns=y_column,
+                    index=y_column, columns=x_column,
                     aggfunc='size', fill_value=0
                 )
 
-            # Sort index (x_column) — use ordinal order for weekdays/times,
-            # otherwise alphabetical ascending by default
+            # Sort index (y_column) — use ordinal order for weekdays/times,
+            # otherwise descending by default
             idx_ordinal = _get_ordinal_sort_key(pivot_df.index)
             if idx_ordinal:
                 key_fn, default_asc = idx_ordinal
@@ -444,20 +446,20 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
                     range(len(pivot_df)), key=lambda i: key_fn(pivot_df.index[i]),
                     reverse=not asc
                 )]
-            elif not sort_by or sort_by == x_column:
-                x_sort_order = sort_order if sort_order else 'ascending'
-                pivot_df = pivot_df.sort_index(ascending=(x_sort_order == 'ascending'))
+            else:
+                pivot_df = pivot_df.sort_index(ascending=False)
 
-            # Sort columns (y_column) — use ordinal order for weekdays/times,
-            # otherwise descending by default
+            # Sort columns (x_column) — use ordinal order for weekdays/times,
+            # otherwise ascending by default
             col_ordinal = _get_ordinal_sort_key(pivot_df.columns)
             if col_ordinal:
                 key_fn, default_asc = col_ordinal
                 asc = (sort_order == 'ascending') if sort_order else default_asc
                 ordered_cols = sorted(pivot_df.columns, key=key_fn, reverse=not asc)
                 pivot_df = pivot_df[ordered_cols]
-            elif y_column:
-                pivot_df = pivot_df.sort_index(axis=1, ascending=False)
+            elif not sort_by or sort_by == x_column:
+                x_sort_order = sort_order if sort_order else 'ascending'
+                pivot_df = pivot_df.sort_index(axis=1, ascending=(x_sort_order == 'ascending'))
         else:
             # Correlation heatmap
             numeric_cols = df.select_dtypes(include=['number']).columns
