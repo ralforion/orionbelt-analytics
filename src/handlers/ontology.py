@@ -357,49 +357,49 @@ async def suggest_semantic_names(
 
         extraction_result = generator.extract_names_for_review(compact=True)
 
-        extraction_result["llm_instructions"] = {
-            "task": "Review the extracted names and provide business-friendly alternatives",
-            "focus_on": [
-                "Names marked with 'needs_review.is_cryptic: true'",
-                "Abbreviations that should be expanded",
-                "Technical names that need business context",
-            ],
-            "response_format": {
-                "classes": [
-                    {"original_name": "string", "suggested_name": "string", "description": "string"}
-                ],
-                "properties": [
-                    {
-                        "original_name": "string",
-                        "table_name": "string",
-                        "suggested_name": "string",
-                        "description": "string",
-                    }
-                ],
-                "relationships": [
-                    {"original_name": "string", "suggested_name": "string", "description": "string"}
-                ],
-            },
-            "guidelines": [
-                "Use clear, business-oriented terminology",
-                "Expand abbreviations to full words (e.g., 'cust' -> 'Customer')",
-                "Use Title Case for class names",
-                "Use descriptive phrases for properties",
-                "Provide meaningful descriptions that explain business context",
-                "Keep the original oba:tableName and oba:columnName for SQL generation",
-            ],
-        }
+        # Build compact review lists — only cryptic items, grouped to save tokens
+        cryptic_classes = [
+            c["local_name"]
+            for c in extraction_result["classes"]
+            if c.get("needs_review", {}).get("is_cryptic")
+        ]
 
-        extraction_result["next_step"] = "Review the names above and call apply_semantic_names with your suggestions"
-        extraction_result["next_tool"] = "apply_semantic_names"
+        # Group cryptic properties by table for compact output
+        cryptic_props_by_table: Dict[str, list] = {}
+        for p in extraction_result["properties"]:
+            if p.get("needs_review", {}).get("is_cryptic"):
+                table = p.get("table_name") or "unknown"
+                cryptic_props_by_table.setdefault(table, []).append(
+                    p.get("column_name") or p["local_name"]
+                )
+
+        cryptic_relationships = [
+            r["local_name"]
+            for r in extraction_result["relationships"]
+            if r.get("needs_review", {}).get("is_cryptic")
+        ]
+
+        total_cryptic = (
+            len(cryptic_classes)
+            + sum(len(v) for v in cryptic_props_by_table.values())
+            + len(cryptic_relationships)
+        )
+        summary = extraction_result["summary"]
 
         await ctx.info(
-            f"Extracted {extraction_result['summary']['total_classes']} classes, "
-            f"{extraction_result['summary']['total_properties']} properties for review; "
+            f"Found {total_cryptic} cryptic names to review; "
             f"next call should be apply_semantic_names with your suggestions"
         )
 
-        return extraction_result
+        return {
+            "ontology_file": source_filename,
+            "summary": summary,
+            "cryptic_classes": cryptic_classes,
+            "cryptic_properties_by_table": cryptic_props_by_table,
+            "cryptic_relationships": cryptic_relationships,
+            "next_step": "Review the cryptic names and call apply_semantic_names with your suggestions",
+            "next_tool": "apply_semantic_names",
+        }
 
     except Exception as e:
         logger.error(f"Error extracting names for review: {e}")

@@ -419,16 +419,14 @@ class TestMCPToolsAsync:
         assert result["table_count"] == 2
         assert len(result["tables"]) == 2
 
-        # Check users table structure
+        # Check users table summary (compact response: column count, not full details)
         users_table = next(t for t in result["tables"] if t["name"] == "users")
-        assert len(users_table["columns"]) == 3
+        assert users_table["columns"] == 3
         assert users_table["primary_keys"] == ["id"]
-        assert users_table["row_count"] == 150
 
         # Check orders table with foreign key
         orders_table = next(t for t in result["tables"] if t["name"] == "orders")
         assert len(orders_table["foreign_keys"]) == 1
-        assert orders_table["foreign_keys"][0]["referenced_table"] == "users"
 
     async def test_analyze_schema_no_connection(self, mock_ctx, mock_session_data):
         """Test schema analysis without connection raises exception."""

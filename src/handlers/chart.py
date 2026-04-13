@@ -5,7 +5,6 @@ import logging
 from typing import Optional, Union, List, Dict, Any
 
 from fastmcp import Context
-from fastmcp.utilities.types import Image
 
 from ..chart_utils import save_image_to_tmp
 
@@ -27,7 +26,7 @@ async def generate_chart(
     sort_order: Optional[str],
     output_format: str,
     get_session_data=None,
-) -> Union[str, Image]:
+) -> str:
     """Generate interactive or static charts from query results.
 
     This handler delegates to tools.chart.generate_chart for the core charting
@@ -139,8 +138,8 @@ async def generate_chart(
             await ctx.info("Chart generation failed to save file")
             raise RuntimeError("Failed to save chart image to file")
 
-        await ctx.info(f"Chart image generated successfully: {image_file_path}")
-        return Image(path=str(image_file_path))
+        await ctx.info(f"Chart image saved: {image_file_path}")
+        return f"Chart saved to: {image_file_path}"
     else:
         await ctx.info("Chart generation failed")
         raise RuntimeError("Chart generation failed: unexpected result format")

@@ -15,7 +15,6 @@ from typing import Optional, List, Dict, Any, Union
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastmcp import FastMCP, Context
-from fastmcp.utilities.types import Image
 from fastmcp.server.apps import AppConfig, ResourceCSP
 
 from .database_manager import DatabaseManager
@@ -714,15 +713,28 @@ async def apply_semantic_names(
     ontology_file: Optional[str] = None,
     save_to_file: bool = True,
 ) -> str:
-    """Apply LLM-suggested semantic names to an existing ontology.
+    """Apply semantic name suggestions to an existing ontology.
+
+    The suggestions parameter must be a JSON object with 'classes', 'properties',
+    and/or 'relationships' arrays. Each entry needs 'original_name' and 'suggested_name'.
+
+    Example suggestions JSON:
+    {
+      "classes": [
+        {"original_name": "acctbal", "suggested_name": "AccountBalance", "description": "Account balance records"}
+      ],
+      "properties": [
+        {"original_name": "bankid", "table_name": "acctbal", "suggested_name": "Bank Identifier"}
+      ],
+      "relationships": [
+        {"original_name": "acctbal_to_banks", "suggested_name": "Account Bank Relationship"}
+      ]
+    }
 
     Args:
-        suggestions: JSON string containing name suggestions
+        suggestions: JSON string with classes/properties/relationships arrays (see example above)
         ontology_file: The ontology filename from generate_ontology response
         save_to_file: Whether to save the updated ontology to a file
-
-    Returns:
-        Updated ontology in Turtle format with semantic names applied
     """
     return await _h_ontology.apply_semantic_names(
         ctx, suggestions, ontology_file, save_to_file,
@@ -879,8 +891,8 @@ async def generate_chart(
     height: int = 600,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
-    output_format: str = "image",
-) -> Union[str, Image]:
+    output_format: str = "interactive",
+) -> str:
     """Generate interactive or static charts from query results.
 
     Args:
@@ -895,10 +907,10 @@ async def generate_chart(
         height: Chart height in pixels
         sort_by: Column to sort by
         sort_order: 'ascending' or 'descending'
-        output_format: "interactive" or "image"
+        output_format: "interactive" (default, renders via MCP Apps) or "image" (saves PNG file)
 
     Returns:
-        Interactive chart via MCP Apps or PNG image
+        Interactive chart JSON via MCP Apps or file path to saved PNG
     """
     return await _h_chart.generate_chart(
         ctx, data_source, chart_type, x_column, y_column,
