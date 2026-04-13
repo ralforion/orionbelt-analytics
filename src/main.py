@@ -590,8 +590,7 @@ async def connect_database(ctx: Context, db_type: str) -> str:
 async def list_schemas(ctx: Context) -> List[str]:
     """Get a list of available schemas from the connected database.
 
-    Returns:
-        List of schema names or error response
+    REQUIRES: connect_database must be called first.
     """
     return await _h_connection.list_schemas(ctx, get_session_db_manager=get_session_db_manager)
 
@@ -617,13 +616,12 @@ async def analyze_schema(
 ) -> Dict[str, Any]:
     """Analyze database schema and return table metadata with relationships.
 
+    REQUIRES: connect_database must be called first and must complete before calling this tool.
+
     Args:
         schema_name: Schema to analyze (optional, uses default if not specified)
         lightweight: If True (default), return minimal data (table names, FK relationships, fan-trap warnings).
                      If False, return full schema with all column details.
-
-    Returns:
-        Schema analysis results
     """
     return await _h_schema.analyze_schema(
         ctx, schema_name, lightweight,
@@ -642,12 +640,11 @@ async def get_table_details(
 ) -> Dict[str, Any]:
     """Get detailed metadata for a single table.
 
+    REQUIRES: connect_database must be called first.
+
     Args:
         table_name: Name of the table to analyze
         schema_name: Schema containing the table (optional)
-
-    Returns:
-        Table details including columns, constraints, and row count
     """
     return await _h_schema.get_table_details(
         ctx, table_name, schema_name, get_session_db_manager=get_session_db_manager
@@ -820,13 +817,12 @@ async def sample_table_data(
 ) -> List[Dict[str, Any]]:
     """Sample data from a specific table for analysis.
 
+    REQUIRES: connect_database must be called first.
+
     Args:
         table_name: Name of the table to sample
         schema_name: Schema containing the table (optional)
         limit: Maximum number of rows to return (default: 10, max: 100)
-
-    Returns:
-        List of sample rows as dictionaries
     """
     return await _h_schema.sample_table_data(
         ctx, table_name, schema_name, limit, get_session_db_manager=get_session_db_manager
@@ -860,14 +856,13 @@ async def execute_sql_query(
 ) -> Dict[str, Any]:
     """Execute SQL query with validation and fan-trap protection.
 
+    REQUIRES: connect_database must be called first.
+
     Args:
         sql_query: SQL SELECT statement (fully qualified identifiers required)
         limit: Maximum rows to return (default: 1000, max: 5,000)
         checklist_completed: Confirmation that pre-execution checklist is complete
         query_intent: Optional natural language description of query intent
-
-    Returns:
-        Query results with data, columns, row_count, execution_time_ms
     """
     return await _h_query.execute_sql_query(
         ctx, sql_query, limit, checklist_completed, query_intent,
