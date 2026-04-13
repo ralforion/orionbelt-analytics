@@ -15,7 +15,7 @@ from typing import Optional, List, Dict, Any, Union
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastmcp import FastMCP, Context
-from fastmcp.server.apps import AppConfig, ResourceCSP
+from fastmcp.apps import AppConfig, ResourceCSP
 
 from .database_manager import DatabaseManager
 from .ontology_generator import OntologyGenerator
