@@ -12,7 +12,8 @@ from ..exceptions import (
     ValidationError,
 )
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
-from ..paths import ensure_output_dir
+from ..lifecycle.metadata import update_workspace_section, update_workspace_rdf
+from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,8 @@ async def store_ontology_in_rdf(
         ).to_response()
 
     try:
-        output_dir = ensure_output_dir()
-        ontology_path = output_dir / session.ontology_file
+        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+        ontology_path = conn_dir / session.ontology_file
 
         if not ontology_path.exists():
             return ValidationError(
@@ -64,6 +65,35 @@ async def store_ontology_in_rdf(
         await ctx.info(
             f"Stored ontology for schema '{effective_schema}' in RDF store: {triple_count} triples"
         )
+
+        # Update workspace: mark ontology as persisted + write rdf_store
+        if session.connection_id:
+            try:
+                from datetime import datetime
+                await update_workspace_section(
+                    connection_id=session.connection_id,
+                    output_dir=OUTPUT_DIR,
+                    schema_name=effective_schema,
+                    section="ontology",
+                    data={
+                        "ontology_file": session.ontology_file,
+                        "enriched": True,
+                        "graph_uri": graph_uri,
+                        "persisted_to_rdf": True,
+                        "generated_at": datetime.now().isoformat(),
+                    },
+                )
+                await update_workspace_rdf(
+                    connection_id=session.connection_id,
+                    output_dir=OUTPUT_DIR,
+                    data={
+                        "initialized": True,
+                        "graph_uris": [graph_uri],
+                        "initialized_at": datetime.now().isoformat(),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write workspace metadata: {e}")
 
         return (
             f"Ontology stored successfully in RDF store!\n\n"

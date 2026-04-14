@@ -3,8 +3,10 @@ Version Metadata Management
 
 Tracks versions of GraphRAG and RDF ontology data for each database connection.
 Enables version history, comparison, rollback, and automatic cleanup.
+Also manages workspace state for session restore across reconnections.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -13,6 +15,9 @@ from datetime import datetime
 from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
+
+# Module-level lock dict for serializing concurrent metadata writes per connection
+_metadata_locks: Dict[str, asyncio.Lock] = {}
 
 
 @dataclass
@@ -287,3 +292,134 @@ class VersionMetadataManager:
     def get_retention_policy(self) -> RetentionPolicy:
         """Get current retention policy."""
         return RetentionPolicy(**self.metadata.get("retention_policy", {}))
+
+    # --- Workspace State Management ---
+
+    def get_workspace(self) -> Optional[Dict[str, Any]]:
+        """Get the full workspace section from metadata."""
+        return self.metadata.get("workspace")
+
+    def get_workspace_schema(self, schema_name: str) -> Optional[Dict[str, Any]]:
+        """Get workspace data for a specific schema."""
+        workspace = self.get_workspace()
+        if not workspace:
+            return None
+        return workspace.get("schemas", {}).get(schema_name)
+
+    def update_workspace(
+        self,
+        schema_name: str,
+        section: str,
+        data: Dict[str, Any],
+    ) -> None:
+        """Update a workspace section for a schema.
+
+        Args:
+            schema_name: Database schema name (e.g. "public")
+            section: Section key ("schema", "ontology", "graphrag")
+            data: Section data dict
+        """
+        if "workspace" not in self.metadata:
+            self.metadata["workspace"] = {
+                "updated_at": datetime.now().isoformat(),
+                "schemas": {},
+            }
+
+        workspace = self.metadata["workspace"]
+
+        if schema_name not in workspace.get("schemas", {}):
+            workspace.setdefault("schemas", {})[schema_name] = {}
+
+        workspace["schemas"][schema_name][section] = data
+        workspace["updated_at"] = datetime.now().isoformat()
+
+        self._save_metadata()
+        logger.debug(
+            f"Updated workspace.{section} for schema '{schema_name}' "
+            f"(connection {self.connection_id})"
+        )
+
+    def update_workspace_connection(
+        self,
+        db_type: str,
+        db_name: str,
+    ) -> None:
+        """Update connection-level workspace info.
+
+        Args:
+            db_type: Database type (e.g. "postgresql", "snowflake")
+            db_name: Database name
+        """
+        if "workspace" not in self.metadata:
+            self.metadata["workspace"] = {
+                "updated_at": datetime.now().isoformat(),
+                "schemas": {},
+            }
+
+        workspace = self.metadata["workspace"]
+        workspace["db_type"] = db_type
+        workspace["db_name"] = db_name
+        workspace["updated_at"] = datetime.now().isoformat()
+
+        self._save_metadata()
+
+    def update_workspace_rdf_store(self, data: Dict[str, Any]) -> None:
+        """Update connection-level RDF store info.
+
+        Args:
+            data: RDF store state dict (initialized, graph_uris, etc.)
+        """
+        if "workspace" not in self.metadata:
+            self.metadata["workspace"] = {
+                "updated_at": datetime.now().isoformat(),
+                "schemas": {},
+            }
+
+        self.metadata["workspace"]["rdf_store"] = data
+        self.metadata["workspace"]["updated_at"] = datetime.now().isoformat()
+
+        self._save_metadata()
+        logger.debug(f"Updated workspace.rdf_store (connection {self.connection_id})")
+
+
+async def update_workspace_section(
+    connection_id: str,
+    output_dir: Path,
+    schema_name: str,
+    section: str,
+    data: Dict[str, Any],
+) -> None:
+    """Thread-safe workspace section update with per-connection locking.
+
+    Use this from async handlers to prevent concurrent writes from
+    racing on the same metadata.json file.
+
+    Args:
+        connection_id: Database connection fingerprint
+        output_dir: Base output directory (usually OUTPUT_DIR)
+        schema_name: Database schema name
+        section: Section key ("schema", "ontology", "graphrag")
+        data: Section data dict
+    """
+    lock = _metadata_locks.setdefault(connection_id, asyncio.Lock())
+    async with lock:
+        mgr = VersionMetadataManager(connection_id, output_dir)
+        mgr.update_workspace(schema_name, section, data)
+
+
+async def update_workspace_rdf(
+    connection_id: str,
+    output_dir: Path,
+    data: Dict[str, Any],
+) -> None:
+    """Thread-safe RDF store workspace update.
+
+    Args:
+        connection_id: Database connection fingerprint
+        output_dir: Base output directory
+        data: RDF store state dict
+    """
+    lock = _metadata_locks.setdefault(connection_id, asyncio.Lock())
+    async with lock:
+        mgr = VersionMetadataManager(connection_id, output_dir)
+        mgr.update_workspace_rdf_store(data)

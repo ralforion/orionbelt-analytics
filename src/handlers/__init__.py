@@ -11,6 +11,7 @@ Modules:
     chart      - Chart generation (interactive and static)
     rdf        - Oxigraph RDF store and SPARQL operations
     graphrag   - GraphRAG initialization and search
+    workspace  - Workspace restore from previous sessions
     info       - Server information
 """
 
@@ -21,6 +22,7 @@ from . import query
 from . import chart
 from . import rdf
 from . import graphrag
+from . import workspace
 from . import info
 
 __all__ = [
@@ -31,5 +33,6 @@ __all__ = [
     "chart",
     "rdf",
     "graphrag",
+    "workspace",
     "info",
 ]

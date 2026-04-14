@@ -12,7 +12,8 @@ from ..exceptions import ConnectionError
 from ..graphrag import GraphRAGManager
 from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
-from ..paths import ensure_output_dir
+from ..lifecycle.metadata import update_workspace_section
+from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -73,14 +74,12 @@ async def _auto_generate_ontology_background(
         ontology_generator = OntologyGenerator(base_uri=base_uri)
         ontology_ttl = ontology_generator.generate_ontology(schema_data)
 
-        output_dir = ensure_output_dir()
-        connection_dir = output_dir / (session.connection_id or "default")
-        connection_dir.mkdir(parents=True, exist_ok=True)
+        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        ontology_file = connection_dir / f"ontology_{schema_name}_{timestamp}.ttl"
+        ontology_file = conn_dir / f"ontology_{schema_name}_{timestamp}.ttl"
         ontology_file.write_text(ontology_ttl, encoding="utf-8")
-        session.ontology_file = f"{session.connection_id}/{ontology_file.name}"
+        session.ontology_file = ontology_file.name
 
         if OXIGRAPH_AVAILABLE:
             try:
@@ -136,6 +135,25 @@ async def _auto_initialize_graphrag_background(
 
         logger.info(f"GraphRAG auto-initialized successfully ({elapsed:.2f}s)")
         logger.info(f"Indexed {len(tables_dict)} tables with their metadata")
+
+        # Write workspace metadata for graphrag section
+        if session.connection_id:
+            try:
+                stats = session.graphrag_manager.vector_store.get_statistics()
+                await update_workspace_section(
+                    connection_id=session.connection_id,
+                    output_dir=OUTPUT_DIR,
+                    schema_name=schema_name,
+                    section="graphrag",
+                    data={
+                        "initialized": True,
+                        "table_count": len(tables_dict),
+                        "embedding_count": stats.get("total_elements", 0),
+                        "initialized_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write workspace metadata: {e}")
 
         # Chain to ontology generation if enabled
         auto_ontology = os.getenv("AUTO_ONTOLOGY", "false").lower()
@@ -225,6 +243,25 @@ async def initialize_graphrag(
 
         output_dir = ensure_output_dir()
         session.graphrag_manager.save_state(output_dir)
+
+        # Write workspace metadata for graphrag section
+        if session.connection_id:
+            try:
+                stats = session.graphrag_manager.vector_store.get_statistics()
+                await update_workspace_section(
+                    connection_id=session.connection_id,
+                    output_dir=OUTPUT_DIR,
+                    schema_name=effective_schema or "default",
+                    section="graphrag",
+                    data={
+                        "initialized": True,
+                        "table_count": len(tables_dict),
+                        "embedding_count": stats.get("total_elements", 0),
+                        "initialized_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write workspace metadata: {e}")
 
         await ctx.info(
             f"GraphRAG initialized for schema '{effective_schema or 'default'}' with {len(tables_dict)} tables"

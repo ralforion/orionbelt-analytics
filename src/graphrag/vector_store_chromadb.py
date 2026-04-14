@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 
+from ..paths import OUTPUT_DIR
+
 try:
     import chromadb
     from chromadb.config import Settings
@@ -68,7 +70,7 @@ class ChromaDBVectorStore:
         self.dimension = dimension
 
         # ChromaDB storage path
-        db_path = Path("tmp") / "chromadb" / connection_id
+        db_path = OUTPUT_DIR / "chromadb" / connection_id
         db_path.mkdir(parents=True, exist_ok=True)
 
         # Initialize ChromaDB client (embedded mode)

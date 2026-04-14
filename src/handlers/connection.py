@@ -7,6 +7,9 @@ from fastmcp import Context
 
 from ..constants import SUPPORTED_DB_TYPES
 from ..exceptions import ConnectionError, ValidationError
+from ..lifecycle.metadata import VersionMetadataManager
+from ..paths import OUTPUT_DIR
+from ..workspace import detect_workspace, format_workspace_summary
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +281,21 @@ async def connect_database(
         session.clear_schema_cache()
 
         await ctx.info(f"Connected to {db_type}: {db_name}")
-        return f"Successfully connected to {db_type} database: {db_name}"
+
+        # Write workspace connection info
+        try:
+            mgr = VersionMetadataManager(new_conn_id, OUTPUT_DIR)
+            mgr.update_workspace_connection(db_type=db_type, db_name=db_name)
+        except Exception as e:
+            logger.warning(f"Failed to write workspace connection info: {e}")
+
+        # Detect existing workspace for this connection
+        response = f"Successfully connected to {db_type} database: {db_name}"
+        workspace = detect_workspace(new_conn_id)
+        if workspace:
+            response += "\n\n" + format_workspace_summary(workspace)
+
+        return response
     else:
         await ctx.info("Database connection failed; check credentials and try again")
         return ConnectionError(

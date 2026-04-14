@@ -8,7 +8,8 @@ from typing import Optional, Dict, List, Any
 
 from fastmcp import Context
 
-from ..paths import ensure_output_dir
+from ..lifecycle.metadata import update_workspace_section
+from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
 from ..r2rml_generator import R2RMLGenerator
 
 logger = logging.getLogger(__name__)
@@ -273,13 +274,13 @@ async def analyze_schema(
     session = get_session_data(ctx)
     session.cache_schema_analysis(schema_name or "", table_info_objects)
 
-    # Save schema analysis to output folder
+    # Save schema analysis to connection-scoped output folder
     schema_filename = None
     try:
-        output_dir = ensure_output_dir()
+        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
         schema_filename = get_session_safe_filename(ctx, "schema", schema_safe) + ".json"
-        schema_file_path = output_dir / schema_filename
+        schema_file_path = conn_dir / schema_filename
 
         with open(schema_file_path, "w", encoding="utf-8") as f:
             json.dump(full_schema_data, f, indent=2, ensure_ascii=False)
@@ -324,7 +325,7 @@ async def analyze_schema(
     # Generate R2RML mapping
     if table_info_objects:
         try:
-            output_dir = ensure_output_dir()
+            conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
             from ..constants import DEFAULT_R2RML_BASE_IRI
 
             effective_schema = schema_name or "default"
@@ -342,7 +343,7 @@ async def analyze_schema(
 
             schema_safe = effective_schema.replace(" ", "_").replace(".", "_")
             r2rml_filename = get_session_safe_filename(ctx, "r2rml", schema_safe) + ".ttl"
-            r2rml_file_path = output_dir / r2rml_filename
+            r2rml_file_path = conn_dir / r2rml_filename
 
             with open(r2rml_file_path, "w", encoding="utf-8") as f:
                 f.write(r2rml_content)
@@ -415,6 +416,25 @@ async def analyze_schema(
         session.graphrag._init_task = task
         logger.info("GraphRAG auto-initialization started in background (full mode)")
         schema_result["graphrag_auto_init"] = "started in background"
+
+    # Write workspace metadata for schema section
+    if session.connection_id and schema_filename:
+        try:
+            from datetime import datetime
+            await update_workspace_section(
+                connection_id=session.connection_id,
+                output_dir=OUTPUT_DIR,
+                schema_name=schema_name or "default",
+                section="schema",
+                data={
+                    "schema_file": schema_filename,
+                    "r2rml_file": schema_result.get("r2rml_file"),
+                    "table_count": len(table_info_objects),
+                    "analyzed_at": datetime.now().isoformat(),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write workspace metadata: {e}")
 
     return schema_result
 

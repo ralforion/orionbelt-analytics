@@ -12,7 +12,8 @@ from fastmcp import Context
 
 from ..database_manager import TableInfo, ColumnInfo
 from ..ontology_generator import OntologyGenerator
-from ..paths import ensure_output_dir, PROJECT_ROOT
+from ..lifecycle.metadata import update_workspace_section, update_workspace_rdf
+from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR, PROJECT_ROOT
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
 
 logger = logging.getLogger(__name__)
@@ -220,14 +221,15 @@ async def generate_ontology(
     generator = _server_state.get_ontology_generator(base_uri=base_uri)
     ontology_ttl = generator.generate_from_schema(tables_info)
 
-    # Save ontology to output folder
+    # Save ontology to connection-scoped output folder
     ontology_filename = None
     try:
-        output_dir = ensure_output_dir()
+        session = get_session_data(ctx)
+        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
 
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
         ontology_filename = get_session_safe_filename(ctx, "ontology", schema_safe) + ".ttl"
-        ontology_file_path = output_dir / ontology_filename
+        ontology_file_path = conn_dir / ontology_filename
 
         with open(ontology_file_path, "w", encoding="utf-8") as f:
             f.write(ontology_ttl)
@@ -235,9 +237,27 @@ async def generate_ontology(
         logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
         logger.info(f"Saved ontology to: {ontology_file_path}")
 
-        session = get_session_data(ctx)
         session.ontology_file = ontology_filename
         session.obqc_validator = None
+
+        # Write workspace metadata for ontology section
+        if session.connection_id:
+            try:
+                await update_workspace_section(
+                    connection_id=session.connection_id,
+                    output_dir=OUTPUT_DIR,
+                    schema_name=schema_name or "default",
+                    section="ontology",
+                    data={
+                        "ontology_file": ontology_filename,
+                        "enriched": False,
+                        "graph_uri": graph_uri,
+                        "persisted_to_rdf": False,
+                        "generated_at": datetime.now().isoformat(),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write workspace metadata: {e}")
 
         await ctx.info(
             "Ontology generation complete; next call should be suggest_semantic_names to improve cryptic names"
@@ -270,13 +290,40 @@ async def generate_ontology(
                         f"Auto-persisted ontology to Oxigraph: {triple_count} triples in graph <{graph_uri}>"
                     )
 
-                    output_dir = ensure_output_dir()
+                    # Update workspace: mark ontology as persisted + write rdf_store
+                    if session.connection_id:
+                        try:
+                            await update_workspace_section(
+                                connection_id=session.connection_id,
+                                output_dir=OUTPUT_DIR,
+                                schema_name=schema_name or "default",
+                                section="ontology",
+                                data={
+                                    "ontology_file": ontology_filename,
+                                    "enriched": False,
+                                    "graph_uri": graph_uri,
+                                    "persisted_to_rdf": True,
+                                    "generated_at": datetime.now().isoformat(),
+                                },
+                            )
+                            await update_workspace_rdf(
+                                connection_id=session.connection_id,
+                                output_dir=OUTPUT_DIR,
+                                data={
+                                    "initialized": True,
+                                    "graph_uris": [graph_uri],
+                                    "initialized_at": datetime.now().isoformat(),
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to write workspace metadata: {e}")
+
                     result = f"""Ontology generated and stored successfully!
 
 Schema: {schema_name or "default"}
 Tables: {len(tables_info)}
 Ontology file: {ontology_filename}
-Storage location: {output_dir}/
+Storage location: {conn_dir}/
 Graph URI: <{graph_uri}>
 Triples stored: {triple_count:,}
 
@@ -336,8 +383,9 @@ async def suggest_semantic_names(
     try:
         try:
             if ontology_file:
-                output_dir = ensure_output_dir()
-                ontology_path = output_dir / ontology_file
+                session = get_session_data(ctx)
+                file_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+                ontology_path = file_dir / ontology_file
                 if not ontology_path.exists():
                     return {
                         "error": f"Ontology file not found: {ontology_file}",
@@ -424,10 +472,11 @@ async def apply_semantic_names(
 ) -> str:
     """Apply LLM-suggested semantic names to an existing ontology."""
     try:
+        session = get_session_data(ctx)
         try:
             if ontology_file:
-                output_dir = ensure_output_dir()
-                ontology_path = output_dir / ontology_file
+                conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+                ontology_path = conn_dir / ontology_file
                 if not ontology_path.exists():
                     return create_error_response(
                         f"Ontology file not found: {ontology_file}", "file_not_found"
@@ -467,17 +516,35 @@ async def apply_semantic_names(
         new_ontology_filename = None
         if save_to_file:
             try:
-                output_dir = ensure_output_dir()
+                conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
                 new_ontology_filename = get_session_safe_filename(ctx, "ontology", "semantic") + ".ttl"
-                ontology_file_path = output_dir / new_ontology_filename
+                ontology_file_path = conn_dir / new_ontology_filename
 
                 with open(ontology_file_path, "w", encoding="utf-8") as f:
                     f.write(updated_ontology)
 
                 logger.info(f"Saved semantic ontology to: {ontology_file_path}")
-                session = get_session_data(ctx)
                 session.ontology_file = new_ontology_filename
                 session.obqc_validator = None
+
+                # Update workspace: mark ontology as enriched
+                if session.connection_id:
+                    try:
+                        schema_name = session.get_last_analyzed_schema() or "default"
+                        await update_workspace_section(
+                            connection_id=session.connection_id,
+                            output_dir=OUTPUT_DIR,
+                            schema_name=schema_name,
+                            section="ontology",
+                            data={
+                                "ontology_file": new_ontology_filename,
+                                "enriched": True,
+                                "persisted_to_rdf": False,
+                                "generated_at": datetime.now().isoformat(),
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to write workspace metadata: {e}")
             except Exception as e:
                 logger.warning(f"Failed to save ontology to file: {e}")
 
@@ -710,7 +777,7 @@ async def download_ontology(
                 }
 
         schema_safe = schema_name.replace(" ", "_").replace(".", "_")
-        output_dir = ensure_output_dir()
+        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
 
         if source == "rdf" and OXIGRAPH_AVAILABLE:
             store = get_oxigraph_store(ctx)
@@ -736,7 +803,7 @@ async def download_ontology(
                     }
 
                 file_name = f"ontology_{schema_safe}_export.ttl"
-                file_path = output_dir / file_name
+                file_path = conn_dir / file_name
 
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(ontology_ttl)
@@ -775,19 +842,19 @@ async def download_ontology(
             ontology_filename = session.ontology_file
             if not ontology_filename:
                 pattern = f"ontology_{schema_safe}*.ttl"
-                matching_files = list(output_dir.glob(pattern))
+                matching_files = list(conn_dir.glob(pattern))
                 if matching_files:
                     matching_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
                     ontology_file_path = matching_files[0]
                 else:
                     return {
                         "success": False,
-                        "error": f"No ontology file found for schema '{schema_name}' in tmp folder",
+                        "error": f"No ontology file found for schema '{schema_name}' in connection folder",
                         "error_type": "file_not_found",
                         "hint": "Generate ontology first with generate_ontology()",
                     }
             else:
-                ontology_file_path = output_dir / ontology_filename
+                ontology_file_path = conn_dir / ontology_filename
 
             if not ontology_file_path.exists():
                 return {
@@ -848,24 +915,24 @@ async def download_r2rml(
                 }
 
         schema_safe = schema_name.replace(" ", "_").replace(".", "_")
-        output_dir = ensure_output_dir()
+        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
 
         r2rml_filename = session.r2rml_file
         if not r2rml_filename:
             pattern = f"r2rml_{schema_safe}*.ttl"
-            matching_files = list(output_dir.glob(pattern))
+            matching_files = list(conn_dir.glob(pattern))
             if matching_files:
                 matching_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
                 r2rml_file_path = matching_files[0]
             else:
                 return {
                     "success": False,
-                    "error": f"No R2RML file found for schema '{schema_name}' in tmp folder",
+                    "error": f"No R2RML file found for schema '{schema_name}' in connection folder",
                     "error_type": "file_not_found",
                     "hint": "Run analyze_schema() first to generate R2RML mapping",
                 }
         else:
-            r2rml_file_path = output_dir / r2rml_filename
+            r2rml_file_path = conn_dir / r2rml_filename
 
         if not r2rml_file_path.exists():
             return {

@@ -352,9 +352,12 @@ class GraphRAGManager:
         vector_store_path = connection_dir / f"vector_store_{self._schema_name}.json"
         self.vector_store.save(vector_store_path)
 
-        # Save graph
+        # Save graph (includes tables_info for clean restore)
         graph_path = connection_dir / f"graph_{self._schema_name}.json"
-        graph_data = self.graph_retriever.export_graph_for_visualization()
+        graph_data = {
+            "tables_info": list(self.graph_retriever._tables_info.values()),
+            "visualization": self.graph_retriever.export_graph_for_visualization(),
+        }
         with open(graph_path, 'w') as f:
             json.dump(graph_data, f, indent=2)
 
@@ -369,6 +372,90 @@ class GraphRAGManager:
                 json.dump(communities_data, f, indent=2)
 
         logger.info(f"Saved GraphRAG state to {connection_dir}")
+
+    def load_state(self, output_dir: Path) -> bool:
+        """Restore GraphRAG state from disk.
+
+        Rebuilds graph and communities from saved JSON files.
+        ChromaDB vector store reconnects implicitly via get_or_create_collection.
+
+        Args:
+            output_dir: Base output directory (same as passed to save_state)
+
+        Returns:
+            True if state was fully restored, False if any component failed
+        """
+        output_dir = Path(output_dir)
+        connection_dir = output_dir / self._connection_id
+
+        if not connection_dir.exists():
+            logger.warning(f"Connection dir not found: {connection_dir}")
+            return False
+
+        schema_name = self._schema_name or "default"
+        restored_components = []
+
+        # 1. Verify ChromaDB has data (reconnected implicitly in __init__)
+        try:
+            stats = self.vector_store.get_statistics()
+            vector_count = stats.get("total_elements", 0)
+            if vector_count > 0:
+                restored_components.append(f"vectors ({vector_count})")
+            else:
+                logger.warning("ChromaDB collection is empty — vector search will not work")
+        except Exception as e:
+            logger.warning(f"Failed to verify ChromaDB: {e}")
+
+        # 2. Load graph from saved tables_info
+        graph_path = connection_dir / f"graph_{schema_name}.json"
+        if graph_path.exists():
+            try:
+                with open(graph_path, 'r') as f:
+                    graph_data = json.load(f)
+
+                # New format: {"tables_info": [...], "visualization": {...}}
+                tables_info = graph_data.get("tables_info")
+                if tables_info:
+                    self.graph_retriever.load_graph(tables_info)
+                    restored_components.append(
+                        f"graph ({self.graph_retriever.graph.number_of_nodes()} tables)"
+                    )
+                else:
+                    logger.warning("Graph file missing tables_info — graph not restored")
+            except Exception as e:
+                logger.error(f"Failed to load graph: {e}")
+        else:
+            logger.warning(f"Graph file not found: {graph_path}")
+
+        # 3. Load communities
+        communities_path = connection_dir / f"communities_{schema_name}.json"
+        if communities_path.exists():
+            try:
+                with open(communities_path, 'r') as f:
+                    communities_data = json.load(f)
+
+                self.community_detector = CommunityDetector(self.graph_retriever.graph)
+                if self.community_detector.load_communities(communities_data):
+                    restored_components.append(
+                        f"communities ({len(self.community_detector.communities)})"
+                    )
+                else:
+                    logger.warning("Communities file empty — communities not restored")
+            except Exception as e:
+                logger.error(f"Failed to load communities: {e}")
+        else:
+            logger.debug(f"Communities file not found: {communities_path}")
+
+        # Mark as initialized if we restored at least the graph
+        if self.graph_retriever.graph.number_of_nodes() > 0:
+            self._initialized = True
+            logger.info(
+                f"Restored GraphRAG state: {', '.join(restored_components)}"
+            )
+            return True
+
+        logger.warning("GraphRAG restore failed — no graph data loaded")
+        return False
 
     def clear(self):
         """Clear all GraphRAG state."""

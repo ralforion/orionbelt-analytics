@@ -61,6 +61,35 @@ class TableInfo:
     row_count: Optional[int] = None
     sample_data: Optional[List[Dict[str, Any]]] = None
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TableInfo":
+        """Deserialize a TableInfo from a dict (e.g. saved schema JSON).
+
+        Args:
+            data: Dict with keys matching TableInfo fields.
+                  Columns may be dicts or ColumnInfo instances.
+
+        Returns:
+            TableInfo instance
+        """
+        columns = []
+        for col in data.get("columns", []):
+            if isinstance(col, ColumnInfo):
+                columns.append(col)
+            elif isinstance(col, dict):
+                columns.append(ColumnInfo(**col))
+
+        return cls(
+            name=data["name"],
+            schema=data.get("schema", ""),
+            columns=columns,
+            primary_keys=data.get("primary_keys", []),
+            foreign_keys=data.get("foreign_keys", []),
+            comment=data.get("comment"),
+            row_count=data.get("row_count"),
+            sample_data=data.get("sample_data"),
+        )
+
 
 # ---------------------------------------------------------------------------
 # DatabaseManager - orchestrator
