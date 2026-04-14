@@ -84,23 +84,6 @@ class GraphRAGState:
         self.graphrag_initialized: bool = False
         self._init_task: Optional[asyncio.Task] = None
 
-    async def wait_for_init(self, timeout: float = 30.0) -> bool:
-        """Wait for background initialization to complete.
-
-        Args:
-            timeout: Maximum seconds to wait
-
-        Returns:
-            True if initialization completed successfully, False otherwise
-        """
-        if self._init_task is None or self.graphrag_initialized:
-            return self.graphrag_initialized
-        try:
-            await asyncio.wait_for(self._init_task, timeout=timeout)
-            return self.graphrag_initialized
-        except asyncio.TimeoutError:
-            return False
-
 
 class RDFStoreState:
     """Oxigraph RDF store state with Future-based init tracking."""
@@ -109,23 +92,6 @@ class RDFStoreState:
         self.oxigraph_store: Optional[Any] = None  # OxigraphStoreManager
         self.oxigraph_initialized: bool = False
         self._init_task: Optional[asyncio.Task] = None
-
-    async def wait_for_init(self, timeout: float = 30.0) -> bool:
-        """Wait for background initialization to complete.
-
-        Args:
-            timeout: Maximum seconds to wait
-
-        Returns:
-            True if initialization completed successfully, False otherwise
-        """
-        if self._init_task is None or self.oxigraph_initialized:
-            return self.oxigraph_initialized
-        try:
-            await asyncio.wait_for(self._init_task, timeout=timeout)
-            return self.oxigraph_initialized
-        except asyncio.TimeoutError:
-            return False
 
 
 class SessionData:

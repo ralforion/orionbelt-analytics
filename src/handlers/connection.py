@@ -3,8 +3,6 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional
-
 from fastmcp import Context
 
 from ..constants import SUPPORTED_DB_TYPES
@@ -305,16 +303,3 @@ async def list_schemas(ctx: Context, get_session_db_manager):
     else:
         await ctx.info("No schemas found")
     return schemas if schemas else []
-
-
-async def diagnose_connection_issue(
-    ctx: Context,
-    db_type: str,
-    host: Optional[str] = None,
-    port: Optional[int] = None,
-    username: Optional[str] = None,
-    ssl: Optional[bool] = None,
-):
-    """Diagnose connection issues. Imported from tools/connection.py for now."""
-    from ..tools.connection import diagnose_connection_issue as _diagnose
-    return _diagnose(db_type, host, port, username, ssl)

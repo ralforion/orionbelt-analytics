@@ -30,7 +30,6 @@ class OBQCIssueType(Enum):
     INVALID_JOIN = "invalid_join"
     MISSING_JOIN_CONDITION = "missing_join_condition"
     FAN_TRAP_DETECTED = "fan_trap_detected"
-    AGGREGATION_WITHOUT_GROUP = "aggregation_without_group"
     NON_AGGREGATED_COLUMN = "non_aggregated_column"
     AMBIGUOUS_COLUMN = "ambiguous_column"
 

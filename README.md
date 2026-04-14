@@ -7,7 +7,7 @@
 
 <p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
 
-[![Version 1.2.0](https://img.shields.io/badge/version-1.2.0-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
+[![Version 1.2.1](https://img.shields.io/badge/version-1.2.1-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
 [![FastMCP](https://img.shields.io/badge/FastMCP-3.2.3+-blue)](https://github.com/jlowin/fastmcp)
@@ -70,7 +70,7 @@ When creating OBML models (OrionBelt Modeling Language) for the Semantic Layer, 
 
 ## Key Philosophy: Automatic Ontology Integration
 
-Our main analysis tool `get_analysis_context()` automatically includes ontology generation, making semantic context readily available for every query.
+Our main analysis tool `analyze_schema()` automatically includes ontology generation, making semantic context readily available for every query.
 
 ## Architecture Overview
 
@@ -182,31 +182,44 @@ uv sync
 ```
 orionbelt-analytics/
 ├── src/
-│   ├── __init__.py                 # Package initialization
-│   ├── main.py                     # FastMCP server entry point (13 tools)
-│   ├── database_manager.py         # Database connection and analysis
-│   ├── ontology_generator.py       # RDF ontology generation with SQL mappings
+│   ├── main.py                     # FastMCP server setup and tool registration
+│   ├── session.py                  # Per-session state isolation (SessionData)
+│   ├── database_manager.py         # Database connection and schema analysis
+│   ├── ontology_generator.py       # RDF/OWL ontology generation with SQL mappings
+│   ├── oxigraph_store.py           # Persistent RDF store with SPARQL 1.1 support
+│   ├── obqc_validator.py           # Ontology Basic Quality Criteria validation
 │   ├── r2rml_generator.py          # W3C R2RML mapping generation
-│   ├── dremio_client.py            # Dremio database client
-│   ├── security.py                 # Security and validation utilities
-│   ├── chart_utils.py              # Chart generation utilities
+│   ├── security.py                 # SQL injection prevention and fan-trap detection
+│   ├── chart_utils.py              # Plotly/Matplotlib chart generation
 │   ├── config.py                   # Configuration management with .env support
-│   ├── constants.py                # Application constants and settings
-│   ├── shared.py                   # Shared utilities and helpers
-│   └── tools/                      # Tool implementations
-│       ├── __init__.py             # Tools package initialization
-│       ├── chart.py                # Chart generation tool
-│       ├── connection.py           # Database connection tools
-│       ├── info.py                 # Server info tool
-│       ├── ontology.py             # Ontology generation tool
-│       ├── query.py                # SQL query execution tool
-│       └── schema.py               # Schema analysis tools
+│   ├── paths.py                    # Centralized path resolution
+│   ├── handlers/                   # MCP tool implementations
+│   │   ├── connection.py           # connect_database, list_schemas
+│   │   ├── schema.py               # analyze_schema, get_table_details
+│   │   ├── ontology.py             # generate_ontology, semantic names, load
+│   │   ├── query.py                # validate_sql_syntax, execute_sql_query
+│   │   ├── chart.py                # generate_chart
+│   │   ├── rdf.py                  # SPARQL query tools, RDF store ops
+│   │   ├── graphrag.py             # GraphRAG init and context retrieval
+│   │   └── info.py                 # get_server_info
+│   ├── drivers/                    # Database-specific drivers
+│   │   ├── postgresql.py           # PostgreSQL driver
+│   │   ├── snowflake.py            # Snowflake driver (UPPERCASE identifiers)
+│   │   ├── clickhouse.py           # ClickHouse driver (no FKs, ORDER BY)
+│   │   ├── dremio.py               # Dremio driver
+│   │   ├── bigquery.py             # BigQuery driver
+│   │   ├── duckdb.py               # DuckDB/MotherDuck driver
+│   │   ├── mysql.py                # MySQL driver
+│   │   └── databricks.py           # Databricks SQL driver
+│   └── graphrag/                   # Graph-based RAG for schema intelligence
+│       ├── manager.py              # GraphRAG orchestrator
+│       ├── embedder.py             # Vector embeddings for schema elements
+│       ├── retriever.py            # Graph traversal and relationship discovery
+│       └── vector_store_chromadb.py # ChromaDB vector storage
+├── ontology/                       # Ontology specs and SHACL shapes
 ├── tests/                          # Test suite
-├── tmp/                            # Generated files (ontologies, charts)
 ├── server.py                       # Server startup script
-├── .env                            # Environment configuration (DO NOT COMMIT)
-├── pyproject.toml                  # Project metadata and dependencies
-└── README.md                       # This comprehensive guide
+└── pyproject.toml                  # Project metadata and dependencies
 ```
 
 ## 🚀 Quick Start

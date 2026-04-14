@@ -2,12 +2,11 @@
 Test suite for Phase 2 hierarchical schema retrieval changes.
 
 Verifies that:
-1. get_analysis_context() no longer returns sample data
-2. analyze_schema(lightweight=True) returns minimal data
-3. analyze_schema(lightweight=False) returns full schema
-4. get_table_details() works correctly
-5. Token savings are achieved
-6. No functionality regression
+1. analyze_schema(lightweight=True) returns minimal data
+2. analyze_schema(lightweight=False) returns full schema
+3. get_table_details() works correctly
+4. Token savings are achieved
+5. No functionality regression
 """
 
 import inspect
@@ -18,7 +17,6 @@ from typing import List
 
 import src.main as main_module
 from src.main import mcp
-from src.tools.schema import get_analysis_context
 from src.database_manager import TableInfo, ColumnInfo
 
 
@@ -37,231 +35,6 @@ def _get_tool_docstring(name):
     """Get a tool's docstring, handling both FunctionTool and plain function."""
     fn = _get_tool_fn(name)
     return fn.__doc__
-
-
-class MockDatabaseManager:
-    """Mock DatabaseManager for testing."""
-
-    def __init__(self):
-        self.connection_info = {"database": "test_db"}
-
-    def has_engine(self):
-        return True
-
-    def get_schemas(self):
-        return ["public", "analytics"]
-
-    def get_tables(self, schema_name=None):
-        return ["users", "orders", "products", "order_items"]
-
-    def analyze_table(self, table_name, schema_name=None):
-        """Return mock TableInfo objects."""
-        if table_name == "users":
-            return TableInfo(
-                name="users",
-                schema=schema_name or "public",
-                columns=[
-                    ColumnInfo(
-                        name="id",
-                        data_type="INTEGER",
-                        is_nullable=False,
-                        is_primary_key=True,
-                        is_foreign_key=False
-                    ),
-                    ColumnInfo(
-                        name="email",
-                        data_type="VARCHAR",
-                        is_nullable=False,
-                        is_primary_key=False,
-                        is_foreign_key=False
-                    )
-                ],
-                primary_keys=["id"],
-                foreign_keys=[],
-                row_count=1000,
-                comment="User accounts",
-                sample_data=[{"id": 1, "email": "test@example.com"}]
-            )
-        elif table_name == "orders":
-            return TableInfo(
-                name="orders",
-                schema=schema_name or "public",
-                columns=[
-                    ColumnInfo(
-                        name="id",
-                        data_type="INTEGER",
-                        is_nullable=False,
-                        is_primary_key=True,
-                        is_foreign_key=False
-                    ),
-                    ColumnInfo(
-                        name="user_id",
-                        data_type="INTEGER",
-                        is_nullable=False,
-                        is_primary_key=False,
-                        is_foreign_key=True,
-                        foreign_key_table="users",
-                        foreign_key_column="id"
-                    )
-                ],
-                primary_keys=["id"],
-                foreign_keys=[{
-                    "column": "user_id",
-                    "referenced_table": "users",
-                    "referenced_column": "id"
-                }],
-                row_count=5000,
-                sample_data=[{"id": 1, "user_id": 1}]
-            )
-        elif table_name == "order_items":
-            return TableInfo(
-                name="order_items",
-                schema=schema_name or "public",
-                columns=[
-                    ColumnInfo(
-                        name="id",
-                        data_type="INTEGER",
-                        is_nullable=False,
-                        is_primary_key=True,
-                        is_foreign_key=False
-                    ),
-                    ColumnInfo(
-                        name="order_id",
-                        data_type="INTEGER",
-                        is_nullable=False,
-                        is_primary_key=False,
-                        is_foreign_key=True,
-                        foreign_key_table="orders",
-                        foreign_key_column="id"
-                    ),
-                    ColumnInfo(
-                        name="product_id",
-                        data_type="INTEGER",
-                        is_nullable=False,
-                        is_primary_key=False,
-                        is_foreign_key=True,
-                        foreign_key_table="products",
-                        foreign_key_column="id"
-                    )
-                ],
-                primary_keys=["id"],
-                foreign_keys=[
-                    {
-                        "column": "order_id",
-                        "referenced_table": "orders",
-                        "referenced_column": "id"
-                    },
-                    {
-                        "column": "product_id",
-                        "referenced_table": "products",
-                        "referenced_column": "id"
-                    }
-                ],
-                row_count=15000,
-                sample_data=[{"id": 1, "order_id": 1, "product_id": 1}]
-            )
-        else:  # products
-            return TableInfo(
-                name="products",
-                schema=schema_name or "public",
-                columns=[
-                    ColumnInfo(
-                        name="id",
-                        data_type="INTEGER",
-                        is_nullable=False,
-                        is_primary_key=True,
-                        is_foreign_key=False
-                    ),
-                    ColumnInfo(
-                        name="name",
-                        data_type="VARCHAR",
-                        is_nullable=False,
-                        is_primary_key=False,
-                        is_foreign_key=False
-                    )
-                ],
-                primary_keys=["id"],
-                foreign_keys=[],
-                row_count=500,
-                sample_data=[{"id": 1, "name": "Widget"}]
-            )
-
-    def prefetch_schema_constraints(self, schema_name):
-        """Mock constraint prefetch."""
-        pass
-
-
-class TestPhase2SampleDataRemoval:
-    """Test that sample data is removed from get_analysis_context()."""
-
-    @patch('src.tools.schema.get_db_manager')
-    def test_get_analysis_context_no_sample_data(self, mock_get_db):
-        """Verify get_analysis_context() does not return sample_data."""
-        mock_get_db.return_value = MockDatabaseManager()
-
-        result = get_analysis_context(schema_name="public")
-
-        # Should have schema_analysis and relationships
-        assert "schema_analysis" in result
-        assert "relationships" in result
-
-        # Should NOT have sample_data
-        assert "sample_data" not in result
-
-    @patch('src.tools.schema.get_db_manager')
-    def test_get_analysis_context_has_schema_structure(self, mock_get_db):
-        """Verify get_analysis_context() still has complete schema structure."""
-        mock_get_db.return_value = MockDatabaseManager()
-
-        result = get_analysis_context(schema_name="public")
-
-        # Check schema structure is intact
-        assert "schema_analysis" in result
-        schema = result["schema_analysis"]
-        assert "tables" in schema
-        assert len(schema["tables"]) == 4
-
-        # Check first table has all metadata except sample_data
-        table = schema["tables"][0]
-        assert "name" in table
-        assert "columns" in table
-        assert "primary_keys" in table
-        assert "foreign_keys" in table
-        assert "row_count" in table
-
-    @patch('src.tools.schema.get_db_manager')
-    def test_get_analysis_context_has_relationships(self, mock_get_db):
-        """Verify relationships are still returned."""
-        mock_get_db.return_value = MockDatabaseManager()
-
-        result = get_analysis_context(schema_name="public")
-
-        assert "relationships" in result
-        relationships = result["relationships"]
-
-        # orders has FK to users
-        assert "orders" in relationships
-        assert len(relationships["orders"]) == 1
-
-        # order_items has FKs to orders and products (fan-trap!)
-        assert "order_items" in relationships
-        assert len(relationships["order_items"]) == 2
-
-    @patch('src.tools.schema.get_db_manager')
-    def test_get_analysis_context_has_fan_trap_warnings(self, mock_get_db):
-        """Verify fan-trap warnings are generated."""
-        mock_get_db.return_value = MockDatabaseManager()
-
-        result = get_analysis_context(schema_name="public")
-
-        # Should have sql_hints with fan_trap_warnings
-        assert "sql_hints" in result
-        assert "fan_trap_warnings" in result["sql_hints"]
-
-        warnings = result["sql_hints"]["fan_trap_warnings"]
-        assert len(warnings) == 1
-        assert warnings[0]["table"] == "order_items"
-        assert "fan-trap" in warnings[0]["warning"].lower()
 
 
 class TestPhase2LightweightMode:
@@ -315,25 +88,6 @@ class TestPhase2LightweightMode:
 
 class TestPhase2TokenSavings:
     """Test that token savings are achieved."""
-
-    @patch('src.tools.schema.get_db_manager')
-    def test_get_analysis_context_token_reduction(self, mock_get_db):
-        """Estimate token savings from removing sample data."""
-        mock_get_db.return_value = MockDatabaseManager()
-
-        result = get_analysis_context(schema_name="public")
-
-        # Convert to string to estimate token count
-        import json
-        result_str = json.dumps(result)
-
-        # Without sample data, should be significantly smaller
-        # Each table had sample_data, so we saved ~100 chars per table minimum
-        # With 4 tables, that's at least 400 chars = ~100 tokens saved
-        assert len(result_str) < 5000  # Should be relatively compact
-
-        # Most importantly: no sample_data key
-        assert "sample_data" not in result_str
 
     def test_lightweight_vs_full_schema_size(self):
         """Compare lightweight vs full schema response size."""
@@ -414,11 +168,10 @@ class TestPhase2FunctionalityPreserved:
         """Verify all imports still work after changes."""
         try:
             from src.main import mcp, analyze_schema, get_table_details
-            from src.tools.schema import get_analysis_context
             from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
 
             assert all([mcp, analyze_schema, get_table_details,
-                       get_analysis_context, DatabaseManager, TableInfo, ColumnInfo])
+                       DatabaseManager, TableInfo, ColumnInfo])
         except ImportError as e:
             pytest.fail(f"Import failed: {e}")
 

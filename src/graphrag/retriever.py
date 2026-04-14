@@ -271,35 +271,6 @@ class GraphRetriever:
 
         return warnings
 
-    def find_bridge_tables(self, table_a: str, table_b: str) -> List[str]:
-        """
-        Find tables that bridge two other tables.
-
-        Args:
-            table_a: First table
-            table_b: Second table
-
-        Returns:
-            List of bridge table names
-        """
-        if table_a not in self.graph or table_b not in self.graph:
-            return []
-
-        bridges = []
-
-        # Find tables that have paths to both A and B
-        for node in self.graph.nodes():
-            if node == table_a or node == table_b:
-                continue
-
-            has_path_to_a = nx.has_path(self.graph, node, table_a) or nx.has_path(self.graph, table_a, node)
-            has_path_to_b = nx.has_path(self.graph, node, table_b) or nx.has_path(self.graph, table_b, node)
-
-            if has_path_to_a and has_path_to_b:
-                bridges.append(node)
-
-        return bridges
-
     def get_table_metadata(self, table_name: str) -> Optional[Dict[str, Any]]:
         """
         Get full metadata for a table.

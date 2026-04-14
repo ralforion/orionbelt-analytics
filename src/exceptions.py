@@ -22,8 +22,6 @@ class ErrorType(str, Enum):
     STORE = "store_not_initialized"
     DEPENDENCY = "dependency_error"
     OBQC = "obqc_error"
-    RUNTIME = "runtime_error"
-    CONFIGURATION = "configuration_error"
 
 
 class OrionBeltError(Exception):
@@ -72,21 +70,6 @@ class ParameterError(OrionBeltError):
     error_type = ErrorType.PARAMETER
 
 
-class SecurityError(OrionBeltError):
-    """Security violations (SQL injection, forbidden operations)."""
-    error_type = ErrorType.SECURITY
-
-
-class SyntaxError_(OrionBeltError):
-    """SQL syntax errors (named with underscore to avoid shadowing builtin)."""
-    error_type = ErrorType.SYNTAX
-
-
-class ForbiddenOperationError(OrionBeltError):
-    """Attempted destructive/disallowed operation."""
-    error_type = ErrorType.FORBIDDEN
-
-
 class RDFError(OrionBeltError):
     """RDF/ontology store errors."""
     error_type = ErrorType.RDF
@@ -100,8 +83,3 @@ class StoreNotInitializedError(OrionBeltError):
 class DependencyError(OrionBeltError):
     """Missing optional dependency."""
     error_type = ErrorType.DEPENDENCY
-
-
-class ConfigurationError(OrionBeltError):
-    """Invalid or missing configuration."""
-    error_type = ErrorType.CONFIGURATION

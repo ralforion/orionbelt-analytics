@@ -63,8 +63,6 @@ class DatabaseConfig:
     # Dremio settings (following official dremio-mcp approach)
     dremio_uri: Optional[str] = None  # Full API endpoint like https://api.dremio.cloud or https://host:port
     dremio_pat: Optional[str] = None  # Personal Access Token
-    dremio_project_id: Optional[str] = None  # Optional project ID
-    
     # Legacy settings for backward compatibility
     dremio_host: Optional[str] = None
     dremio_port: int = DEFAULT_DREMIO_PORT
@@ -133,8 +131,7 @@ class ConfigManager:
                 # New PAT-based settings (preferred)
                 dremio_uri=os.getenv("DREMIO_URI"),
                 dremio_pat=os.getenv("DREMIO_PAT"),
-                dremio_project_id=os.getenv("DREMIO_PROJECT_ID"),
-                
+
                 # Legacy settings for backward compatibility
                 dremio_host=os.getenv("DREMIO_HOST"),
                 dremio_port=int(os.getenv("DREMIO_PORT", DEFAULT_DREMIO_PORT)),

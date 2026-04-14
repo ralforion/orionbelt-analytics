@@ -288,7 +288,7 @@ class ChromaDBVectorStore:
                     if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
                         try:
                             elem_metadata[key] = json.loads(value)
-                        except:
+                        except (json.JSONDecodeError, ValueError):
                             elem_metadata[key] = value
                     else:
                         elem_metadata[key] = value
@@ -357,7 +357,7 @@ class ChromaDBVectorStore:
                     if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
                         try:
                             elem_metadata[key] = json.loads(value)
-                        except:
+                        except (json.JSONDecodeError, ValueError):
                             elem_metadata[key] = value
                     else:
                         elem_metadata[key] = value
@@ -402,7 +402,7 @@ class ChromaDBVectorStore:
                         if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
                             try:
                                 elem_metadata[key] = json.loads(value)
-                            except:
+                            except (json.JSONDecodeError, ValueError):
                                 elem_metadata[key] = value
                         else:
                             elem_metadata[key] = value
@@ -420,33 +420,6 @@ class ChromaDBVectorStore:
         except Exception as e:
             logger.error(f"Failed to get elements by type {element_type}: {e}")
             return []
-
-    def get_related_elements(
-        self,
-        element_id: str,
-        top_k: int = 10,
-        element_type: Optional[str] = None
-    ) -> List[Tuple[StoredElement, float]]:
-        """
-        Find elements related to a given element.
-
-        Args:
-            element_id: Source element ID
-            top_k: Number of related elements to return
-            element_type: Filter by type
-
-        Returns:
-            List of (element, similarity_score) tuples
-        """
-        source_elem = self.get_by_id(element_id)
-        if not source_elem:
-            return []
-
-        query_embedding = np.array(source_elem.embedding)
-        results = self.search(query_embedding, top_k=top_k + 1, element_type=element_type)
-
-        # Remove the source element itself
-        return [(elem, score) for elem, score in results if elem.element_id != element_id]
 
     def save(self, filepath: Path):
         """
@@ -473,7 +446,7 @@ class ChromaDBVectorStore:
                         if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
                             try:
                                 elem_metadata[key] = json.loads(value)
-                            except:
+                            except (json.JSONDecodeError, ValueError):
                                 elem_metadata[key] = value
                         else:
                             elem_metadata[key] = value
@@ -502,7 +475,7 @@ class ChromaDBVectorStore:
         except Exception as e:
             logger.error(f"Failed to export vector store: {e}")
             # Don't raise - ChromaDB is already persisted, JSON export is optional
-            logger.warning(f"ChromaDB is already persisted to disk, JSON export failed but data is safe")
+            logger.warning("ChromaDB is already persisted to disk, JSON export failed but data is safe")
 
     def load(self, filepath: Path):
         """
@@ -573,7 +546,7 @@ class ChromaDBVectorStore:
                     include=[]
                 )
                 type_counts[element_type] = len(results['ids'])
-        except:
+        except Exception:
             type_counts = {"table": 0, "column": 0, "relationship": 0}
 
         return {

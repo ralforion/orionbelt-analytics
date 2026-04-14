@@ -131,88 +131,6 @@ class VersionMetadataManager:
         # Fallback to latest
         return VersionInfo(**versions[-1])
 
-    def should_create_new_version(
-        self,
-        schema_name: str,
-        current_hash: str
-    ) -> tuple[bool, Optional[int]]:
-        """
-        Determine if a new version should be created.
-
-        Args:
-            schema_name: Schema name
-            current_hash: Current schema hash
-
-        Returns:
-            (should_create, new_version_number or None)
-        """
-        schema_meta = self.get_schema_metadata(schema_name)
-
-        if not schema_meta:
-            # First time - create version 1
-            return (True, 1)
-
-        current_version = self.get_current_version(schema_name)
-
-        if not current_version:
-            # No versions exist - create version 1
-            return (True, 1)
-
-        if current_version.schema_hash == current_hash:
-            # Schema unchanged - reuse existing version
-            logger.info(f"Schema '{schema_name}' unchanged (hash: {current_hash[:8]}...)")
-            return (False, None)
-
-        # Schema changed - create new version
-        next_version = len(schema_meta.get("versions", [])) + 1
-        logger.info(f"Schema '{schema_name}' changed - creating version {next_version}")
-        return (True, next_version)
-
-    def add_version(
-        self,
-        schema_name: str,
-        version_info: VersionInfo,
-        connection_info: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Add a new version to metadata.
-
-        Args:
-            schema_name: Schema name
-            version_info: Version information
-            connection_info: Optional connection details
-        """
-        # Update connection info if provided
-        if connection_info:
-            self.metadata["connection"] = connection_info
-
-        # Initialize schema metadata if needed
-        if schema_name not in self.metadata["schemas"]:
-            self.metadata["schemas"][schema_name] = {
-                "current_version": version_info.version,
-                "schema_hash": version_info.schema_hash,
-                "versions": []
-            }
-
-        # Archive previous active version
-        schema_meta = self.metadata["schemas"][schema_name]
-        for v_dict in schema_meta.get("versions", []):
-            if v_dict.get("status") == "active":
-                v_dict["status"] = "archived"
-                v_dict["graphrag_status"] = "archived"
-                v_dict["ontology_status"] = "archived"
-
-        # Add new version
-        version_dict = asdict(version_info)
-        schema_meta["versions"].append(version_dict)
-        schema_meta["current_version"] = version_info.version
-        schema_meta["schema_hash"] = version_info.schema_hash
-
-        # Save to disk
-        self._save_metadata()
-
-        logger.info(f"Added version {version_info.version} for schema '{schema_name}'")
-
     def get_versions_to_cleanup(
         self,
         schema_name: str,
@@ -366,28 +284,6 @@ class VersionMetadataManager:
 
         self._save_metadata()
 
-    def remove_version(self, schema_name: str, version: int):
-        """
-        Completely remove a version from metadata.
-
-        Args:
-            schema_name: Schema name
-            version: Version number
-        """
-        schema_meta = self.metadata["schemas"].get(schema_name)
-        if not schema_meta:
-            return
-
-        versions = schema_meta.get("versions", [])
-        schema_meta["versions"] = [v for v in versions if v["version"] != version]
-
-        self._save_metadata()
-
     def get_retention_policy(self) -> RetentionPolicy:
         """Get current retention policy."""
         return RetentionPolicy(**self.metadata.get("retention_policy", {}))
-
-    def update_retention_policy(self, policy: RetentionPolicy):
-        """Update retention policy."""
-        self.metadata["retention_policy"] = asdict(policy)
-        self._save_metadata()
