@@ -134,7 +134,7 @@ def generate_ontology(
                 }
             }
             
-        except RuntimeError as e:
+        except RuntimeError:
             return create_error_response(
                 "No database connection established",
                 "connection_error",

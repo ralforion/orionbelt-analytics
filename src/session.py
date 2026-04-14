@@ -140,6 +140,13 @@ class SessionData:
         self.schema_cache = SchemaCache()
         self.graphrag = GraphRAGState()
         self.rdf_store = RDFStoreState()
+        # Activity tracking for idle eviction
+        self.created_at: datetime = datetime.now()
+        self.last_activity: datetime = datetime.now()
+
+    def touch(self) -> None:
+        """Update last activity timestamp."""
+        self.last_activity = datetime.now()
 
     # --- Convenience accessors for backward compatibility ---
     # These will be used during migration; handler code should use

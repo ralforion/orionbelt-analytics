@@ -243,7 +243,7 @@ async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tm
         mock_generator.graph = Mock()
         mock_generator.graph.parse = Mock()
         mock_generator.base_uri = "http://example.org/"
-        mock_generator.db_ns = "http://example.org/db#"
+        mock_generator.oba_ns = "https://ralforion.com/ns/oba#"
         mock_generator.extract_names_for_review.return_value = {
             "tables": [],
             "columns": [],
@@ -308,7 +308,7 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
         mock_generator.graph = Mock()
         mock_generator.graph.parse = Mock()
         mock_generator.base_uri = "http://example.org/"
-        mock_generator.db_ns = "http://example.org/db#"
+        mock_generator.oba_ns = "https://ralforion.com/ns/oba#"
         mock_generator.extract_names_for_review.return_value = {
             "tables": [],
             "columns": [],

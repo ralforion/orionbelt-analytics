@@ -6,7 +6,6 @@ based on retention policies.
 """
 
 import logging
-import shutil
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime

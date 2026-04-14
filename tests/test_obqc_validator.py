@@ -27,99 +27,99 @@ def create_sample_ontology_graph() -> tuple[Graph, str]:
     base_uri = "http://test.com/ontology/"
     g = Graph()
     ns = Namespace(base_uri)
-    db = Namespace(f"{base_uri}db/")
+    oba = Namespace("https://ralforion.com/ns/oba#")
 
     g.bind("ns", ns)
-    g.bind("db", db)
+    g.bind("oba", oba)
 
     # Add users table
     users = ns["users"]
     g.add((users, RDF.type, OWL.Class))
-    g.add((users, db.tableName, Literal("users")))
-    g.add((users, db.schemaName, Literal("public")))
-    g.add((users, db.primaryKey, Literal("id")))
-    g.add((users, db.rowCount, Literal(1000)))
+    g.add((users, oba.tableName, Literal("users")))
+    g.add((users, oba.schemaName, Literal("public")))
+    g.add((users, oba.primaryKey, Literal("id")))
+    g.add((users, oba.rowCount, Literal(1000)))
 
     # Add users.id column (PK, integer)
     users_id = ns["users_id"]
     g.add((users_id, RDF.type, OWL.DatatypeProperty))
-    g.add((users_id, db.columnName, Literal("id")))
-    g.add((users_id, db.tableName, Literal("users")))
-    g.add((users_id, db.sqlDataType, Literal("INTEGER")))
-    g.add((users_id, db.isPrimaryKey, Literal("true")))
-    g.add((users_id, db.isForeignKey, Literal("false")))
-    g.add((users_id, db.isNullable, Literal("false")))
+    g.add((users_id, oba.columnName, Literal("id")))
+    g.add((users_id, oba.tableName, Literal("users")))
+    g.add((users_id, oba.sqlDataType, Literal("INTEGER")))
+    g.add((users_id, oba.isPrimaryKey, Literal("true")))
+    g.add((users_id, oba.isForeignKey, Literal("false")))
+    g.add((users_id, oba.isNullable, Literal("false")))
     g.add((users_id, RDFS.domain, users))
     g.add((users_id, RDFS.range, XSD.integer))
 
     # Add users.name column (string)
     users_name = ns["users_name"]
     g.add((users_name, RDF.type, OWL.DatatypeProperty))
-    g.add((users_name, db.columnName, Literal("name")))
-    g.add((users_name, db.tableName, Literal("users")))
-    g.add((users_name, db.sqlDataType, Literal("VARCHAR(100)")))
-    g.add((users_name, db.isPrimaryKey, Literal("false")))
-    g.add((users_name, db.isForeignKey, Literal("false")))
-    g.add((users_name, db.isNullable, Literal("true")))
+    g.add((users_name, oba.columnName, Literal("name")))
+    g.add((users_name, oba.tableName, Literal("users")))
+    g.add((users_name, oba.sqlDataType, Literal("VARCHAR(100)")))
+    g.add((users_name, oba.isPrimaryKey, Literal("false")))
+    g.add((users_name, oba.isForeignKey, Literal("false")))
+    g.add((users_name, oba.isNullable, Literal("true")))
     g.add((users_name, RDFS.domain, users))
     g.add((users_name, RDFS.range, XSD.string))
 
     # Add users.email column (string)
     users_email = ns["users_email"]
     g.add((users_email, RDF.type, OWL.DatatypeProperty))
-    g.add((users_email, db.columnName, Literal("email")))
-    g.add((users_email, db.tableName, Literal("users")))
-    g.add((users_email, db.sqlDataType, Literal("VARCHAR(255)")))
-    g.add((users_email, db.isPrimaryKey, Literal("false")))
-    g.add((users_email, db.isForeignKey, Literal("false")))
-    g.add((users_email, db.isNullable, Literal("true")))
+    g.add((users_email, oba.columnName, Literal("email")))
+    g.add((users_email, oba.tableName, Literal("users")))
+    g.add((users_email, oba.sqlDataType, Literal("VARCHAR(255)")))
+    g.add((users_email, oba.isPrimaryKey, Literal("false")))
+    g.add((users_email, oba.isForeignKey, Literal("false")))
+    g.add((users_email, oba.isNullable, Literal("true")))
     g.add((users_email, RDFS.domain, users))
     g.add((users_email, RDFS.range, XSD.string))
 
     # Add orders table
     orders = ns["orders"]
     g.add((orders, RDF.type, OWL.Class))
-    g.add((orders, db.tableName, Literal("orders")))
-    g.add((orders, db.schemaName, Literal("public")))
-    g.add((orders, db.primaryKey, Literal("id")))
+    g.add((orders, oba.tableName, Literal("orders")))
+    g.add((orders, oba.schemaName, Literal("public")))
+    g.add((orders, oba.primaryKey, Literal("id")))
 
     # Add orders.id column
     orders_id = ns["orders_id"]
     g.add((orders_id, RDF.type, OWL.DatatypeProperty))
-    g.add((orders_id, db.columnName, Literal("id")))
-    g.add((orders_id, db.tableName, Literal("orders")))
-    g.add((orders_id, db.sqlDataType, Literal("INTEGER")))
-    g.add((orders_id, db.isPrimaryKey, Literal("true")))
+    g.add((orders_id, oba.columnName, Literal("id")))
+    g.add((orders_id, oba.tableName, Literal("orders")))
+    g.add((orders_id, oba.sqlDataType, Literal("INTEGER")))
+    g.add((orders_id, oba.isPrimaryKey, Literal("true")))
     g.add((orders_id, RDFS.domain, orders))
     g.add((orders_id, RDFS.range, XSD.integer))
 
     # Add orders.user_id column (FK)
     orders_user_id = ns["orders_user_id"]
     g.add((orders_user_id, RDF.type, OWL.DatatypeProperty))
-    g.add((orders_user_id, db.columnName, Literal("user_id")))
-    g.add((orders_user_id, db.tableName, Literal("orders")))
-    g.add((orders_user_id, db.sqlDataType, Literal("INTEGER")))
-    g.add((orders_user_id, db.isPrimaryKey, Literal("false")))
-    g.add((orders_user_id, db.isForeignKey, Literal("true")))
-    g.add((orders_user_id, db.isNullable, Literal("false")))
+    g.add((orders_user_id, oba.columnName, Literal("user_id")))
+    g.add((orders_user_id, oba.tableName, Literal("orders")))
+    g.add((orders_user_id, oba.sqlDataType, Literal("INTEGER")))
+    g.add((orders_user_id, oba.isPrimaryKey, Literal("false")))
+    g.add((orders_user_id, oba.isForeignKey, Literal("true")))
+    g.add((orders_user_id, oba.isNullable, Literal("false")))
     g.add((orders_user_id, RDFS.domain, orders))
     g.add((orders_user_id, RDFS.range, XSD.integer))
 
     # Add orders.total column (decimal)
     orders_total = ns["orders_total"]
     g.add((orders_total, RDF.type, OWL.DatatypeProperty))
-    g.add((orders_total, db.columnName, Literal("total")))
-    g.add((orders_total, db.tableName, Literal("orders")))
-    g.add((orders_total, db.sqlDataType, Literal("DECIMAL(10,2)")))
+    g.add((orders_total, oba.columnName, Literal("total")))
+    g.add((orders_total, oba.tableName, Literal("orders")))
+    g.add((orders_total, oba.sqlDataType, Literal("DECIMAL(10,2)")))
     g.add((orders_total, RDFS.domain, orders))
     g.add((orders_total, RDFS.range, XSD.decimal))
 
     # Add orders.order_date column (date)
     orders_date = ns["orders_order_date"]
     g.add((orders_date, RDF.type, OWL.DatatypeProperty))
-    g.add((orders_date, db.columnName, Literal("order_date")))
-    g.add((orders_date, db.tableName, Literal("orders")))
-    g.add((orders_date, db.sqlDataType, Literal("DATE")))
+    g.add((orders_date, oba.columnName, Literal("order_date")))
+    g.add((orders_date, oba.tableName, Literal("orders")))
+    g.add((orders_date, oba.sqlDataType, Literal("DATE")))
     g.add((orders_date, RDFS.domain, orders))
     g.add((orders_date, RDFS.range, XSD.date))
 
@@ -128,32 +128,32 @@ def create_sample_ontology_graph() -> tuple[Graph, str]:
     g.add((rel, RDF.type, OWL.ObjectProperty))
     g.add((rel, RDFS.domain, orders))
     g.add((rel, RDFS.range, users))
-    g.add((rel, db.foreignKeyColumn, Literal("user_id")))
-    g.add((rel, db.referencedTable, Literal("users")))
-    g.add((rel, db.referencedColumn, Literal("id")))
-    g.add((rel, db.relationshipType, Literal("many_to_one")))
-    g.add((rel, db.sqlJoinCondition, Literal("orders.user_id = users.id")))
+    g.add((rel, oba.foreignKeyColumn, Literal("user_id")))
+    g.add((rel, oba.referencedTable, Literal("users")))
+    g.add((rel, oba.referencedColumn, Literal("id")))
+    g.add((rel, oba.relationshipType, Literal("many_to_one")))
+    g.add((rel, oba.sqlJoinCondition, Literal("orders.user_id = users.id")))
 
     # Add order_items table for fan-trap testing
     order_items = ns["order_items"]
     g.add((order_items, RDF.type, OWL.Class))
-    g.add((order_items, db.tableName, Literal("order_items")))
-    g.add((order_items, db.schemaName, Literal("public")))
+    g.add((order_items, oba.tableName, Literal("order_items")))
+    g.add((order_items, oba.schemaName, Literal("public")))
 
     # Add order_items.order_id column (FK)
     items_order_id = ns["order_items_order_id"]
     g.add((items_order_id, RDF.type, OWL.DatatypeProperty))
-    g.add((items_order_id, db.columnName, Literal("order_id")))
-    g.add((items_order_id, db.tableName, Literal("order_items")))
-    g.add((items_order_id, db.isForeignKey, Literal("true")))
+    g.add((items_order_id, oba.columnName, Literal("order_id")))
+    g.add((items_order_id, oba.tableName, Literal("order_items")))
+    g.add((items_order_id, oba.isForeignKey, Literal("true")))
     g.add((items_order_id, RDFS.domain, order_items))
     g.add((items_order_id, RDFS.range, XSD.integer))
 
     # Add order_items.quantity column
     items_qty = ns["order_items_quantity"]
     g.add((items_qty, RDF.type, OWL.DatatypeProperty))
-    g.add((items_qty, db.columnName, Literal("quantity")))
-    g.add((items_qty, db.tableName, Literal("order_items")))
+    g.add((items_qty, oba.columnName, Literal("quantity")))
+    g.add((items_qty, oba.tableName, Literal("order_items")))
     g.add((items_qty, RDFS.domain, order_items))
     g.add((items_qty, RDFS.range, XSD.integer))
 
@@ -162,32 +162,32 @@ def create_sample_ontology_graph() -> tuple[Graph, str]:
     g.add((rel2, RDF.type, OWL.ObjectProperty))
     g.add((rel2, RDFS.domain, order_items))
     g.add((rel2, RDFS.range, orders))
-    g.add((rel2, db.foreignKeyColumn, Literal("order_id")))
-    g.add((rel2, db.referencedTable, Literal("orders")))
-    g.add((rel2, db.referencedColumn, Literal("id")))
-    g.add((rel2, db.relationshipType, Literal("many_to_one")))
-    g.add((rel2, db.sqlJoinCondition, Literal("order_items.order_id = orders.id")))
+    g.add((rel2, oba.foreignKeyColumn, Literal("order_id")))
+    g.add((rel2, oba.referencedTable, Literal("orders")))
+    g.add((rel2, oba.referencedColumn, Literal("id")))
+    g.add((rel2, oba.relationshipType, Literal("many_to_one")))
+    g.add((rel2, oba.sqlJoinCondition, Literal("order_items.order_id = orders.id")))
 
     # Add shipments table for fan-trap testing
     shipments = ns["shipments"]
     g.add((shipments, RDF.type, OWL.Class))
-    g.add((shipments, db.tableName, Literal("shipments")))
-    g.add((shipments, db.schemaName, Literal("public")))
+    g.add((shipments, oba.tableName, Literal("shipments")))
+    g.add((shipments, oba.schemaName, Literal("public")))
 
     # Add shipments.order_id column (FK)
     ship_order_id = ns["shipments_order_id"]
     g.add((ship_order_id, RDF.type, OWL.DatatypeProperty))
-    g.add((ship_order_id, db.columnName, Literal("order_id")))
-    g.add((ship_order_id, db.tableName, Literal("shipments")))
-    g.add((ship_order_id, db.isForeignKey, Literal("true")))
+    g.add((ship_order_id, oba.columnName, Literal("order_id")))
+    g.add((ship_order_id, oba.tableName, Literal("shipments")))
+    g.add((ship_order_id, oba.isForeignKey, Literal("true")))
     g.add((ship_order_id, RDFS.domain, shipments))
     g.add((ship_order_id, RDFS.range, XSD.integer))
 
     # Add shipments.cost column
     ship_cost = ns["shipments_cost"]
     g.add((ship_cost, RDF.type, OWL.DatatypeProperty))
-    g.add((ship_cost, db.columnName, Literal("cost")))
-    g.add((ship_cost, db.tableName, Literal("shipments")))
+    g.add((ship_cost, oba.columnName, Literal("cost")))
+    g.add((ship_cost, oba.tableName, Literal("shipments")))
     g.add((ship_cost, RDFS.domain, shipments))
     g.add((ship_cost, RDFS.range, XSD.decimal))
 
@@ -196,11 +196,11 @@ def create_sample_ontology_graph() -> tuple[Graph, str]:
     g.add((rel3, RDF.type, OWL.ObjectProperty))
     g.add((rel3, RDFS.domain, shipments))
     g.add((rel3, RDFS.range, orders))
-    g.add((rel3, db.foreignKeyColumn, Literal("order_id")))
-    g.add((rel3, db.referencedTable, Literal("orders")))
-    g.add((rel3, db.referencedColumn, Literal("id")))
-    g.add((rel3, db.relationshipType, Literal("many_to_one")))
-    g.add((rel3, db.sqlJoinCondition, Literal("shipments.order_id = orders.id")))
+    g.add((rel3, oba.foreignKeyColumn, Literal("order_id")))
+    g.add((rel3, oba.referencedTable, Literal("orders")))
+    g.add((rel3, oba.referencedColumn, Literal("id")))
+    g.add((rel3, oba.relationshipType, Literal("many_to_one")))
+    g.add((rel3, oba.sqlJoinCondition, Literal("shipments.order_id = orders.id")))
 
     return g, base_uri
 
@@ -488,21 +488,21 @@ class TestOntologySchemaExtraction(unittest.TestCase):
 
 
 class TestIncompatibleOntology(unittest.TestCase):
-    """Test suite for ontologies without db: namespace annotations."""
+    """Test suite for ontologies without oba: namespace annotations."""
 
-    def test_ontology_without_db_annotations(self):
-        """Test that ontology without db: annotations is detected as incompatible."""
-        # Create a basic OWL ontology without db: namespace annotations
+    def test_ontology_without_oba_annotations(self):
+        """Test that ontology without oba: annotations is detected as incompatible."""
+        # Create a basic OWL ontology without oba: namespace annotations
         g = Graph()
         ns = Namespace("http://example.org/")
         g.bind("ex", ns)
 
-        # Add a class without db:tableName
+        # Add a class without oba:tableName
         person = ns["Person"]
         g.add((person, RDF.type, OWL.Class))
         g.add((person, RDFS.label, Literal("Person")))
 
-        # Add a property without db:columnName
+        # Add a property without oba:columnName
         name_prop = ns["name"]
         g.add((name_prop, RDF.type, OWL.DatatypeProperty))
         g.add((name_prop, RDFS.domain, person))

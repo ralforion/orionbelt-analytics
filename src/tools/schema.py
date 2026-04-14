@@ -101,7 +101,7 @@ def get_analysis_context(
                 "tables": all_table_info
             }
             
-        except RuntimeError as e:
+        except RuntimeError:
             return create_error_response(
                 "No database connection established",
                 "connection_error",

@@ -32,7 +32,8 @@ def generate_chart(
         y_column: Column name(s) for Y-axis. Can be:
             - String: single measure (all chart types)
             - List of strings: multiple measures (line charts only - creates multi-line comparison)
-        color_column: Column for color grouping (for stacked/grouped bar charts)
+        color_column: Column for color grouping (bar: stacked/grouped series;
+            heatmap: numeric value column for color intensity / z-axis)
         title: Chart title
         chart_style: "grouped" or "stacked" (for bar charts)
         width: Chart width in pixels
@@ -60,8 +61,7 @@ def generate_chart(
             missing_libs.append("pandas")
 
         try:
-            import plotly.express as px
-            import plotly.graph_objects as go
+            import plotly  # noqa: F401
         except ImportError:
             missing_libs.append("plotly")
 
@@ -116,7 +116,6 @@ def generate_chart(
 
         # Detect time series and auto-switch to line chart
         if x_column in df.columns and is_time_based_column(df[x_column]):
-            original_chart_type = chart_type
             if chart_type == "bar":
                 chart_type = "line"
                 logger.info(f"Auto-switched from bar to line chart due to time-based x-axis: {x_column}")
@@ -165,44 +164,24 @@ def generate_chart(
         safe_title = "".join(c for c in title.replace(" ", "_") if c.isalnum() or c in "_-")
         chart_id = f"{chart_type}_{safe_title}_{timestamp}"
 
-        # Handle interactive output format (return Plotly JSON data)
+        # Handle interactive output format (return Plotly figure object)
         if output_format == "interactive":
             try:
                 fig = create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height, sort_by, sort_order)
 
-                # Convert figure to JSON-serializable dict
-                fig_dict = fig.to_dict()
-
-                # Return Plotly data for MCP Apps rendering
-                result = {
-                    "traces": fig_dict.get("data", []),
-                    "layout": fig_dict.get("layout", {}),
-                    "config": {
-                        "displayModeBar": True,
-                        "responsive": True,
-                        "scrollZoom": True,
-                        "displaylogo": False,
-                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
-                        "toImageButtonOptions": {
-                            "format": "png",
-                            "filename": chart_id,
-                            "scale": 2
-                        }
-                    },
+                logger.info(f"Created interactive {chart_type} chart with {len(df)} data points")
+                return {
+                    "figure": fig,
                     "metadata": {
                         "chart_id": chart_id,
                         "chart_type": chart_type,
                         "data_points": len(df),
-                        "library": "plotly"
                     }
                 }
 
-                logger.info(f"Created interactive {chart_type} chart with {len(df)} data points")
-                return result
-
             except ImportError as e:
                 logger.warning(f"Plotly not available for interactive mode: {e}")
-                return {"error": "❌ Plotly required for interactive charts. Install with: pip install plotly"}
+                return {"error": "Plotly required for interactive charts. Install with: pip install plotly"}
 
         # Handle image output format (return PNG bytes using Plotly + kaleido)
         try:

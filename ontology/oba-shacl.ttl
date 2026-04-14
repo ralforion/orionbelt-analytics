@@ -1,0 +1,490 @@
+@prefix oba:  <https://ralforion.com/ns/oba#> .
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+# =============================================================================
+# OBA SHACL Shapes 0.1
+#
+# Validation shapes for ontologies annotated with the OBA vocabulary.
+# These shapes target OWL entities (owl:Class, owl:DatatypeProperty,
+# owl:ObjectProperty) and validate that OBA annotation properties are
+# present and correctly typed.
+#
+# Usage:
+#   Validate with any SHACL processor (e.g., pySHACL):
+#     pyshacl -s oba-shacl.ttl -e oba.ttl data.ttl
+# =============================================================================
+
+# Prefix declarations for SPARQL-based constraints (sh:sparql)
+oba:PrefixDeclarations
+    sh:declare [
+        sh:prefix "oba" ;
+        sh:namespace "https://ralforion.com/ns/oba#"^^xsd:anyURI ;
+    ] ;
+    sh:declare [
+        sh:prefix "rdfs" ;
+        sh:namespace "http://www.w3.org/2000/01/rdf-schema#"^^xsd:anyURI ;
+    ] ;
+    sh:declare [
+        sh:prefix "owl" ;
+        sh:namespace "http://www.w3.org/2002/07/owl#"^^xsd:anyURI ;
+    ] .
+
+# -----------------------------------------------------------------------------
+# Table Shape --- validates owl:Class instances representing database tables
+# -----------------------------------------------------------------------------
+
+oba:TableShape a sh:NodeShape ;
+    sh:targetClass owl:Class ;
+    rdfs:label "OBA Table Shape" ;
+    rdfs:comment "Validates OWL classes annotated as database tables." ;
+
+    # Required properties
+    sh:property [
+        sh:path oba:tableName ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "table name" ;
+        sh:message "Every table class must have exactly one oba:tableName (xsd:string)."
+    ] ;
+    sh:property [
+        sh:path oba:schemaName ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "schema name" ;
+        sh:message "Every table class must have exactly one oba:schemaName (xsd:string)."
+    ] ;
+    sh:property [
+        sh:path rdfs:label ;
+        sh:minCount 1 ;
+        sh:name "label" ;
+        sh:message "Every table class must have at least one rdfs:label."
+    ] ;
+
+    # Optional properties with type constraints
+    sh:property [
+        sh:path oba:database ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "database"
+    ] ;
+    sh:property [
+        sh:path oba:primaryKey ;
+        sh:datatype xsd:string ;
+        sh:name "primary key"
+    ] ;
+    sh:property [
+        sh:path oba:rowCount ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:name "row count"
+    ] ;
+
+    # Semantic enrichment (optional)
+    sh:property [
+        sh:path oba:semanticName ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "semantic name"
+    ] ;
+    sh:property [
+        sh:path oba:tableType ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:in ( "fact" "dimension" "lookup" ) ;
+        sh:name "table type"
+    ] ;
+    sh:property [
+        sh:path oba:usageNotes ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "usage notes"
+    ] .
+
+# -----------------------------------------------------------------------------
+# Column Shape --- validates owl:DatatypeProperty instances representing columns
+# -----------------------------------------------------------------------------
+
+oba:ColumnShape a sh:NodeShape ;
+    sh:targetClass owl:DatatypeProperty ;
+    rdfs:label "OBA Column Shape" ;
+    rdfs:comment "Validates OWL datatype properties annotated as database columns." ;
+
+    # Required properties
+    sh:property [
+        sh:path oba:columnName ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "column name" ;
+        sh:message "Every column property must have exactly one oba:columnName (xsd:string)."
+    ] ;
+    sh:property [
+        sh:path oba:tableName ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "table name" ;
+        sh:message "Every column property must have exactly one oba:tableName (xsd:string)."
+    ] ;
+    sh:property [
+        sh:path oba:sqlDataType ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "SQL data type" ;
+        sh:message "Every column property must have exactly one oba:sqlDataType (xsd:string)."
+    ] ;
+    sh:property [
+        sh:path oba:sqlReference ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "SQL reference" ;
+        sh:message "Every column property must have exactly one oba:sqlReference (xsd:string)."
+    ] ;
+    sh:property [
+        sh:path oba:isPrimaryKey ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:boolean ;
+        sh:name "is primary key" ;
+        sh:message "Every column property must have exactly one oba:isPrimaryKey (xsd:boolean)."
+    ] ;
+    sh:property [
+        sh:path oba:isForeignKey ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:boolean ;
+        sh:name "is foreign key" ;
+        sh:message "Every column property must have exactly one oba:isForeignKey (xsd:boolean)."
+    ] ;
+    sh:property [
+        sh:path oba:isNullable ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:boolean ;
+        sh:name "is nullable" ;
+        sh:message "Every column property must have exactly one oba:isNullable (xsd:boolean)."
+    ] ;
+    sh:property [
+        sh:path rdfs:label ;
+        sh:minCount 1 ;
+        sh:name "label" ;
+        sh:message "Every column property must have at least one rdfs:label."
+    ] ;
+    sh:property [
+        sh:path rdfs:domain ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:name "domain" ;
+        sh:message "Every column property must have exactly one rdfs:domain linking it to its table class."
+    ] ;
+
+    # Optional: denormalization
+    sh:property [
+        sh:path oba:isDenormalized ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:boolean ;
+        sh:name "is denormalized"
+    ] ;
+    sh:property [
+        sh:path oba:likelySourceTable ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "likely source table"
+    ] ;
+    sh:property [
+        sh:path oba:denormalizationWarning ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "denormalization warning"
+    ] ;
+
+    # Optional: type override
+    sh:property [
+        sh:path oba:typeOverrideReason ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "type override reason"
+    ] ;
+
+    # Optional: semantic enrichment
+    sh:property [
+        sh:path oba:semanticName ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "semantic name"
+    ] ;
+    sh:property [
+        sh:path oba:dataCharacteristics ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "data characteristics"
+    ] ;
+    sh:property [
+        sh:path oba:businessRules ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "business rules"
+    ] .
+
+# -----------------------------------------------------------------------------
+# Relationship Shape (base) --- validates ALL owl:ObjectProperty instances
+#
+# Both forward (FK-holding) and inverse relationships carry these properties.
+# FK-specific annotations (foreignKeyColumn, referencedTable, etc.) are only
+# present on forward relationships and are validated by ForwardRelationshipShape.
+# -----------------------------------------------------------------------------
+
+oba:RelationshipShape a sh:NodeShape ;
+    sh:targetClass owl:ObjectProperty ;
+    rdfs:label "OBA Relationship Shape" ;
+    rdfs:comment "Base shape for all OWL object properties (forward and inverse).  Validates structural properties common to both directions." ;
+
+    # Required on both forward and inverse
+    sh:property [
+        sh:path oba:relationshipType ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:in ( "many_to_one" "one_to_many" ) ;
+        sh:name "relationship type" ;
+        sh:message "Every relationship must have exactly one oba:relationshipType ('many_to_one' or 'one_to_many')."
+    ] ;
+    sh:property [
+        sh:path rdfs:label ;
+        sh:minCount 1 ;
+        sh:name "label" ;
+        sh:message "Every relationship must have at least one rdfs:label."
+    ] ;
+    sh:property [
+        sh:path rdfs:domain ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:name "domain" ;
+        sh:message "Every relationship must have exactly one rdfs:domain."
+    ] ;
+    sh:property [
+        sh:path rdfs:range ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:name "range" ;
+        sh:message "Every relationship must have exactly one rdfs:range."
+    ] ;
+
+    # Optional: inference metadata (present on both forward and inverse for inferred)
+    sh:property [
+        sh:path oba:isInferredRelationship ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:boolean ;
+        sh:name "is inferred relationship"
+    ] ;
+
+    # Optional: semantic enrichment
+    sh:property [
+        sh:path oba:semanticName ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "semantic name"
+    ] ;
+    sh:property [
+        sh:path oba:relationshipDescription ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "relationship description"
+    ] ;
+    sh:property [
+        sh:path oba:cardinality ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "cardinality"
+    ] ;
+    sh:property [
+        sh:path oba:businessRule ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "business rule"
+    ] .
+
+# -----------------------------------------------------------------------------
+# Forward Relationship Shape --- validates FK-holding owl:ObjectProperty only
+#
+# Targets object properties that have oba:foreignKeyColumn (i.e., forward
+# relationships that hold the FK constraint metadata).  Inverse relationships
+# do not carry these annotations --- they derive FK info via owl:inverseOf.
+#
+# Includes SPARQL-based constraints that cross-validate FK annotations against
+# the graph structure (rdfs:domain / rdfs:range).
+# -----------------------------------------------------------------------------
+
+oba:ForwardRelationshipShape a sh:NodeShape ;
+    sh:targetSubjectsOf oba:foreignKeyColumn ;
+    rdfs:label "OBA Forward Relationship Shape" ;
+    rdfs:comment "Validates FK-specific annotations on forward (FK-holding) object properties." ;
+
+    sh:property [
+        sh:path oba:foreignKeyColumn ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "foreign key column" ;
+        sh:message "Forward relationships must have exactly one oba:foreignKeyColumn (xsd:string)."
+    ] ;
+    sh:property [
+        sh:path oba:referencedTable ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "referenced table" ;
+        sh:message "Forward relationships must have exactly one oba:referencedTable (xsd:string)."
+    ] ;
+    sh:property [
+        sh:path oba:referencedColumn ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "referenced column" ;
+        sh:message "Forward relationships must have exactly one oba:referencedColumn (xsd:string)."
+    ] ;
+    sh:property [
+        sh:path oba:sqlJoinCondition ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "SQL join condition" ;
+        sh:message "Forward relationships must have exactly one oba:sqlJoinCondition (xsd:string)."
+    ] ;
+
+    # Optional: cross-schema
+    sh:property [
+        sh:path oba:referencedSchema ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "referenced schema"
+    ] ;
+
+    # Optional: inference metadata
+    sh:property [
+        sh:path oba:inferenceConfidence ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:in ( "high" "medium" "low" ) ;
+        sh:name "inference confidence"
+    ] ;
+    sh:property [
+        sh:path oba:inferencePattern ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "inference pattern"
+    ] ;
+
+    # Cross-validate: oba:referencedTable must match oba:tableName of the rdfs:range class
+    sh:sparql [
+        sh:message "oba:referencedTable '{?refTable}' does not match oba:tableName '{?rangeTable}' of the rdfs:range class." ;
+        sh:prefixes oba:PrefixDeclarations ;
+        sh:select """
+            SELECT $this ?refTable ?rangeTable
+            WHERE {
+                $this oba:referencedTable ?refTable .
+                $this rdfs:range ?rangeClass .
+                ?rangeClass oba:tableName ?rangeTable .
+                FILTER (?refTable != ?rangeTable)
+            }
+        """
+    ] ;
+
+    # Cross-validate: oba:foreignKeyColumn must be a column of the rdfs:domain class
+    sh:sparql [
+        sh:message "oba:foreignKeyColumn '{?fkCol}' is not a known column of the rdfs:domain class (no DatatypeProperty with matching oba:columnName and rdfs:domain)." ;
+        sh:prefixes oba:PrefixDeclarations ;
+        sh:select """
+            SELECT $this ?fkCol
+            WHERE {
+                $this oba:foreignKeyColumn ?fkCol .
+                $this rdfs:domain ?domainClass .
+                FILTER NOT EXISTS {
+                    ?colProp a owl:DatatypeProperty ;
+                        oba:columnName ?fkCol ;
+                        rdfs:domain ?domainClass .
+                }
+            }
+        """
+    ] .
+
+# -----------------------------------------------------------------------------
+# Disjoint Sibling Shape --- informational validation for owl:disjointWith
+#
+# owl:disjointWith is a standard OWL axiom applied between sibling tables
+# that share a dimension (FK target) but have no FK between each other.
+# SHACL cannot validate the semantic correctness of disjointness (that
+# requires reasoning), but we ensure the target of owl:disjointWith is an
+# owl:Class.
+# -----------------------------------------------------------------------------
+
+oba:DisjointSiblingShape a sh:NodeShape ;
+    sh:targetSubjectsOf owl:disjointWith ;
+    rdfs:label "OBA Disjoint Sibling Shape" ;
+    rdfs:comment "Validates that owl:disjointWith targets are OWL classes." ;
+
+    sh:property [
+        sh:path owl:disjointWith ;
+        sh:class owl:Class ;
+        sh:name "disjoint with" ;
+        sh:message "owl:disjointWith must reference an owl:Class."
+    ] .
+
+# -----------------------------------------------------------------------------
+# Property Chain Shape --- validates owl:propertyChainAxiom structure
+#
+# Property chain axioms link multi-hop FK join paths (A->B->C).  The axiom
+# value must be an RDF list of owl:ObjectProperty instances.
+# Note: SHACL cannot fully validate RDF list contents; this shape only
+# checks the property is present on ObjectProperty instances.
+# -----------------------------------------------------------------------------
+
+oba:PropertyChainShape a sh:NodeShape ;
+    sh:targetSubjectsOf owl:propertyChainAxiom ;
+    rdfs:label "OBA Property Chain Shape" ;
+    rdfs:comment "Validates that property chain axioms are attached to ObjectProperty instances." ;
+
+    sh:property [
+        sh:path rdf:type ;
+        sh:hasValue owl:ObjectProperty ;
+        sh:name "type" ;
+        sh:message "Property chain axioms must be on owl:ObjectProperty instances."
+    ] ;
+    sh:property [
+        sh:path owl:propertyChainAxiom ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:name "property chain axiom" ;
+        sh:message "Each chain property must have exactly one owl:propertyChainAxiom."
+    ] .
+
+# -----------------------------------------------------------------------------
+# Ontology Header Shape --- validates the ontology declaration itself
+# -----------------------------------------------------------------------------
+
+oba:OntologyShape a sh:NodeShape ;
+    sh:targetClass owl:Ontology ;
+    rdfs:label "OBA Ontology Header Shape" ;
+    rdfs:comment "Validates that the ontology declaration has a label and comment." ;
+
+    sh:property [
+        sh:path rdfs:label ;
+        sh:minCount 1 ;
+        sh:name "ontology label" ;
+        sh:message "The ontology must have at least one rdfs:label."
+    ] ;
+    sh:property [
+        sh:path rdfs:comment ;
+        sh:minCount 1 ;
+        sh:name "ontology comment" ;
+        sh:message "The ontology must have at least one rdfs:comment."
+    ] .

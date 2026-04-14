@@ -1,0 +1,293 @@
+@prefix oba:  <https://ralforion.com/ns/oba#> .
+@prefix ns:   <http://example.com/ontology/> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# =============================================================================
+# OBA Example --- E-Commerce Schema (3 tables, 2 FK relationships)
+#
+# This file demonstrates an OBA-annotated ontology generated from a database
+# with "customers", "orders", and "returns" tables in the "public" schema.
+# It showcases OWL axioms: FunctionalProperty, disjointWith, and
+# propertyChainAxiom.
+#
+# Validate with:  pyshacl -s oba-shacl.ttl -e oba.ttl oba-example.ttl
+# =============================================================================
+
+# --- Ontology header --------------------------------------------------------
+
+ns: a owl:Ontology ;
+    rdfs:label "E-Commerce Schema Ontology" ;
+    rdfs:comment "Ontology generated from database schema by OrionBelt Analytics." .
+
+# =============================================================================
+# TABLE: customers
+# =============================================================================
+
+ns:customers a owl:Class ;
+    rdfs:label "Customers" ;
+    rdfs:comment "Customer master data." ;
+    oba:tableName "customers" ;
+    oba:schemaName "public" ;
+    oba:database "ecommerce" ;
+    oba:primaryKey "id" ;
+    oba:rowCount 15000 ;
+    oba:semanticName "Customer" ;
+    oba:tableType "dimension" ;
+    oba:usageNotes "Central customer dimension; join via customers.id." .
+
+ns:customers_id a owl:DatatypeProperty ;
+    rdfs:label "id" ;
+    oba:columnName "id" ;
+    oba:tableName "customers" ;
+    oba:sqlDataType "INTEGER" ;
+    oba:sqlReference "customers.id" ;
+    oba:isPrimaryKey true ;
+    oba:isForeignKey false ;
+    oba:isNullable false ;
+    oba:semanticName "Customer ID" ;
+    rdfs:domain ns:customers ;
+    rdfs:range xsd:integer .
+
+ns:customers_name a owl:DatatypeProperty ;
+    rdfs:label "name" ;
+    oba:columnName "name" ;
+    oba:tableName "customers" ;
+    oba:sqlDataType "VARCHAR(200)" ;
+    oba:sqlReference "customers.name" ;
+    oba:isPrimaryKey false ;
+    oba:isForeignKey false ;
+    oba:isNullable false ;
+    oba:semanticName "Customer Name" ;
+    oba:dataCharacteristics "Full name, mixed case, no duplicates expected." ;
+    rdfs:domain ns:customers ;
+    rdfs:range xsd:string .
+
+ns:customers_email a owl:DatatypeProperty ;
+    rdfs:label "email" ;
+    oba:columnName "email" ;
+    oba:tableName "customers" ;
+    oba:sqlDataType "VARCHAR(255)" ;
+    oba:sqlReference "customers.email" ;
+    oba:isPrimaryKey false ;
+    oba:isForeignKey false ;
+    oba:isNullable true ;
+    oba:semanticName "Email Address" ;
+    rdfs:domain ns:customers ;
+    rdfs:range xsd:string .
+
+# =============================================================================
+# TABLE: orders
+# =============================================================================
+
+ns:orders a owl:Class ;
+    rdfs:label "Orders" ;
+    rdfs:comment "Sales orders placed by customers." ;
+    oba:tableName "orders" ;
+    oba:schemaName "public" ;
+    oba:database "ecommerce" ;
+    oba:primaryKey "id" ;
+    oba:rowCount 482000 ;
+    oba:semanticName "Order" ;
+    oba:tableType "fact" ;
+    oba:usageNotes "Grain: one row per order. Join to customers via customer_id." .
+
+ns:orders_id a owl:DatatypeProperty ;
+    rdfs:label "id" ;
+    oba:columnName "id" ;
+    oba:tableName "orders" ;
+    oba:sqlDataType "INTEGER" ;
+    oba:sqlReference "orders.id" ;
+    oba:isPrimaryKey true ;
+    oba:isForeignKey false ;
+    oba:isNullable false ;
+    oba:semanticName "Order ID" ;
+    rdfs:domain ns:orders ;
+    rdfs:range xsd:integer .
+
+ns:orders_customer_id a owl:DatatypeProperty ;
+    rdfs:label "customer_id" ;
+    oba:columnName "customer_id" ;
+    oba:tableName "orders" ;
+    oba:sqlDataType "INTEGER" ;
+    oba:sqlReference "orders.customer_id" ;
+    oba:isPrimaryKey false ;
+    oba:isForeignKey true ;
+    oba:isNullable false ;
+    oba:semanticName "Customer ID" ;
+    rdfs:domain ns:orders ;
+    rdfs:range xsd:integer .
+
+ns:orders_order_date a owl:DatatypeProperty ;
+    rdfs:label "order_date" ;
+    oba:columnName "order_date" ;
+    oba:tableName "orders" ;
+    oba:sqlDataType "DATE" ;
+    oba:sqlReference "orders.order_date" ;
+    oba:isPrimaryKey false ;
+    oba:isForeignKey false ;
+    oba:isNullable false ;
+    oba:semanticName "Order Date" ;
+    oba:dataCharacteristics "Date only, no time component. Range: 2020-01-01 to present." ;
+    oba:businessRules "Must not be a future date." ;
+    rdfs:domain ns:orders ;
+    rdfs:range xsd:date .
+
+ns:orders_total_amount a owl:DatatypeProperty ;
+    rdfs:label "total_amount" ;
+    oba:columnName "total_amount" ;
+    oba:tableName "orders" ;
+    oba:sqlDataType "NUMERIC(12,2)" ;
+    oba:sqlReference "orders.total_amount" ;
+    oba:isPrimaryKey false ;
+    oba:isForeignKey false ;
+    oba:isNullable false ;
+    oba:semanticName "Total Amount" ;
+    oba:dataCharacteristics "Non-negative decimal, two decimal places." ;
+    oba:businessRules "Must be >= 0. Includes tax and shipping." ;
+    rdfs:domain ns:orders ;
+    rdfs:range xsd:decimal .
+
+# =============================================================================
+# TABLE: returns
+# =============================================================================
+
+ns:returns a owl:Class ;
+    rdfs:label "Returns" ;
+    rdfs:comment "Product returns filed by customers." ;
+    oba:tableName "returns" ;
+    oba:schemaName "public" ;
+    oba:database "ecommerce" ;
+    oba:primaryKey "id" ;
+    oba:rowCount 31000 ;
+    oba:semanticName "Return" ;
+    oba:tableType "fact" ;
+    oba:usageNotes "Grain: one row per return. Join to customers via customer_id." .
+
+ns:returns_id a owl:DatatypeProperty ;
+    rdfs:label "id" ;
+    oba:columnName "id" ;
+    oba:tableName "returns" ;
+    oba:sqlDataType "INTEGER" ;
+    oba:sqlReference "returns.id" ;
+    oba:isPrimaryKey true ;
+    oba:isForeignKey false ;
+    oba:isNullable false ;
+    rdfs:domain ns:returns ;
+    rdfs:range xsd:integer .
+
+ns:returns_customer_id a owl:DatatypeProperty ;
+    rdfs:label "customer_id" ;
+    oba:columnName "customer_id" ;
+    oba:tableName "returns" ;
+    oba:sqlDataType "INTEGER" ;
+    oba:sqlReference "returns.customer_id" ;
+    oba:isPrimaryKey false ;
+    oba:isForeignKey true ;
+    oba:isNullable false ;
+    rdfs:domain ns:returns ;
+    rdfs:range xsd:integer .
+
+ns:returns_return_date a owl:DatatypeProperty ;
+    rdfs:label "return_date" ;
+    oba:columnName "return_date" ;
+    oba:tableName "returns" ;
+    oba:sqlDataType "DATE" ;
+    oba:sqlReference "returns.return_date" ;
+    oba:isPrimaryKey false ;
+    oba:isForeignKey false ;
+    oba:isNullable false ;
+    rdfs:domain ns:returns ;
+    rdfs:range xsd:date .
+
+ns:returns_refund_amount a owl:DatatypeProperty ;
+    rdfs:label "refund_amount" ;
+    oba:columnName "refund_amount" ;
+    oba:tableName "returns" ;
+    oba:sqlDataType "NUMERIC(12,2)" ;
+    oba:sqlReference "returns.refund_amount" ;
+    oba:isPrimaryKey false ;
+    oba:isForeignKey false ;
+    oba:isNullable false ;
+    rdfs:domain ns:returns ;
+    rdfs:range xsd:decimal .
+
+# =============================================================================
+# RELATIONSHIP: orders -> customers (declared FK)
+#
+# owl:FunctionalProperty --- each order references at most one customer.
+# This axiom tells reasoners and the query planner that joining orders to
+# customers will never multiply rows.
+# =============================================================================
+
+ns:orders_has_customers a owl:ObjectProperty, owl:FunctionalProperty ;
+    rdfs:label "Placed by Customer" ;
+    rdfs:comment "Links an order to the customer who placed it." ;
+    oba:foreignKeyColumn "customer_id" ;
+    oba:referencedTable "customers" ;
+    oba:referencedColumn "id" ;
+    oba:sqlJoinCondition "orders.customer_id = customers.id" ;
+    oba:relationshipType "many_to_one" ;
+    oba:semanticName "Placed by Customer" ;
+    oba:relationshipDescription "Each order is placed by exactly one customer." ;
+    oba:cardinality "many-to-one" ;
+    oba:businessRule "Every order must reference a valid customer." ;
+    rdfs:domain ns:orders ;
+    rdfs:range ns:customers ;
+    owl:inverseOf ns:customers_referenced_by_orders .
+
+ns:customers_referenced_by_orders a owl:ObjectProperty ;
+    rdfs:label "Has Orders" ;
+    oba:relationshipType "one_to_many" ;
+    rdfs:domain ns:customers ;
+    rdfs:range ns:orders ;
+    owl:inverseOf ns:orders_has_customers .
+
+# =============================================================================
+# RELATIONSHIP: returns -> customers (declared FK)
+# =============================================================================
+
+ns:returns_has_customers a owl:ObjectProperty, owl:FunctionalProperty ;
+    rdfs:label "Filed by Customer" ;
+    rdfs:comment "Links a return to the customer who filed it." ;
+    oba:foreignKeyColumn "customer_id" ;
+    oba:referencedTable "customers" ;
+    oba:referencedColumn "id" ;
+    oba:sqlJoinCondition "returns.customer_id = customers.id" ;
+    oba:relationshipType "many_to_one" ;
+    rdfs:domain ns:returns ;
+    rdfs:range ns:customers ;
+    owl:inverseOf ns:customers_referenced_by_returns .
+
+ns:customers_referenced_by_returns a owl:ObjectProperty ;
+    rdfs:label "Has Returns" ;
+    oba:relationshipType "one_to_many" ;
+    rdfs:domain ns:customers ;
+    rdfs:range ns:returns ;
+    owl:inverseOf ns:returns_has_customers .
+
+# =============================================================================
+# AXIOM: owl:disjointWith --- orders and returns are distinct populations
+#
+# Both orders and returns reference customers (shared dimension), but their
+# row populations are disjoint.  This axiom formalizes the fan-trap risk:
+# joining both fact tables through customers without UNION ALL would produce
+# a Cartesian product.
+# =============================================================================
+
+ns:orders owl:disjointWith ns:returns .
+
+# =============================================================================
+# AXIOM: owl:propertyChainAxiom --- (not shown in this example)
+#
+# Property chain axioms are generated when A->B->C FK chains exist but A->C
+# has no direct FK.  For example, if there were a "regions" table and
+# customers referenced it, a chain property
+# "orders_via_customers_has_regions" would be created with:
+#
+#   ns:orders_via_customers_has_regions owl:propertyChainAxiom
+#       ( ns:orders_has_customers ns:customers_has_regions ) .
+#
+# This gives reasoners and the query planner an explicit multi-hop path.
+# =============================================================================

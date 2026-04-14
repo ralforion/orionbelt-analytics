@@ -8,7 +8,6 @@ from typing import Optional, Dict, List, Any
 
 from fastmcp import Context
 
-from ..exceptions import ConnectionError, ParameterError
 from ..paths import ensure_output_dir
 from ..r2rml_generator import R2RMLGenerator
 
@@ -264,7 +263,8 @@ async def analyze_schema(
             }
             all_table_info.append(table_dict)
 
-    schema_result = {
+    # Full table details saved to file only — keep response compact
+    full_schema_data = {
         "schema": schema_name or "default",
         "table_count": len(all_table_info),
         "tables": all_table_info,
@@ -282,13 +282,44 @@ async def analyze_schema(
         schema_file_path = output_dir / schema_filename
 
         with open(schema_file_path, "w", encoding="utf-8") as f:
-            json.dump(schema_result, f, indent=2, ensure_ascii=False)
+            json.dump(full_schema_data, f, indent=2, ensure_ascii=False)
 
         logger.info(f"Saved schema analysis to: {schema_file_path}")
         get_session_data(ctx).schema_file = schema_filename
-        schema_result["schema_file"] = schema_filename
     except Exception as e:
         logger.warning(f"Failed to save schema analysis to file: {e}")
+
+    # Build compact response — table summaries instead of full column dumps
+    table_summaries = []
+    relationships = {}
+    fan_trap_warnings = []
+    for t in table_info_objects:
+        pk_cols = t.primary_keys or []
+        fk_cols = [fk["column"] for fk in t.foreign_keys] if t.foreign_keys else []
+        table_summaries.append({
+            "name": t.name,
+            "columns": len(t.columns),
+            "primary_keys": pk_cols,
+            "foreign_keys": fk_cols,
+        })
+        if t.foreign_keys:
+            relationships[t.name] = t.foreign_keys
+            if len(t.foreign_keys) > 1:
+                fan_trap_warnings.append({
+                    "table": t.name,
+                    "referenced_tables": [fk["referenced_table"] for fk in t.foreign_keys],
+                })
+
+    schema_result = {
+        "schema": schema_name or "default",
+        "table_count": len(all_table_info),
+        "tables": table_summaries,
+        "relationships": relationships,
+    }
+    if schema_filename:
+        schema_result["schema_file"] = schema_filename
+    if fan_trap_warnings:
+        schema_result["fan_trap_warnings"] = fan_trap_warnings
 
     # Generate R2RML mapping
     if table_info_objects:
@@ -348,7 +379,7 @@ async def analyze_schema(
             "The schema is CACHED - generate_ontology will use it automatically.\n"
             "Do NOT call analyze_schema again.\n\n"
             "This will create an ontology with:\n"
-            "- Database schema linking (db: namespace)\n"
+            "- Database schema linking (oba: namespace)\n"
             "- SQL column references for queries\n"
             "- JOIN conditions for relationships\n"
             "- Metadata for fan-trap prevention\n\n"

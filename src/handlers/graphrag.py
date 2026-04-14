@@ -84,7 +84,6 @@ async def _auto_generate_ontology_background(
 
         if OXIGRAPH_AVAILABLE:
             try:
-                from . import rdf as rdf_handler
 
                 # Direct store access for background task
                 if session.oxigraph_store:

@@ -203,7 +203,7 @@ class DuckDBDriver(DatabaseDriver):
         try:
             schema = schema_name or 'main'
 
-            with self.engine.connect() as conn:
+            with self.engine.connect():
                 inspector = inspect(self.engine)
 
                 # Check if table exists

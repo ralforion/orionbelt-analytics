@@ -1,11 +1,7 @@
 """Chart generation utilities for OrionBelt Analytics."""
 
 import logging
-import base64
-import io
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +76,53 @@ def get_quarter_sort_order(values, ascending=True):
     parsed.sort(key=lambda x: (x[0], x[1]), reverse=not ascending)
 
     return [x[2] for x in parsed]
+
+
+def _get_ordinal_sort_key(values):
+    """Return a sort-key function if values are weekday names or time-of-day labels.
+
+    Supports:
+    - Weekdays: Monday–Sunday (full or 3-letter abbreviations, case-insensitive)
+    - 12h times: 9AM, 12PM, 3PM, 6 PM, 9:00AM, 12:00 PM, etc.
+
+    Returns (key_func, default_ascending) or None if values are not ordinal.
+    """
+    import re
+
+    values_str = [str(v).strip() for v in values]
+    values_lower = [v.lower() for v in values_str]
+
+    # --- Weekday detection ---
+    weekday_full = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    weekday_abbr = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+
+    if all(v in weekday_full for v in values_lower):
+        order = {d: i for i, d in enumerate(weekday_full)}
+        return (lambda v: order.get(str(v).strip().lower(), 99), True)
+
+    if all(v in weekday_abbr for v in values_lower):
+        order = {d: i for i, d in enumerate(weekday_abbr)}
+        return (lambda v: order.get(str(v).strip().lower(), 99), True)
+
+    # --- 12-hour time detection ---
+    time_pat = re.compile(r'^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$', re.IGNORECASE)
+
+    def parse_12h(v):
+        m = time_pat.match(str(v).strip())
+        if not m:
+            return None
+        h, _, ampm = int(m.group(1)), m.group(2), m.group(3).lower()
+        if ampm == 'am' and h == 12:
+            h = 0
+        elif ampm == 'pm' and h != 12:
+            h += 12
+        return h
+
+    hours = [parse_12h(v) for v in values_str]
+    if all(h is not None for h in hours):
+        return (lambda v: parse_12h(v), True)
+
+    return None
 
 
 def _clean_dataframe_for_plotly(df):
@@ -378,19 +421,45 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     elif chart_type == "heatmap":
         if y_column:
             # Pivot table heatmap
-            pivot_df = df.pivot_table(index=x_column, columns=y_column, aggfunc='size', fill_value=0)
+            # px.imshow maps: pivot index → y-axis, pivot columns → x-axis
+            # So use y_column as index and x_column as columns
+            if color_column and color_column in df.columns:
+                # Use color_column as the z-values (color intensity)
+                pivot_df = df.pivot_table(
+                    index=y_column, columns=x_column,
+                    values=color_column, aggfunc='sum', fill_value=0
+                )
+            else:
+                # No value column — count occurrences (frequency heatmap)
+                pivot_df = df.pivot_table(
+                    index=y_column, columns=x_column,
+                    aggfunc='size', fill_value=0
+                )
 
-            # Sort heatmap: x_column ascending (index), y_column descending (columns)
-            # Default behavior, can be overridden
-            if not sort_by or sort_by == x_column:
-                # Sort index (x_column) - default ascending
+            # Sort index (y_column) — use ordinal order for weekdays/times,
+            # otherwise descending by default
+            idx_ordinal = _get_ordinal_sort_key(pivot_df.index)
+            if idx_ordinal:
+                key_fn, default_asc = idx_ordinal
+                asc = (sort_order == 'ascending') if sort_order else default_asc
+                pivot_df = pivot_df.iloc[sorted(
+                    range(len(pivot_df)), key=lambda i: key_fn(pivot_df.index[i]),
+                    reverse=not asc
+                )]
+            else:
+                pivot_df = pivot_df.sort_index(ascending=False)
+
+            # Sort columns (x_column) — use ordinal order for weekdays/times,
+            # otherwise ascending by default
+            col_ordinal = _get_ordinal_sort_key(pivot_df.columns)
+            if col_ordinal:
+                key_fn, default_asc = col_ordinal
+                asc = (sort_order == 'ascending') if sort_order else default_asc
+                ordered_cols = sorted(pivot_df.columns, key=key_fn, reverse=not asc)
+                pivot_df = pivot_df[ordered_cols]
+            elif not sort_by or sort_by == x_column:
                 x_sort_order = sort_order if sort_order else 'ascending'
-                pivot_df = pivot_df.sort_index(ascending=(x_sort_order == 'ascending'))
-
-            # Sort columns (y_column) descending by default
-            if y_column:
-                # For columns, we always want descending unless explicitly overridden
-                pivot_df = pivot_df.sort_index(axis=1, ascending=False)
+                pivot_df = pivot_df.sort_index(axis=1, ascending=(x_sort_order == 'ascending'))
         else:
             # Correlation heatmap
             numeric_cols = df.select_dtypes(include=['number']).columns

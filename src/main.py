@@ -4,28 +4,22 @@ This module is a thin registration layer for MCP tools. The actual
 implementation logic lives in src/handlers/ modules.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from fastmcp import FastMCP, Context
-from fastmcp.utilities.types import Image
-from mcp_ui_server import create_ui_resource
-from mcp_ui_server.core import UIResource
 
-from .database_manager import DatabaseManager, TableInfo, ColumnInfo
+from .database_manager import DatabaseManager
 from .ontology_generator import OntologyGenerator
-from .r2rml_generator import R2RMLGenerator
 from .obqc_validator import OBQCValidator
-from .config import config_manager
 from . import __version__, __name__ as SERVER_NAME
-from .graphrag import GraphRAGManager
 from .oxigraph_store import OxigraphStoreManager, OXIGRAPH_AVAILABLE
 
 # --- Centralized path and env loading (Task 1 & 2) ---
@@ -33,9 +27,7 @@ from .paths import (
     get_env_file_path,
     ensure_output_dir,
     get_oxigraph_store_dir,
-    get_chart_viewer_path,
     get_skills_dir,
-    OUTPUT_DIR,
 )
 
 # Load environment variables using centralized path resolution (Task 1: C4 fix)
@@ -63,16 +55,6 @@ else:
 ensure_output_dir()
 
 
-# --- MCP Apps: Load Chart Viewer HTML (Task 2: S3 - use paths.py) ---
-_CHART_VIEWER_HTML_PATH = get_chart_viewer_path()
-try:
-    CHART_VIEWER_HTML = _CHART_VIEWER_HTML_PATH.read_text(encoding="utf-8")
-    logger.info(f"Loaded chart viewer HTML app from {_CHART_VIEWER_HTML_PATH}")
-except FileNotFoundError:
-    CHART_VIEWER_HTML = None
-    logger.warning(f"Chart viewer HTML app not found at {_CHART_VIEWER_HTML_PATH}")
-
-
 # --- MCP Server Setup ---
 
 mcp = FastMCP(
@@ -86,7 +68,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 
 - **Database Connectivity:** PostgreSQL, Snowflake, Dremio, ClickHouse, BigQuery, DuckDB, Databricks, MySQL
 - **Schema Intelligence:** Table/column analysis with relationship mapping
-- **Ontology Generation:** RDF/OWL with db: namespace linking to SQL tables
+- **Ontology Generation:** RDF/OWL with oba: namespace linking to SQL tables
 - **Safe SQL Execution:** Fan-trap detection, injection prevention, query validation
 - **Data Visualization:** Interactive charts (Matplotlib, Plotly)
 
@@ -95,7 +77,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 1. `connect_database()` -> Establish secure connection
 2. `list_schemas()` -> Discover available schemas
 3. `analyze_schema()` -> Get schema structure with relationships
-4. `generate_ontology()` -> Create semantic ontology with db: annotations
+4. `generate_ontology()` -> Create semantic ontology with oba: annotations
 5. `execute_sql_query()` -> Run validated SQL with fan-trap protection
 6. `generate_chart()` -> Visualize results
 
@@ -108,7 +90,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 ## Key Features
 
 **Ontology-Enhanced SQL:**
-- db: namespace annotations link ontology classes to SQL tables
+- oba: namespace annotations link ontology classes to SQL tables
 - Automatic JOIN condition generation from relationships
 - Business-friendly semantic layer over technical schemas
 
@@ -137,19 +119,6 @@ Primary Use Case: Semantic database analysis with ontology-enhanced Text-to-SQL
         __version__=__version__
     ),
 )
-
-
-# --- MCP Apps: Register Chart Viewer Resource ---
-@mcp.resource("ui://orionbelt/chart-viewer", mime_type="text/html+mcp")
-def chart_viewer_resource() -> str:
-    """Serve the interactive chart viewer app for MCP Apps."""
-    if CHART_VIEWER_HTML is None:
-        return """<!DOCTYPE html>
-<html><body>
-<h1>Chart Viewer Not Available</h1>
-<p>The chart viewer HTML app was not found at startup.</p>
-</body></html>"""
-    return CHART_VIEWER_HTML
 
 
 # --- MCP Resources: Skills (Task 2: S3 - use get_skills_dir()) ---
@@ -280,17 +249,26 @@ def _clear_session_state(session: SessionData, reason: str = "connection change"
 
 
 class ServerState:
-    """Manages server state with per-session isolation."""
+    """Manages server state with per-session isolation and idle eviction."""
 
     def __init__(self):
         self._sessions: Dict[str, SessionData] = {}
+        self._eviction_task: Optional[asyncio.Task] = None
+
+    @property
+    def session_count(self) -> int:
+        """Number of active sessions."""
+        return len(self._sessions)
 
     def get_session(self, session_id: str) -> SessionData:
         """Get or create session data for a given session ID."""
         if session_id not in self._sessions:
             self._sessions[session_id] = SessionData()
             logger.debug(f"Created new session: {session_id}")
-        return self._sessions[session_id]
+        session = self._sessions[session_id]
+        session.touch()
+        self._ensure_eviction_task()
+        return session
 
     def get_ontology_generator(
         self, base_uri: str = "http://example.com/ontology/"
@@ -303,14 +281,98 @@ class ServerState:
         if session_id in self._sessions:
             session = self._sessions[session_id]
             if session.db_manager:
-                session.db_manager.disconnect()
+                try:
+                    session.db_manager.disconnect()
+                except Exception as e:
+                    logger.warning(f"Error disconnecting db for session {session_id}: {e}")
+            if session.rdf_store.oxigraph_store:
+                try:
+                    session.rdf_store.oxigraph_store.close()
+                except Exception as e:
+                    logger.warning(f"Error closing Oxigraph for session {session_id}: {e}")
             del self._sessions[session_id]
             logger.debug(f"Cleaned up session: {session_id}")
 
     def cleanup(self):
         """Clean up all resources."""
+        if self._eviction_task and not self._eviction_task.done():
+            self._eviction_task.cancel()
+            logger.debug("Cancelled session eviction task")
         for session_id in list(self._sessions.keys()):
             self.cleanup_session(session_id)
+
+    # --- Idle eviction ---
+
+    def _ensure_eviction_task(self):
+        """Lazily start the eviction background task if not already running."""
+        if self._eviction_task is not None and not self._eviction_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            self._eviction_task = loop.create_task(self._eviction_loop())
+            logger.info("Started session eviction background task")
+        except RuntimeError:
+            pass  # No event loop (e.g. tests or sync context)
+
+    async def _eviction_loop(self):
+        """Periodically scan for and evict idle sessions."""
+        from .config import config_manager
+
+        config = config_manager.get_server_config()
+        idle_timeout = config.session_idle_timeout
+        scan_interval = config.session_scan_interval
+
+        if idle_timeout <= 0:
+            logger.info("Session idle eviction disabled (timeout=0)")
+            return
+
+        logger.info(
+            f"Session eviction active: timeout={idle_timeout}s, "
+            f"scan_interval={scan_interval}s"
+        )
+
+        while True:
+            try:
+                await asyncio.sleep(scan_interval)
+                self._evict_idle_sessions(idle_timeout)
+            except asyncio.CancelledError:
+                logger.info("Session eviction task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in session eviction loop: {e}", exc_info=True)
+                await asyncio.sleep(scan_interval)
+
+    def _evict_idle_sessions(self, idle_timeout: int):
+        """Scan sessions and evict those idle beyond the timeout."""
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=idle_timeout)
+
+        to_evict = []
+        for session_id, session in self._sessions.items():
+            if session.last_activity < cutoff:
+                idle_secs = (now - session.last_activity).total_seconds()
+                to_evict.append((session_id, idle_secs))
+
+        total = len(self._sessions)
+        evicting = len(to_evict)
+        if total > 0:
+            logger.debug(
+                f"Session scan: {total} total, {evicting} idle "
+                f"(timeout={idle_timeout}s)"
+            )
+
+        for session_id, idle_secs in to_evict:
+            logger.info(
+                f"Evicting idle session {session_id} "
+                f"(idle {idle_secs:.0f}s, timeout={idle_timeout}s)"
+            )
+            self.cleanup_session(session_id)
+
+        if evicting > 0:
+            logger.info(
+                f"Evicted {evicting} idle session(s). "
+                f"Remaining: {len(self._sessions)}"
+            )
 
 
 # Global server state
@@ -495,8 +557,7 @@ async def connect_database(ctx: Context, db_type: str) -> str:
 async def list_schemas(ctx: Context) -> List[str]:
     """Get a list of available schemas from the connected database.
 
-    Returns:
-        List of schema names or error response
+    REQUIRES: connect_database must be called first.
     """
     return await _h_connection.list_schemas(ctx, get_session_db_manager=get_session_db_manager)
 
@@ -522,13 +583,12 @@ async def analyze_schema(
 ) -> Dict[str, Any]:
     """Analyze database schema and return table metadata with relationships.
 
+    REQUIRES: connect_database must be called first and must complete before calling this tool.
+
     Args:
         schema_name: Schema to analyze (optional, uses default if not specified)
         lightweight: If True (default), return minimal data (table names, FK relationships, fan-trap warnings).
                      If False, return full schema with all column details.
-
-    Returns:
-        Schema analysis results
     """
     return await _h_schema.analyze_schema(
         ctx, schema_name, lightweight,
@@ -547,12 +607,11 @@ async def get_table_details(
 ) -> Dict[str, Any]:
     """Get detailed metadata for a single table.
 
+    REQUIRES: connect_database must be called first.
+
     Args:
         table_name: Name of the table to analyze
         schema_name: Schema containing the table (optional)
-
-    Returns:
-        Table details including columns, constraints, and row count
     """
     return await _h_schema.get_table_details(
         ctx, table_name, schema_name, get_session_db_manager=get_session_db_manager
@@ -618,15 +677,28 @@ async def apply_semantic_names(
     ontology_file: Optional[str] = None,
     save_to_file: bool = True,
 ) -> str:
-    """Apply LLM-suggested semantic names to an existing ontology.
+    """Apply semantic name suggestions to an existing ontology.
+
+    The suggestions parameter must be a JSON object with 'classes', 'properties',
+    and/or 'relationships' arrays. Each entry needs 'original_name' and 'suggested_name'.
+
+    Example suggestions JSON:
+    {
+      "classes": [
+        {"original_name": "acctbal", "suggested_name": "AccountBalance", "description": "Account balance records"}
+      ],
+      "properties": [
+        {"original_name": "bankid", "table_name": "acctbal", "suggested_name": "Bank Identifier"}
+      ],
+      "relationships": [
+        {"original_name": "acctbal_to_banks", "suggested_name": "Account Bank Relationship"}
+      ]
+    }
 
     Args:
-        suggestions: JSON string containing name suggestions
+        suggestions: JSON string with classes/properties/relationships arrays (see example above)
         ontology_file: The ontology filename from generate_ontology response
         save_to_file: Whether to save the updated ontology to a file
-
-    Returns:
-        Updated ontology in Turtle format with semantic names applied
     """
     return await _h_ontology.apply_semantic_names(
         ctx, suggestions, ontology_file, save_to_file,
@@ -634,6 +706,7 @@ async def apply_semantic_names(
         get_session_safe_filename=get_session_safe_filename,
         load_ontology_from_session=load_ontology_from_session,
         create_error_response=create_error_response,
+        get_oxigraph_store=get_oxigraph_store,
     )
 
 
@@ -711,13 +784,12 @@ async def sample_table_data(
 ) -> List[Dict[str, Any]]:
     """Sample data from a specific table for analysis.
 
+    REQUIRES: connect_database must be called first.
+
     Args:
         table_name: Name of the table to sample
         schema_name: Schema containing the table (optional)
         limit: Maximum number of rows to return (default: 10, max: 100)
-
-    Returns:
-        List of sample rows as dictionaries
     """
     return await _h_schema.sample_table_data(
         ctx, table_name, schema_name, limit, get_session_db_manager=get_session_db_manager
@@ -751,14 +823,13 @@ async def execute_sql_query(
 ) -> Dict[str, Any]:
     """Execute SQL query with validation and fan-trap protection.
 
+    REQUIRES: connect_database must be called first.
+
     Args:
         sql_query: SQL SELECT statement (fully qualified identifiers required)
         limit: Maximum rows to return (default: 1000, max: 5,000)
         checklist_completed: Confirmation that pre-execution checklist is complete
         query_intent: Optional natural language description of query intent
-
-    Returns:
-        Query results with data, columns, row_count, execution_time_ms
     """
     return await _h_query.execute_sql_query(
         ctx, sql_query, limit, checklist_completed, query_intent,
@@ -782,32 +853,30 @@ async def generate_chart(
     height: int = 600,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
-    output_format: str = "image",
-) -> Union[List[UIResource], Image]:
-    """Generate interactive or static charts from query results.
+    output_format: str = "interactive",
+) -> str:
+    """Generate an interactive chart rendered via MCP Apps.
 
     Args:
-        data_source: List of dicts from execute_sql_query()['data']
+        data_source: JSON array of objects, e.g. [{"name": "A", "value": 10}, ...] — pass as array, not string
         chart_type: 'bar', 'line', 'scatter', or 'heatmap'
         x_column: Column name for X-axis
         y_column: Column name(s) for Y-axis
-        color_column: Optional column for grouping/coloring
+        color_column: Optional column for grouping/coloring (heatmap: numeric value column for color intensity)
         title: Chart title
         chart_style: 'default', 'stacked', or 'grouped'
         width: Chart width in pixels
         height: Chart height in pixels
         sort_by: Column to sort by
         sort_order: 'ascending' or 'descending'
-        output_format: "interactive" or "image"
-
-    Returns:
-        Interactive chart via MCP Apps or PNG image
+        output_format: "interactive" (default, renders via MCP Apps) or "image" (saves PNG file)
     """
     return await _h_chart.generate_chart(
         ctx, data_source, chart_type, x_column, y_column,
         color_column, title, chart_style, width, height,
         sort_by, sort_order, output_format,
         get_session_data=get_session_data,
+        add_resource=mcp.add_resource,
     )
 
 

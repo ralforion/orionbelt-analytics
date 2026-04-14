@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-from ..database_manager import ColumnInfo, TableInfo
+from ..database_manager import TableInfo
 
 
 class DatabaseDriver(ABC):

@@ -300,9 +300,9 @@ class TestOntologyGenerator(unittest.TestCase):
         self.assertNotIn("rdfs:subClassOf", result)
 
         # Check that constraint metadata is properly annotated
-        self.assertIn("db:isPrimaryKey true", result)  # Primary key annotation
-        self.assertIn("db:isNullable false", result)  # Required field annotation
-        self.assertIn("db:isNullable true", result)  # Optional field annotation
+        self.assertIn("oba:isPrimaryKey true", result)  # Primary key annotation
+        self.assertIn("oba:isNullable false", result)  # Required field annotation
+        self.assertIn("oba:isNullable true", result)  # Optional field annotation
     
     def test_get_enrichment_data(self):
         """Test generation of enrichment data structure."""
@@ -502,6 +502,167 @@ class TestOntologyGenerator(unittest.TestCase):
         # Should have multiple classes
         class_count = result.count("owl:Class")
         self.assertGreaterEqual(class_count, 3)
+
+
+class TestApplySemanticNamesDuplicateLabels(unittest.TestCase):
+    """Tests for duplicate label detection and disambiguation in apply_semantic_names."""
+
+    def setUp(self):
+        self.generator = OntologyGenerator("http://test.com/ontology/")
+
+        # Two tables sharing a column name ("notes") to trigger duplicate labels
+        self.sales_table = TableInfo(
+            name="sales",
+            schema="public",
+            columns=[
+                ColumnInfo(name="id", data_type="INTEGER", is_nullable=False,
+                           is_primary_key=True, is_foreign_key=False),
+                ColumnInfo(name="notes", data_type="TEXT", is_nullable=True,
+                           is_primary_key=False, is_foreign_key=False),
+            ],
+            primary_keys=["id"],
+            foreign_keys=[],
+        )
+        self.purchases_table = TableInfo(
+            name="purchases",
+            schema="public",
+            columns=[
+                ColumnInfo(name="id", data_type="INTEGER", is_nullable=False,
+                           is_primary_key=True, is_foreign_key=False),
+                ColumnInfo(name="notes", data_type="TEXT", is_nullable=True,
+                           is_primary_key=False, is_foreign_key=False),
+            ],
+            primary_keys=["id"],
+            foreign_keys=[],
+        )
+        # A third table with a unique column (no collision)
+        self.banks_table = TableInfo(
+            name="banks",
+            schema="public",
+            columns=[
+                ColumnInfo(name="id", data_type="INTEGER", is_nullable=False,
+                           is_primary_key=True, is_foreign_key=False),
+                ColumnInfo(name="bankname", data_type="VARCHAR(100)", is_nullable=False,
+                           is_primary_key=False, is_foreign_key=False),
+            ],
+            primary_keys=["id"],
+            foreign_keys=[],
+        )
+
+    def _generate_base(self, tables):
+        self.generator.generate_from_schema(tables)
+
+    def test_duplicate_labels_are_disambiguated(self):
+        """Duplicate suggested labels get table context appended."""
+        self._generate_base([self.sales_table, self.purchases_table])
+
+        suggestions = {
+            "properties": [
+                {"original_name": "notes", "table_name": "sales",
+                 "suggested_name": "Notes", "description": "Sales notes"},
+                {"original_name": "notes", "table_name": "purchases",
+                 "suggested_name": "Notes", "description": "Purchase notes"},
+            ]
+        }
+
+        result = self.generator.apply_semantic_names(suggestions)
+
+        # Both labels should be disambiguated with table context
+        self.assertIn("Notes (sales)", result)
+        self.assertIn("Notes (purchases)", result)
+        # Plain "Notes" without qualifier should NOT be a standalone label
+        from rdflib import Literal
+        notes_labels = [
+            str(o) for s, p, o in self.generator.graph.triples((None, RDFS.label, None))
+            if str(o) == "Notes"
+        ]
+        self.assertEqual(notes_labels, [], "Bare 'Notes' label should not exist")
+
+    def test_unique_labels_are_not_disambiguated(self):
+        """Labels that are unique across properties remain unchanged."""
+        self._generate_base([self.sales_table, self.banks_table])
+
+        suggestions = {
+            "properties": [
+                {"original_name": "notes", "table_name": "sales",
+                 "suggested_name": "Sales Notes"},
+                {"original_name": "bankname", "table_name": "banks",
+                 "suggested_name": "Bank Name"},
+            ]
+        }
+
+        result = self.generator.apply_semantic_names(suggestions)
+
+        # No disambiguation needed — labels should be unchanged
+        self.assertIn("Sales Notes", result)
+        self.assertIn("Bank Name", result)
+        self.assertNotIn("Sales Notes (", result)
+        self.assertNotIn("Bank Name (", result)
+
+    def test_disambiguation_uses_class_label_when_available(self):
+        """When the class has been enriched with a label, disambiguation uses it."""
+        self._generate_base([self.sales_table, self.purchases_table])
+
+        suggestions = {
+            "classes": [
+                {"original_name": "sales", "suggested_name": "Sales Orders"},
+                {"original_name": "purchases", "suggested_name": "Purchase Orders"},
+            ],
+            "properties": [
+                {"original_name": "notes", "table_name": "sales",
+                 "suggested_name": "Notes"},
+                {"original_name": "notes", "table_name": "purchases",
+                 "suggested_name": "Notes"},
+            ]
+        }
+
+        result = self.generator.apply_semantic_names(suggestions)
+
+        # Should use the enriched class labels as qualifiers
+        self.assertIn("Notes (Sales Orders)", result)
+        self.assertIn("Notes (Purchase Orders)", result)
+
+    def test_conflict_with_existing_label(self):
+        """A suggested label that conflicts with an existing unchanged property is disambiguated."""
+        self._generate_base([self.sales_table, self.banks_table])
+
+        # First, set "Bank Name" on banks_bankname (not via suggestions, direct set)
+        from rdflib import Literal
+        bankname_uri = self.generator.base_uri["banks_bankname"]
+        self.generator.graph.remove((bankname_uri, RDFS.label, None))
+        self.generator.graph.add((bankname_uri, RDFS.label, Literal("Bank Name")))
+
+        # Now suggest "Bank Name" for sales_notes — conflicts with existing
+        suggestions = {
+            "properties": [
+                {"original_name": "notes", "table_name": "sales",
+                 "suggested_name": "Bank Name"},
+            ]
+        }
+
+        result = self.generator.apply_semantic_names(suggestions)
+
+        # The suggested one should be disambiguated
+        self.assertIn("Bank Name (sales)", result)
+
+    def test_case_insensitive_duplicate_detection(self):
+        """Duplicate detection is case-insensitive."""
+        self._generate_base([self.sales_table, self.purchases_table])
+
+        suggestions = {
+            "properties": [
+                {"original_name": "notes", "table_name": "sales",
+                 "suggested_name": "notes"},
+                {"original_name": "notes", "table_name": "purchases",
+                 "suggested_name": "Notes"},
+            ]
+        }
+
+        result = self.generator.apply_semantic_names(suggestions)
+
+        # Both should be disambiguated despite different casing
+        self.assertIn("notes (sales)", result)
+        self.assertIn("Notes (purchases)", result)
 
 
 if __name__ == '__main__':
