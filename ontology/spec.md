@@ -265,6 +265,9 @@ SHACL shapes are provided in `oba-shacl.ttl` to enforce:
 - controlled value sets for `oba:relationshipType`, `oba:inferenceConfidence`, `oba:tableType`
 - cardinality constraints (minCount, maxCount)
 - structural requirements (`rdfs:domain`, `rdfs:range` presence on columns and relationships)
+- cross-validation of FK annotations against graph structure via SPARQL-based constraints:
+  - `oba:referencedTable` must match `oba:tableName` of the `rdfs:range` class
+  - `oba:foreignKeyColumn` must be a known column of the `rdfs:domain` class
 
 ## 11. Versioning
 

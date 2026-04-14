@@ -3,6 +3,7 @@
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 
 # =============================================================================
 # OBA SHACL Shapes 0.1
@@ -16,6 +17,21 @@
 #   Validate with any SHACL processor (e.g., pySHACL):
 #     pyshacl -s oba-shacl.ttl -e oba.ttl data.ttl
 # =============================================================================
+
+# Prefix declarations for SPARQL-based constraints (sh:sparql)
+oba:PrefixDeclarations
+    sh:declare [
+        sh:prefix "oba" ;
+        sh:namespace "https://ralforion.com/ns/oba#"^^xsd:anyURI ;
+    ] ;
+    sh:declare [
+        sh:prefix "rdfs" ;
+        sh:namespace "http://www.w3.org/2000/01/rdf-schema#"^^xsd:anyURI ;
+    ] ;
+    sh:declare [
+        sh:prefix "owl" ;
+        sh:namespace "http://www.w3.org/2002/07/owl#"^^xsd:anyURI ;
+    ] .
 
 # -----------------------------------------------------------------------------
 # Table Shape --- validates owl:Class instances representing database tables
@@ -303,9 +319,8 @@ oba:RelationshipShape a sh:NodeShape ;
 # relationships that hold the FK constraint metadata).  Inverse relationships
 # do not carry these annotations --- they derive FK info via owl:inverseOf.
 #
-# Note: SHACL cannot cross-validate that oba:referencedTable matches the
-# table represented by rdfs:range.  That level of consistency checking
-# requires SPARQL-based validation (future work).
+# Includes SPARQL-based constraints that cross-validate FK annotations against
+# the graph structure (rdfs:domain / rdfs:range).
 # -----------------------------------------------------------------------------
 
 oba:ForwardRelationshipShape a sh:NodeShape ;
@@ -367,6 +382,39 @@ oba:ForwardRelationshipShape a sh:NodeShape ;
         sh:maxCount 1 ;
         sh:datatype xsd:string ;
         sh:name "inference pattern"
+    ] ;
+
+    # Cross-validate: oba:referencedTable must match oba:tableName of the rdfs:range class
+    sh:sparql [
+        sh:message "oba:referencedTable '{?refTable}' does not match oba:tableName '{?rangeTable}' of the rdfs:range class." ;
+        sh:prefixes oba:PrefixDeclarations ;
+        sh:select """
+            SELECT $this ?refTable ?rangeTable
+            WHERE {
+                $this oba:referencedTable ?refTable .
+                $this rdfs:range ?rangeClass .
+                ?rangeClass oba:tableName ?rangeTable .
+                FILTER (?refTable != ?rangeTable)
+            }
+        """
+    ] ;
+
+    # Cross-validate: oba:foreignKeyColumn must be a column of the rdfs:domain class
+    sh:sparql [
+        sh:message "oba:foreignKeyColumn '{?fkCol}' is not a known column of the rdfs:domain class (no DatatypeProperty with matching oba:columnName and rdfs:domain)." ;
+        sh:prefixes oba:PrefixDeclarations ;
+        sh:select """
+            SELECT $this ?fkCol
+            WHERE {
+                $this oba:foreignKeyColumn ?fkCol .
+                $this rdfs:domain ?domainClass .
+                FILTER NOT EXISTS {
+                    ?colProp a owl:DatatypeProperty ;
+                        oba:columnName ?fkCol ;
+                        rdfs:domain ?domainClass .
+                }
+            }
+        """
     ] .
 
 # -----------------------------------------------------------------------------

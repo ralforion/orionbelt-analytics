@@ -389,8 +389,9 @@ class OntologyGenerator:
         # Add database annotations for inverse relationship
         self.graph.add((inverse_prop_uri, self.oba_ns.relationshipType, Literal("one_to_many")))
 
-        # Link them as inverses
+        # Link them as inverses (both directions for explicit traversal)
         self.graph.add((prop_uri, OWL.inverseOf, inverse_prop_uri))
+        self.graph.add((inverse_prop_uri, OWL.inverseOf, prop_uri))
 
         logger.debug(f"Added declared FK relationship: {table_name}.{fk_column} -> {referenced_table}.{referenced_column}")
 
@@ -779,8 +780,9 @@ class OntologyGenerator:
             self.graph.add((inverse_prop_uri, self.oba_ns.relationshipType, Literal("one_to_many")))
             self.graph.add((inverse_prop_uri, self.oba_ns.isInferredRelationship, Literal(True)))
 
-            # Link as inverses
+            # Link as inverses (both directions for explicit traversal)
             self.graph.add((prop_uri, OWL.inverseOf, inverse_prop_uri))
+            self.graph.add((inverse_prop_uri, OWL.inverseOf, prop_uri))
 
     def _add_denormalized_field_annotation(self, denorm: DenormalizedField) -> None:
         """Add annotation to a denormalized field in the ontology.
