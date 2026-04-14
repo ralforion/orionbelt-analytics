@@ -5,7 +5,6 @@ import sys
 import signal
 import shutil
 import asyncio
-import warnings
 from pathlib import Path
 
 # Add src directory to path for imports
@@ -51,13 +50,15 @@ def print_startup_info():
     
     logger.info("🔧 Available MCP Tools:")
     tools = [
-        "connect_database - Connect to PostgreSQL, Snowflake, or Dremio with security",
-        "diagnose_connection_issue - Diagnose and troubleshoot connection problems",
+        "connect_database - Connect to PostgreSQL, Snowflake, Dremio, or ClickHouse",
         "list_schemas - List available database schemas",
-        "get_analysis_context - Complete schema analysis with automatic ontology generation", 
+        "analyze_schema - Analyze schema (lightweight or full mode)",
+        "get_table_details - Detailed table metadata and columns",
         "sample_table_data - Sample table data with security controls",
         "generate_ontology - Generate RDF ontology with validation",
-        "load_ontology_from_file - Load saved/edited ontology from tmp folder",
+        "suggest_semantic_names - Suggest business-friendly names",
+        "apply_semantic_names - Apply semantic names to ontology",
+        "load_my_ontology - Load saved/edited ontology from tmp folder",
         "validate_sql_syntax - Validate SQL queries before execution",
         "execute_sql_query - Execute validated SQL queries safely",
         "generate_chart - Generate interactive charts from query results",
@@ -110,7 +111,7 @@ def main():
         config_manager.validate_config()
 
         # Setup signal handlers for graceful shutdown
-        shutdown_event = setup_signal_handlers()
+        setup_signal_handlers()
 
         # Register cleanup for session resources on exit
         atexit.register(cleanup_server)
