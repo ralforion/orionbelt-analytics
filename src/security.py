@@ -279,11 +279,6 @@ class IdentifierValidator:
     # Valid identifier pattern (letters, numbers, underscores only - no hyphens)
     VALID_IDENTIFIER = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
-    # Valid schema.table pattern (no hyphens)
-    VALID_QUALIFIED_IDENTIFIER = re.compile(
-        r'^[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*$'
-    )
-
     @classmethod
     def validate_identifier(cls, identifier: str) -> bool:
         """Validate a single database identifier."""

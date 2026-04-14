@@ -59,23 +59,11 @@ def get_oxigraph_store_dir(connection_id: Optional[str] = None) -> Path:
     return store_dir
 
 
-def get_chromadb_dir(connection_id: str) -> Path:
-    """Get ChromaDB storage directory for a connection."""
-    db_dir = OUTPUT_DIR / "chromadb" / connection_id
-    db_dir.mkdir(parents=True, exist_ok=True)
-    return db_dir
-
-
 def get_connection_dir(connection_id: str) -> Path:
     """Get the base directory for connection-scoped data."""
     conn_dir = OUTPUT_DIR / connection_id
     conn_dir.mkdir(parents=True, exist_ok=True)
     return conn_dir
-
-
-def get_metadata_file(connection_id: str) -> Path:
-    """Get the metadata JSON file path for a connection."""
-    return get_connection_dir(connection_id) / "metadata.json"
 
 
 def get_skills_dir() -> Path:
@@ -97,6 +85,3 @@ def get_charts_dir(connection_id: str) -> Path:
     return charts_dir
 
 
-def get_chart_viewer_path() -> Path:
-    """Get the path to the chart viewer HTML app."""
-    return Path(__file__).parent / "apps" / "chart_viewer.html"

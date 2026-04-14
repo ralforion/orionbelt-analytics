@@ -334,27 +334,3 @@ class R2RMLGenerator:
             safe = '_' + safe
 
         return safe or "unnamed"
-
-
-def generate_r2rml_mapping(
-    tables_info: List[TableInfo],
-    base_iri: str = "http://example.com/",
-    database_name: str = "database",
-    schema_name: Optional[str] = None
-) -> str:
-    """Convenience function to generate R2RML mapping.
-
-    Args:
-        tables_info: List of TableInfo objects containing schema metadata
-        base_iri: Base IRI for generated RDF resources
-        database_name: Name of the database (used in comments)
-        schema_name: Optional schema name to include in table references
-
-    Returns:
-        R2RML mapping in Turtle format (W3C R2RML standard)
-    """
-    generator = R2RMLGenerator(
-        base_iri=base_iri,
-        database_name=database_name
-    )
-    return generator.generate_from_schema(tables_info, schema_name)

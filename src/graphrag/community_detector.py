@@ -231,28 +231,3 @@ class CommunityDetector:
                 domain_names[community_id] = f"Domain {community_id + 1}"
 
         return domain_names
-
-    def get_inter_community_connections(self) -> List[Dict[str, Any]]:
-        """
-        Find connections between communities.
-
-        Returns:
-            List of inter-community edges
-        """
-        connections = []
-
-        for edge in self.graph.edges(data=True):
-            from_table, to_table = edge[0], edge[1]
-            from_comm = self.table_to_community.get(from_table)
-            to_comm = self.table_to_community.get(to_table)
-
-            if from_comm is not None and to_comm is not None and from_comm != to_comm:
-                connections.append({
-                    "from_community": from_comm,
-                    "to_community": to_comm,
-                    "from_table": from_table,
-                    "to_table": to_table,
-                    "relationship": edge[2]
-                })
-
-        return connections

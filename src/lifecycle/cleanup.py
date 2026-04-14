@@ -7,10 +7,10 @@ based on retention policies.
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 from datetime import datetime
 
-from .metadata import VersionMetadataManager, VersionInfo
+from .metadata import VersionMetadataManager
 
 logger = logging.getLogger(__name__)
 
@@ -176,32 +176,6 @@ class DataCleanupManager:
             "dry_run": dry_run
         }
 
-    def cleanup_all(
-        self,
-        schema_name: str,
-        dry_run: bool = True,
-        oxigraph_store: Optional[Any] = None
-    ) -> Dict[str, Any]:
-        """
-        Clean up both GraphRAG and Ontology data.
-
-        Args:
-            schema_name: Schema name
-            dry_run: If True, only report what would be deleted
-            oxigraph_store: OxigraphStoreManager instance
-
-        Returns:
-            Combined cleanup report
-        """
-        graphrag_report = self.cleanup_graphrag(schema_name, dry_run)
-        ontology_report = self.cleanup_ontology(schema_name, dry_run, oxigraph_store)
-
-        return {
-            "graphrag": graphrag_report,
-            "ontology": ontology_report,
-            "dry_run": dry_run
-        }
-
     def _delete_graphrag_files(self, schema_name: str, version: int):
         """
         Delete GraphRAG files for a specific version.
@@ -231,67 +205,3 @@ class DataCleanupManager:
                 file_path.unlink()
                 logger.info(f"Deleted {file_path}")
 
-    def get_cleanup_recommendations(
-        self,
-        schema_name: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Get recommendations for cleanup without actually deleting.
-
-        Args:
-            schema_name: Specific schema name, or None for all schemas
-
-        Returns:
-            Cleanup recommendations
-        """
-        recommendations = []
-
-        schemas_to_check = (
-            [schema_name] if schema_name
-            else list(self.metadata_mgr.metadata.get("schemas", {}).keys())
-        )
-
-        total_versions_to_delete = 0
-        estimated_space_to_free = 0
-
-        for schema in schemas_to_check:
-            graphrag_versions = self.metadata_mgr.get_versions_to_cleanup(
-                schema,
-                "graphrag"
-            )
-            ontology_versions = self.metadata_mgr.get_versions_to_cleanup(
-                schema,
-                "ontology"
-            )
-
-            if graphrag_versions or ontology_versions:
-                recommendations.append({
-                    "schema": schema,
-                    "graphrag_deletable": len(graphrag_versions),
-                    "ontology_deletable": len(ontology_versions),
-                    "oldest_version_age": self._get_oldest_age(
-                        graphrag_versions + ontology_versions
-                    )
-                })
-
-                total_versions_to_delete += len(graphrag_versions) + len(ontology_versions)
-
-        return {
-            "recommendations": recommendations,
-            "total_versions_to_delete": total_versions_to_delete,
-            "estimated_space_to_free_mb": estimated_space_to_free,
-            "retention_policy": self.metadata_mgr.get_retention_policy().__dict__
-        }
-
-    def _get_oldest_age(self, versions: List[VersionInfo]) -> int:
-        """Get age of oldest version in days."""
-        if not versions:
-            return 0
-
-        now = datetime.now()
-        oldest = min(
-            datetime.fromisoformat(v.created_at)
-            for v in versions
-        )
-
-        return (now - oldest).days

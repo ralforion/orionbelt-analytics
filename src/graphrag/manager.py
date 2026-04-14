@@ -370,32 +370,6 @@ class GraphRAGManager:
 
         logger.info(f"Saved GraphRAG state to {connection_dir}")
 
-    def load_state(self, input_dir: Path, schema_name: str, connection_id: Optional[str] = None):
-        """
-        Load GraphRAG state from disk.
-
-        Args:
-            input_dir: Input directory
-            schema_name: Schema identifier
-            connection_id: Database connection fingerprint (for file isolation)
-        """
-        input_dir = Path(input_dir)
-
-        # Use connection-specific subdirectory
-        if connection_id:
-            self._connection_id = connection_id
-        connection_dir = input_dir / self._connection_id
-
-        # Load vector store
-        vector_store_path = connection_dir / f"vector_store_{schema_name}.json"
-        if vector_store_path.exists():
-            self.vector_store.load(vector_store_path)
-
-        self._schema_name = schema_name
-        self._initialized = True
-
-        logger.info(f"Loaded GraphRAG state from {connection_dir}")
-
     def clear(self):
         """Clear all GraphRAG state."""
         self.vector_store.clear()

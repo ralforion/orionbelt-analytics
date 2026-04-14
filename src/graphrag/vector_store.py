@@ -220,33 +220,6 @@ class VectorStore:
         """
         return [elem for elem in self.elements if elem.element_type == element_type]
 
-    def get_related_elements(
-        self,
-        element_id: str,
-        top_k: int = 10,
-        element_type: Optional[str] = None
-    ) -> List[Tuple[StoredElement, float]]:
-        """
-        Find elements related to a given element.
-
-        Args:
-            element_id: Source element ID
-            top_k: Number of related elements to return
-            element_type: Filter by type
-
-        Returns:
-            List of (element, similarity_score) tuples
-        """
-        source_elem = self.get_by_id(element_id)
-        if not source_elem:
-            return []
-
-        query_embedding = np.array(source_elem.embedding)
-        results = self.search(query_embedding, top_k=top_k + 1, element_type=element_type)
-
-        # Remove the source element itself
-        return [(elem, score) for elem, score in results if elem.element_id != element_id]
-
     def save(self, filepath: Path):
         """
         Save vector store to disk.

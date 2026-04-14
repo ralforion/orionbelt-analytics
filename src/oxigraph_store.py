@@ -498,63 +498,6 @@ class OxigraphStoreManager:
             for r in results
         ]
 
-    def find_relationships(
-        self,
-        from_table: Optional[str] = None,
-        to_table: Optional[str] = None,
-        schema_graph: Optional[str] = None
-    ) -> List[Dict[str, str]]:
-        """
-        Find foreign key relationships using SPARQL.
-
-        Args:
-            from_table: Optional source table filter
-            to_table: Optional target table filter
-            schema_graph: Optional graph to search
-
-        Returns:
-            List of relationship dicts
-        """
-        safe_graph = _escape_sparql_iri(schema_graph) if schema_graph else ""
-        graph_clause = f"FROM <{safe_graph}>" if schema_graph else ""
-
-        filters = []
-        if from_table:
-            safe_from = _escape_sparql_literal(from_table)
-            filters.append(f'FILTER (?fromTable = "{safe_from}")')
-        if to_table:
-            safe_to = _escape_sparql_literal(to_table)
-            filters.append(f'FILTER (?toTable = "{safe_to}")')
-
-        filter_clause = "\n".join(filters)
-
-        query = f"""
-            PREFIX oba: <https://ralforion.com/ns/oba#>
-
-            SELECT ?fromTable ?fromColumn ?toTable ?toColumn
-            {graph_clause}
-            WHERE {{
-                ?rel a oba:ForeignKey .
-                ?rel oba:fromTable ?fromTable .
-                ?rel oba:fromColumn ?fromColumn .
-                ?rel oba:toTable ?toTable .
-                ?rel oba:toColumn ?toColumn .
-                {filter_clause}
-            }}
-            ORDER BY ?fromTable ?toTable
-        """
-
-        results = self.query_sparql(query)
-        return [
-            {
-                "from_table": r['fromTable'],
-                "from_column": r['fromColumn'],
-                "to_table": r['toTable'],
-                "to_column": r['toColumn']
-            }
-            for r in results
-        ]
-
     def export_graph(
         self,
         graph_uri: str,
@@ -581,41 +524,6 @@ class OxigraphStoreManager:
         """
 
         return self.query_sparql_construct(query)
-
-    def clear_graph(self, graph_uri: str):
-        """
-        Clear all triples from a named graph.
-
-        Args:
-            graph_uri: Graph to clear
-        """
-        try:
-            safe_uri = _escape_sparql_iri(graph_uri)
-            self.store.update(f"CLEAR GRAPH <{safe_uri}>")
-            logger.info(f"Cleared graph: {graph_uri}")
-        except Exception as e:
-            logger.error(f"Failed to clear graph: {e}", exc_info=True)
-            raise
-
-    def backup(self, backup_path: Path):
-        """
-        Backup the entire store.
-
-        Args:
-            backup_path: Path to backup file (.nq or .trig format)
-        """
-        try:
-            # Export all data
-            all_data = self.store.dump_graph(format="application/n-quads")
-            backup_path.write_bytes(all_data)
-            logger.info(f"Backed up store to: {backup_path}")
-        except Exception as e:
-            logger.error(f"Backup failed: {e}", exc_info=True)
-            raise
-
-    def get_store_size(self) -> int:
-        """Get total number of triples in store."""
-        return len(self.store)
 
     def close(self):
         """Close the store (flush to disk if persistent)."""

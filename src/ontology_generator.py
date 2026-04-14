@@ -24,8 +24,6 @@ _KNOWN_DB_SUFFIXES = {"id", "pk", "fk", "idx", "seq"}
 
 logger = logging.getLogger(__name__)
 
-# Define namespaces
-EX = Namespace("http://example.com/ontology/")
 
 
 @dataclass

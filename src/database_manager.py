@@ -9,7 +9,6 @@ import hashlib
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
@@ -19,7 +18,6 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, DatabaseError
 
 from .constants import (
-    QUERY_TIMEOUT,
     IDENTIFIER_PATTERN,
     DEFAULT_SAMPLE_LIMIT,
 )
@@ -848,53 +846,6 @@ class DatabaseManager:
             )
         return self._driver.analyze_table(table_name, schema_name)
 
-    def get_table_relationships(self,
-                                schema_name: Optional[str] = None) -> Dict[str, List[Dict[str, str]]]:
-        """Get relationships between tables in a schema."""
-        if not self.engine and not self._dremio_rest_connection:
-            raise RuntimeError("No database connection established")
-
-        relationships = {}
-        tables = self.get_tables(schema_name)
-
-        for table_name in tables:
-            table_info = self.analyze_table(table_name, schema_name)
-            if table_info and table_info.foreign_keys:
-                relationships[table_name] = table_info.foreign_keys
-
-        return relationships
-
-    def analyze_schema_concurrent(self, schema_name: Optional[str] = None,
-                                  max_workers: int = 5) -> List[TableInfo]:
-        """Analyze schema with concurrent table processing for better performance."""
-        tables = self.get_tables(schema_name)
-        if not tables:
-            return []
-
-        max_workers = min(max_workers, len(tables), 10)
-        logger.info(f"Analyzing {len(tables)} tables concurrently with {max_workers} workers")
-
-        results = []
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_table = {
-                executor.submit(self.analyze_table, table_name, schema_name): table_name
-                for table_name in tables
-            }
-            for future in as_completed(future_to_table):
-                table_name = future_to_table[future]
-                try:
-                    table_info = future.result(timeout=QUERY_TIMEOUT)
-                    if table_info:
-                        results.append(table_info)
-                        logger.debug(f"Completed analysis of table: {table_name}")
-                    else:
-                        logger.warning(f"No information returned for table: {table_name}")
-                except Exception as e:
-                    logger.error(f"Failed to analyze table {table_name}: {e}")
-
-        logger.info(f"Concurrent schema analysis completed: {len(results)}/{len(tables)} tables analyzed")
-        return results
-
     # ------------------------------------------------------------------
     # Sample & query (delegated to driver with validation layer)
     # ------------------------------------------------------------------
@@ -1126,68 +1077,11 @@ class DatabaseManager:
             return True
         return self.engine is not None
 
-    def restore_connection_if_needed(self) -> bool:
-        """Attempt to restore connection if engine is missing but params are available."""
-        if not self.has_engine() and self._last_connection_params:
-            logger.info("restore_connection_if_needed: Attempting to restore connection")
-            try:
-                self._reconnect()
-                return True
-            except Exception as e:
-                logger.error(f"restore_connection_if_needed: Failed to restore connection: {e}")
-                return False
-        return self.has_engine()
-
-    def force_reconnect(self) -> bool:
-        """Force a reconnection even if engine exists (for troubleshooting)."""
-        if not self._last_connection_params:
-            logger.error("force_reconnect: No connection parameters available")
-            return False
-
-        logger.info("force_reconnect: Forcing database reconnection")
-        try:
-            if self.engine:
-                self.engine.dispose()
-                self.engine = None
-                logger.debug("force_reconnect: Disposed existing engine")
-
-            self._reconnect()
-            logger.info("force_reconnect: Reconnection successful")
-            return True
-        except Exception as e:
-            logger.error(f"force_reconnect: Failed to reconnect: {e}")
-            return False
-
     def is_connected(self) -> bool:
         """Check if database is currently connected and healthy."""
         if self._dremio_rest_connection:
             return self._test_dremio_connection()
         return self.has_engine() and self._test_connection()
-
-    def get_connection_status(self) -> Dict[str, Any]:
-        """Get detailed connection status information."""
-        if self._dremio_rest_connection:
-            return {
-                "connected": self._test_dremio_connection(),
-                "connection_info": self.connection_info.copy(),
-                "last_params_available": self._last_connection_params is not None,
-            }
-
-        if not self.engine:
-            return {
-                "connected": False,
-                "connection_info": None,
-                "last_params_available": self._last_connection_params is not None,
-            }
-
-        is_healthy = self._test_connection()
-        return {
-            "connected": is_healthy,
-            "connection_info": self.connection_info.copy(),
-            "last_params_available": self._last_connection_params is not None,
-            "engine_pool_size": self.engine.pool.size() if hasattr(self.engine, 'pool') else None,
-            "engine_checked_out": self.engine.pool.checkedout() if hasattr(self.engine, 'pool') else None,
-        }
 
     def disconnect(self):
         """Close the database connection and clear stored parameters."""
