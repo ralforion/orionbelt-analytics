@@ -1720,8 +1720,10 @@ class OntologyGenerator:
                         self.graph.remove((class_uri, RDFS.comment, None))
                         self.graph.add((class_uri, RDFS.comment, Literal(description)))
 
-        # Apply property name suggestions
+        # Apply property name suggestions (two-pass to detect and disambiguate duplicates)
         if "properties" in name_suggestions:
+            # First pass: resolve URIs and collect proposed changes
+            proposed_changes = []
             for suggestion in name_suggestions["properties"]:
                 original = suggestion.get("original_name")
                 suggested = suggestion.get("suggested_name")
@@ -1742,18 +1744,57 @@ class OntologyGenerator:
                 # Check if this property exists (as data or object property)
                 if ((prop_uri, RDF.type, OWL.DatatypeProperty) in self.graph or
                     (prop_uri, RDF.type, OWL.ObjectProperty) in self.graph):
-                    if suggested:
-                        # Update the label
-                        self.graph.remove((prop_uri, RDFS.label, None))
-                        self.graph.add((prop_uri, RDFS.label, Literal(suggested)))
-                        # Also add a semantic name annotation
-                        self.graph.add((prop_uri, self.oba_ns.semanticName, Literal(suggested)))
-                        changes_made += 1
+                    proposed_changes.append({
+                        "prop_uri": prop_uri,
+                        "suggested": suggested,
+                        "description": description,
+                        "table_name": table_name,
+                    })
 
-                    if description:
-                        # Add or update description as rdfs:comment
-                        self.graph.remove((prop_uri, RDFS.comment, None))
-                        self.graph.add((prop_uri, RDFS.comment, Literal(description)))
+            # Detect duplicate suggested labels and disambiguate with table context
+            if proposed_changes:
+                # Collect existing labels from properties NOT being changed
+                changing_uris = {c["prop_uri"] for c in proposed_changes if c["suggested"]}
+                existing_labels: Dict[str, URIRef] = {}
+                for rdf_type in (OWL.DatatypeProperty, OWL.ObjectProperty):
+                    for s, _, _ in self.graph.triples((None, RDF.type, rdf_type)):
+                        if s not in changing_uris:
+                            for label in self.graph.objects(s, RDFS.label):
+                                existing_labels[str(label).lower()] = s
+
+                # Group proposed changes by suggested label (case-insensitive)
+                label_groups: Dict[str, list] = {}
+                for change in proposed_changes:
+                    if change["suggested"]:
+                        key = change["suggested"].lower()
+                        label_groups.setdefault(key, []).append(change)
+
+                # Disambiguate labels that appear more than once or conflict with existing
+                for label_key, changes in label_groups.items():
+                    needs_disambig = len(changes) > 1 or label_key in existing_labels
+                    if needs_disambig:
+                        for change in changes:
+                            if change["table_name"]:
+                                # Prefer the class's rdfs:label (may have been enriched above)
+                                class_uri = self.base_uri[self._clean_name(change["table_name"])]
+                                class_label = None
+                                for label in self.graph.objects(class_uri, RDFS.label):
+                                    class_label = str(label)
+                                    break
+                                qualifier = class_label or change["table_name"]
+                                change["suggested"] = f"{change['suggested']} ({qualifier})"
+
+            # Second pass: apply all changes
+            for change in proposed_changes:
+                if change["suggested"]:
+                    self.graph.remove((change["prop_uri"], RDFS.label, None))
+                    self.graph.add((change["prop_uri"], RDFS.label, Literal(change["suggested"])))
+                    self.graph.add((change["prop_uri"], self.oba_ns.semanticName, Literal(change["suggested"])))
+                    changes_made += 1
+
+                if change["description"]:
+                    self.graph.remove((change["prop_uri"], RDFS.comment, None))
+                    self.graph.add((change["prop_uri"], RDFS.comment, Literal(change["description"])))
 
         # Apply relationship name suggestions
         if "relationships" in name_suggestions:
