@@ -197,10 +197,8 @@ async def analyze_schema(
             "table_names": tables,
             "relationships": relationships,
             "mode": "lightweight",
-            "token_savings": f"~{len(tables) * 85}% tokens saved vs full schema",
-            "note": "Use get_table_details(table_name) to get column details on-demand",
             "next_step": "generate_ontology",
-            "cache_hint": "Schema is now CACHED. Call generate_ontology() next - it will use cached data automatically.",
+            "cache_hint": "Schema is now CACHED. Call generate_ontology() next - it will use cached data automatically. No need to call get_table_details — all column metadata is already cached server-side.",
         }
 
         if fan_trap_warnings:
@@ -290,19 +288,10 @@ async def analyze_schema(
     except Exception as e:
         logger.warning(f"Failed to save schema analysis to file: {e}")
 
-    # Build compact response — table summaries instead of full column dumps
-    table_summaries = []
+    # Full mode: return complete column details so the LLM has all metadata
     relationships = {}
     fan_trap_warnings = []
     for t in table_info_objects:
-        pk_cols = t.primary_keys or []
-        fk_cols = [fk["column"] for fk in t.foreign_keys] if t.foreign_keys else []
-        table_summaries.append({
-            "name": t.name,
-            "columns": len(t.columns),
-            "primary_keys": pk_cols,
-            "foreign_keys": fk_cols,
-        })
         if t.foreign_keys:
             relationships[t.name] = t.foreign_keys
             if len(t.foreign_keys) > 1:
@@ -314,7 +303,7 @@ async def analyze_schema(
     schema_result = {
         "schema": schema_name or "default",
         "table_count": len(all_table_info),
-        "tables": table_summaries,
+        "tables": all_table_info,
         "relationships": relationships,
     }
     if schema_filename:

@@ -162,6 +162,8 @@ def format_workspace_summary(workspace: Dict[str, Any]) -> str:
         lines.append(f"  RDF store: {graph_count} graph(s)")
 
     lines.append("")
-    lines.append("Use restore_workspace() to resume, or analyze_schema() to start fresh.")
+    lines.append("IMPORTANT: Call restore_workspace() as the NEXT STEP to reuse these artifacts.")
+    lines.append("Do NOT call analyze_schema() or generate_ontology() — they are already available.")
+    lines.append("Only use analyze_schema() if you need to start fresh with a different schema.")
 
     return "\n".join(lines)

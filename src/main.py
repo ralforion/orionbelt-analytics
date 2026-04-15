@@ -539,11 +539,16 @@ from .handlers import info as _h_info
 async def connect_database(ctx: Context, db_type: str) -> str:
     """Connect to a database using credentials from environment variables.
 
+    IMPORTANT: The response may include a 'Previous workspace found' section.
+    If it does, call restore_workspace() as the next step instead of analyze_schema().
+    This avoids redundant re-analysis and restores schema cache, ontology, GraphRAG,
+    and RDF store from the previous session.
+
     Args:
         db_type: Database type - 'postgresql', 'snowflake', 'dremio', 'clickhouse', 'bigquery', 'duckdb', 'databricks', or 'mysql'
 
     Returns:
-        Connection status message or error JSON
+        Connection status message, optionally with workspace restoration guidance
     """
     return await _h_connection.connect_database(
         ctx, db_type,

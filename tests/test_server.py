@@ -419,10 +419,11 @@ class TestMCPToolsAsync:
         assert result["table_count"] == 2
         assert len(result["tables"]) == 2
 
-        # Check users table summary (compact response: column count, not full details)
+        # Check users table — full mode now returns complete column details
         users_table = next(t for t in result["tables"] if t["name"] == "users")
-        assert users_table["columns"] == 3
+        assert len(users_table["columns"]) == 3
         assert users_table["primary_keys"] == ["id"]
+        assert all("data_type" in col for col in users_table["columns"])
 
         # Check orders table with foreign key
         orders_table = next(t for t in result["tables"] if t["name"] == "orders")

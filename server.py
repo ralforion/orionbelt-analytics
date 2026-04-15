@@ -123,7 +123,7 @@ def main():
         print_startup_info()
 
         transport_name = "streamable-http" if config.mcp_transport == "http" else "SSE"
-        logger.info(f"🚀 Starting OrionBelt Analytics MCP server with {transport_name} transport...")
+        logger.info(f"🚀 Starting OrionBelt Analytics v{__version__} MCP server with {transport_name} transport...")
         logger.info("📡 Server ready for MCP protocol messages")
 
         # Configure FastMCP with shorter shutdown timeout for cleaner exits
