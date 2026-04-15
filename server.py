@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Startup script for OrionBelt Analytics."""
 
+import json
 import sys
 import signal
 import shutil
 import asyncio
 from pathlib import Path
+from datetime import datetime, timedelta
 
 # Add src directory to path for imports
 src_path = Path(__file__).parent / "src"
@@ -83,26 +85,103 @@ def print_startup_info():
     logger.info("")
 
 def cleanup_tmp_folder():
-    """Clean up temporary files from previous server runs."""
+    """Clean up stale top-level files from tmp/, preserving workspace data.
+
+    Connection-scoped directories (tmp/{connection_id}/) contain workspace
+    artifacts (metadata.json, schema JSON, ontology TTL, Oxigraph store,
+    ChromaDB) that must survive server restarts for restore_workspace() to work.
+
+    Only removes top-level files that are not inside a connection directory.
+
+    When CLEANUP_ON_STARTUP=true, also applies retention-based cleanup to
+    workspace directories: removes connection dirs whose workspace data
+    exceeds WORKSPACE_MAX_AGE_DAYS (default: 30).
+    """
+    import os
     tmp_dir = Path(__file__).parent / "tmp"
-    if tmp_dir.exists():
-        try:
-            # Remove all contents (files and subdirectories) but keep tmp/ itself
-            for item in tmp_dir.iterdir():
-                if item.is_file():
-                    item.unlink()
-                    logger.debug(f"Removed temporary file: {item.name}")
-                elif item.is_dir():
-                    shutil.rmtree(item)
-                    logger.debug(f"Removed temporary directory: {item.name}")
 
-            logger.info("Cleaned up temporary files from previous runs")
-
-        except Exception as e:
-            logger.warning(f"Failed to clean tmp directory: {e}")
-    else:
+    if not tmp_dir.exists():
         tmp_dir.mkdir(exist_ok=True)
-        logger.info("Created tmp directory for ontology files")
+        logger.info("Created tmp directory for output files")
+        return
+
+    # Phase 1: Remove stale top-level files (always)
+    removed = 0
+    workspace_dirs = []
+    try:
+        for item in tmp_dir.iterdir():
+            if item.is_file():
+                item.unlink()
+                removed += 1
+                logger.debug(f"Removed stale file: {item.name}")
+            elif item.is_dir():
+                workspace_dirs.append(item)
+    except Exception as e:
+        logger.warning(f"Failed to clean tmp directory: {e}")
+        return
+
+    # Clean chart images from all workspace directories (ephemeral, not reusable)
+    charts_removed = 0
+    for conn_dir in workspace_dirs:
+        charts_dir = conn_dir / "charts"
+        if charts_dir.exists():
+            try:
+                shutil.rmtree(charts_dir)
+                charts_removed += 1
+            except Exception as e:
+                logger.debug(f"Failed to clean charts in {conn_dir.name}: {e}")
+
+    if removed > 0 or charts_removed > 0:
+        logger.info(
+            f"Startup cleanup: removed {removed} stale file(s), "
+            f"{charts_removed} chart directory/directories"
+        )
+
+    if workspace_dirs:
+        logger.info(f"Found {len(workspace_dirs)} workspace directory/directories")
+
+    # Phase 2: Retention-based workspace cleanup (opt-in via AUTO_CLEANUP_ON_STARTUP)
+    cleanup_enabled = os.getenv("AUTO_CLEANUP_ON_STARTUP", "false").lower() == "true"
+    if not cleanup_enabled:
+        return
+
+    max_age_days = int(os.getenv("WORKSPACE_MAX_AGE_DAYS", "30"))
+    cutoff = datetime.now() - timedelta(days=max_age_days)
+    cleaned = 0
+
+    for conn_dir in workspace_dirs:
+        metadata_file = conn_dir / "metadata.json"
+        if not metadata_file.exists():
+            # No metadata — orphaned directory, remove it
+            try:
+                shutil.rmtree(conn_dir)
+                cleaned += 1
+                logger.info(f"Removed orphaned workspace directory: {conn_dir.name}")
+            except Exception as e:
+                logger.warning(f"Failed to remove orphaned directory {conn_dir.name}: {e}")
+            continue
+
+        # Check workspace age from metadata
+        try:
+            with open(metadata_file, "r") as f:
+                metadata = json.load(f)
+            workspace = metadata.get("workspace", {})
+            updated_at = workspace.get("updated_at")
+            if updated_at:
+                last_update = datetime.fromisoformat(updated_at)
+                if last_update < cutoff:
+                    shutil.rmtree(conn_dir)
+                    cleaned += 1
+                    age_days = (datetime.now() - last_update).days
+                    logger.info(
+                        f"Removed stale workspace: {conn_dir.name} "
+                        f"(last updated {age_days} days ago, max {max_age_days})"
+                    )
+        except Exception as e:
+            logger.debug(f"Skipping workspace {conn_dir.name}: {e}")
+
+    if cleaned > 0:
+        logger.info(f"Retention cleanup: removed {cleaned} stale workspace(s)")
 
 def main():
     """Start the OrionBelt Analytics MCP server."""
