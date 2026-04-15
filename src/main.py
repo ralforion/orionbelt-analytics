@@ -897,6 +897,11 @@ async def restore_workspace(
     When reconnecting to the same database, this tool restores schema cache,
     ontology, GraphRAG, and RDF store from disk — avoiding re-analysis costs.
 
+    IMPORTANT: After a successful restore, do NOT call analyze_schema() or
+    generate_ontology() — the restored data replaces those steps entirely.
+    Proceed directly to the tools listed in the 'Ready to Use' section of
+    the response.
+
     Args:
         schema_name: Schema to restore (auto-selects if only one available)
 

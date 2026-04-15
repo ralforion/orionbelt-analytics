@@ -204,12 +204,26 @@ async def restore_workspace(
     if not restored and not failed:
         result += "No artifacts found to restore.\n"
 
+    # Build "do not call" list based on what was restored
+    skip_tools = []
+    if "Schema analysis" in str(restored):
+        skip_tools.append("analyze_schema()")
+    if "Ontology" in str(restored):
+        skip_tools.append("generate_ontology()")
+        if session.ontology_enriched:
+            skip_tools.append("suggest_semantic_names()")
+            skip_tools.append("apply_semantic_names()")
+    if skip_tools:
+        result += "\n## DO NOT CALL (already restored)\n"
+        for tool in skip_tools:
+            result += f"- {tool}\n"
+
     result += "\n## Ready to Use\n"
     if "Schema analysis" in str(restored):
-        if session.ontology_enriched:
-            result += "- Ontology is already enriched — no need to call suggest_semantic_names() or generate_ontology()\n"
-        else:
-            result += "- suggest_semantic_names() or generate_ontology()\n"
+        if not session.ontology_enriched and "Ontology" not in str(restored):
+            result += "- generate_ontology() to create ontology from cached schema\n"
+        if not session.ontology_enriched and "Ontology" in str(restored):
+            result += "- suggest_semantic_names() to enrich the ontology\n"
     if "Ontology" in str(restored):
         result += "- query_sparql() for semantic queries\n"
         result += "- validate_sql_syntax() with ontology-aware validation\n"
