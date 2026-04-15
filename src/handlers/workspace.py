@@ -118,7 +118,10 @@ async def restore_workspace(
         if ontology_path.exists():
             try:
                 session.ontology_file = ontology_file
-                restored.append("Ontology file")
+                is_enriched = ontology_section.get("enriched", False)
+                session.ontology_enriched = is_enriched
+                enriched_tag = " (enriched)" if is_enriched else ""
+                restored.append(f"Ontology file{enriched_tag}")
 
                 # Also read content for loaded_ontology state
                 ontology_content = ontology_path.read_text(encoding="utf-8")
@@ -203,9 +206,14 @@ async def restore_workspace(
 
     result += "\n## Ready to Use\n"
     if "Schema analysis" in str(restored):
-        result += "- suggest_semantic_names() or generate_ontology()\n"
+        if session.ontology_enriched:
+            result += "- Ontology is already enriched — no need to call suggest_semantic_names() or generate_ontology()\n"
+        else:
+            result += "- suggest_semantic_names() or generate_ontology()\n"
     if "Ontology" in str(restored):
+        result += "- query_sparql() for semantic queries\n"
         result += "- validate_sql_syntax() with ontology-aware validation\n"
+        result += "- execute_sql_query() for data queries\n"
     if "GraphRAG" in str(restored):
         result += "- graphrag_search() for semantic schema search\n"
 

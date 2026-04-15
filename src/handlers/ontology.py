@@ -110,9 +110,21 @@ async def generate_ontology(
     # Check if ontology is already generated
     session = get_session_data(ctx)
     if session.ontology_file:
+        if session.ontology_enriched:
+            await ctx.info("Ontology CACHED and already enriched — ready to use")
+            return (
+                f"# ONTOLOGY ALREADY CACHED AND ENRICHED\n\n"
+                f"Ontology file: {session.ontology_file}\n\n"
+                f"Semantic names have already been applied. The ontology is ready to use.\n\n"
+                f"Do NOT call generate_ontology, analyze_schema, or suggest_semantic_names again.\n\n"
+                f"## READY TO USE:\n"
+                f"- query_sparql() for semantic queries\n"
+                f"- execute_sql_query() for data queries\n"
+                f"- validate_sql_syntax() for query validation"
+            )
         await ctx.info("Ontology CACHED - call suggest_semantic_names() for enrichment")
         return (
-            f"# STOP! ONTOLOGY ALREADY CACHED!\n\n"
+            f"# ONTOLOGY ALREADY CACHED\n\n"
             f"Ontology file: {session.ontology_file}\n\n"
             f"Do NOT call generate_ontology or analyze_schema again!\n\n"
             f"## FOR ENRICHMENT:\n"
@@ -525,6 +537,7 @@ async def apply_semantic_names(
 
                 logger.info(f"Saved semantic ontology to: {ontology_file_path}")
                 session.ontology_file = new_ontology_filename
+                session.ontology_enriched = True
                 session.obqc_validator = None
 
                 # Update workspace: mark ontology as enriched
