@@ -35,6 +35,7 @@ class OntologyState:
         self.loaded_ontology: Optional[str] = None  # TTL content
         self.loaded_ontology_path: Optional[str] = None  # File path
         self.obqc_validator: Optional[Any] = None  # OBQCValidator (avoid circular import)
+        self.ontology_enriched: bool = False  # True after semantic names applied
 
 
 class SchemaCache:
@@ -181,6 +182,14 @@ class SessionData:
     @obqc_validator.setter
     def obqc_validator(self, value):
         self.ontology.obqc_validator = value
+
+    @property
+    def ontology_enriched(self):
+        return self.ontology.ontology_enriched
+
+    @ontology_enriched.setter
+    def ontology_enriched(self, value):
+        self.ontology.ontology_enriched = value
 
     @property
     def schema_file(self):

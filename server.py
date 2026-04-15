@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Startup script for OrionBelt Analytics."""
 
+import json
 import sys
 import signal
 import shutil
 import asyncio
 from pathlib import Path
+from datetime import datetime, timedelta
 
 # Add src directory to path for imports
 src_path = Path(__file__).parent / "src"
@@ -48,27 +50,62 @@ def print_startup_info():
     logger.info("MCP server for database ad hoc analysis with ontology support and interactive charting")
     logger.info("="*60)
     
-    logger.info("🔧 Available MCP Tools:")
-    tools = [
-        "connect_database - Connect to PostgreSQL, Snowflake, Dremio, or ClickHouse",
-        "list_schemas - List available database schemas",
-        "analyze_schema - Analyze schema (lightweight or full mode)",
-        "get_table_details - Detailed table metadata and columns",
-        "sample_table_data - Sample table data with security controls",
-        "generate_ontology - Generate RDF ontology with validation",
-        "suggest_semantic_names - Suggest business-friendly names",
-        "apply_semantic_names - Apply semantic names to ontology",
-        "load_my_ontology - Load saved/edited ontology from tmp folder",
-        "validate_sql_syntax - Validate SQL queries before execution",
-        "execute_sql_query - Execute validated SQL queries safely",
-        "generate_chart - Generate interactive charts from query results",
-        "get_server_info - Get comprehensive server information"
-    ]
-    for tool in tools:
-        logger.info(f"  • {tool}")
-    
+    logger.info("🔧 Available MCP Tools (32):")
+    tool_groups = {
+        "Connection & Schema": [
+            "connect_database - Connect to any supported database",
+            "list_schemas - List available database schemas",
+            "analyze_schema - Analyze schema with auto GraphRAG + ontology",
+            "get_table_details - Detailed table metadata and columns",
+            "reset_cache - Clear cached schema and ontology data",
+            "restore_workspace - Restore a previous session's artifacts",
+        ],
+        "Ontology & Semantic": [
+            "generate_ontology - Generate RDF/OWL ontology with SQL annotations",
+            "suggest_semantic_names - Detect abbreviations for renaming",
+            "apply_semantic_names - Apply semantic names to ontology",
+            "load_my_ontology - Load a custom .ttl ontology file",
+            "download_ontology - Download ontology as Turtle file",
+            "download_r2rml - Download R2RML mapping as Turtle file",
+        ],
+        "Query & Visualization": [
+            "sample_table_data - Preview table data with security controls",
+            "validate_sql_syntax - Validate SQL with fan-trap checks",
+            "execute_sql_query - Execute SQL with result validation",
+            "generate_chart - Generate Plotly charts with MCP-UI rendering",
+        ],
+        "GraphRAG": [
+            "initialize_graphrag - Initialize graph + vector index",
+            "graphrag_search - Semantic search across schema elements",
+            "graphrag_query_context - Optimized context for SQL generation",
+            "graphrag_find_join_path - Discover join paths via graph traversal",
+            "graphrag_overview - Schema statistics and clustering overview",
+        ],
+        "SPARQL & RDF": [
+            "store_ontology_in_rdf - Persist ontology in Oxigraph",
+            "query_sparql - Execute SPARQL SELECT queries",
+            "query_sparql_ask - Execute SPARQL ASK queries",
+            "list_tables_sparql - List tables via SPARQL",
+            "find_columns_by_type_sparql - Find columns by data type",
+            "add_rdf_knowledge - Add custom metadata triples",
+            "get_rdf_store_stats - Get RDF store statistics",
+        ],
+        "Semantic Models": [
+            "save_semantic_model - Save a semantic model to workspace",
+            "get_semantic_model - Retrieve a stored semantic model",
+            "list_semantic_models - List all stored semantic models",
+        ],
+        "System": [
+            "get_server_info - Server version, features, and config",
+        ],
+    }
+    for group, tools in tool_groups.items():
+        logger.info(f"  [{group}]")
+        for tool in tools:
+            logger.info(f"    • {tool}")
+
     logger.info("")
-    logger.info("🗄️ Supported Databases: PostgreSQL, Snowflake, Dremio")
+    logger.info("🗄️ Supported Databases: PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, Databricks")
     logger.info("🧠 LLM Enrichment: Available via MCP prompts and tools")
     logger.info("🔒 Security: Credential handling and input validation")
     logger.info("⚡ Performance: Connection pooling and parallel processing")
@@ -83,26 +120,103 @@ def print_startup_info():
     logger.info("")
 
 def cleanup_tmp_folder():
-    """Clean up temporary files from previous server runs."""
+    """Clean up stale top-level files from tmp/, preserving workspace data.
+
+    Connection-scoped directories (tmp/{connection_id}/) contain workspace
+    artifacts (metadata.json, schema JSON, ontology TTL, Oxigraph store,
+    ChromaDB) that must survive server restarts for restore_workspace() to work.
+
+    Only removes top-level files that are not inside a connection directory.
+
+    When CLEANUP_ON_STARTUP=true, also applies retention-based cleanup to
+    workspace directories: removes connection dirs whose workspace data
+    exceeds WORKSPACE_MAX_AGE_DAYS (default: 30).
+    """
+    import os
     tmp_dir = Path(__file__).parent / "tmp"
-    if tmp_dir.exists():
-        try:
-            # Remove all contents (files and subdirectories) but keep tmp/ itself
-            for item in tmp_dir.iterdir():
-                if item.is_file():
-                    item.unlink()
-                    logger.debug(f"Removed temporary file: {item.name}")
-                elif item.is_dir():
-                    shutil.rmtree(item)
-                    logger.debug(f"Removed temporary directory: {item.name}")
 
-            logger.info("Cleaned up temporary files from previous runs")
-
-        except Exception as e:
-            logger.warning(f"Failed to clean tmp directory: {e}")
-    else:
+    if not tmp_dir.exists():
         tmp_dir.mkdir(exist_ok=True)
-        logger.info("Created tmp directory for ontology files")
+        logger.info("Created tmp directory for output files")
+        return
+
+    # Phase 1: Remove stale top-level files (always)
+    removed = 0
+    workspace_dirs = []
+    try:
+        for item in tmp_dir.iterdir():
+            if item.is_file():
+                item.unlink()
+                removed += 1
+                logger.debug(f"Removed stale file: {item.name}")
+            elif item.is_dir():
+                workspace_dirs.append(item)
+    except Exception as e:
+        logger.warning(f"Failed to clean tmp directory: {e}")
+        return
+
+    # Clean chart images from all workspace directories (ephemeral, not reusable)
+    charts_removed = 0
+    for conn_dir in workspace_dirs:
+        charts_dir = conn_dir / "charts"
+        if charts_dir.exists():
+            try:
+                shutil.rmtree(charts_dir)
+                charts_removed += 1
+            except Exception as e:
+                logger.debug(f"Failed to clean charts in {conn_dir.name}: {e}")
+
+    if removed > 0 or charts_removed > 0:
+        logger.info(
+            f"Startup cleanup: removed {removed} stale file(s), "
+            f"{charts_removed} chart directory/directories"
+        )
+
+    if workspace_dirs:
+        logger.info(f"Found {len(workspace_dirs)} workspace directory/directories")
+
+    # Phase 2: Retention-based workspace cleanup (opt-in via AUTO_CLEANUP_ON_STARTUP)
+    cleanup_enabled = os.getenv("AUTO_CLEANUP_ON_STARTUP", "false").lower() == "true"
+    if not cleanup_enabled:
+        return
+
+    max_age_days = int(os.getenv("WORKSPACE_MAX_AGE_DAYS", "30"))
+    cutoff = datetime.now() - timedelta(days=max_age_days)
+    cleaned = 0
+
+    for conn_dir in workspace_dirs:
+        metadata_file = conn_dir / "metadata.json"
+        if not metadata_file.exists():
+            # No metadata — orphaned directory, remove it
+            try:
+                shutil.rmtree(conn_dir)
+                cleaned += 1
+                logger.info(f"Removed orphaned workspace directory: {conn_dir.name}")
+            except Exception as e:
+                logger.warning(f"Failed to remove orphaned directory {conn_dir.name}: {e}")
+            continue
+
+        # Check workspace age from metadata
+        try:
+            with open(metadata_file, "r") as f:
+                metadata = json.load(f)
+            workspace = metadata.get("workspace", {})
+            updated_at = workspace.get("updated_at")
+            if updated_at:
+                last_update = datetime.fromisoformat(updated_at)
+                if last_update < cutoff:
+                    shutil.rmtree(conn_dir)
+                    cleaned += 1
+                    age_days = (datetime.now() - last_update).days
+                    logger.info(
+                        f"Removed stale workspace: {conn_dir.name} "
+                        f"(last updated {age_days} days ago, max {max_age_days})"
+                    )
+        except Exception as e:
+            logger.debug(f"Skipping workspace {conn_dir.name}: {e}")
+
+    if cleaned > 0:
+        logger.info(f"Retention cleanup: removed {cleaned} stale workspace(s)")
 
 def main():
     """Start the OrionBelt Analytics MCP server."""
@@ -123,7 +237,7 @@ def main():
         print_startup_info()
 
         transport_name = "streamable-http" if config.mcp_transport == "http" else "SSE"
-        logger.info(f"🚀 Starting OrionBelt Analytics MCP server with {transport_name} transport...")
+        logger.info(f"🚀 Starting OrionBelt Analytics v{__version__} MCP server with {transport_name} transport...")
         logger.info("📡 Server ready for MCP protocol messages")
 
         # Configure FastMCP with shorter shutdown timeout for cleaner exits

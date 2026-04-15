@@ -692,6 +692,15 @@ SELECT c.id, c.name FROM customers c JOIN orders o ON c.id = o.customer_id
 | `query_sparql()` | Semantic queries |
 | `list_tables_sparql()` | List tables via SPARQL |
 
+### Workspace & Model Tools
+
+| Tool | Purpose |
+|------|---------|
+| `restore_workspace()` | Restore previous session (schema, ontology, GraphRAG) |
+| `save_semantic_model()` | Save semantic model YAML (e.g., OBML) for cross-session reuse |
+| `get_semantic_model()` | Retrieve stored model YAML by name |
+| `list_semantic_models()` | List all stored models for current connection |
+
 ### Utility Tools
 
 | Tool | Purpose |
@@ -960,6 +969,12 @@ When available, prefer Semantic Layer MCP for business-friendly queries and metr
 5. generate_chart()
 ```
 
+**Resume Workflow (2 steps):**
+```
+1. connect_database()  // detects existing workspace
+2. restore_workspace()  // restores schema, ontology, GraphRAG, lists models
+```
+
 **Advanced Workflow (7+ steps):**
 ```
 1. connect_database()
@@ -970,6 +985,7 @@ When available, prefer Semantic Layer MCP for business-friendly queries and metr
 6. validate_sql_syntax()
 7. execute_sql_query()
 8. generate_chart()
+9. save_semantic_model()  // persist model for future sessions
 ```
 
 **Key Points:**

@@ -311,6 +311,23 @@ class GraphRetriever:
             "avg_connections_per_table": sum(dict(self.graph.degree()).values()) / max(self.graph.number_of_nodes(), 1)
         }
 
+    def load_graph(self, tables_info: List[Dict[str, Any]]) -> bool:
+        """Rebuild graph from previously saved tables_info.
+
+        This is equivalent to build_graph() but named distinctly to indicate
+        it's for restore-from-disk scenarios.
+
+        Args:
+            tables_info: List of table metadata dicts (from saved state)
+
+        Returns:
+            True if graph was rebuilt successfully
+        """
+        if not tables_info:
+            return False
+        self.build_graph(tables_info)
+        return True
+
     def export_graph_for_visualization(self) -> Dict[str, Any]:
         """
         Export graph in format suitable for visualization.

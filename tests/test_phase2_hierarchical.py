@@ -135,7 +135,7 @@ class TestPhase2FunctionalityPreserved:
             "list_schemas",
             "reset_cache",
             "analyze_schema",
-            "get_table_details",  # NEW in Phase 2
+            "get_table_details",
             "generate_ontology",
             "suggest_semantic_names",
             "apply_semantic_names",
@@ -144,6 +144,7 @@ class TestPhase2FunctionalityPreserved:
             "validate_sql_syntax",
             "execute_sql_query",
             "generate_chart",
+            "restore_workspace",
             "get_server_info"
         ]
 

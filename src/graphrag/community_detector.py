@@ -126,6 +126,32 @@ class CommunityDetector:
 
         return self.communities
 
+    def load_communities(self, data: Dict[str, Any]) -> bool:
+        """Restore communities from previously saved state.
+
+        Args:
+            data: Dict with "summaries" list (from save_state output)
+
+        Returns:
+            True if communities were restored successfully
+        """
+        summaries = data.get("summaries", [])
+        if not summaries:
+            return False
+
+        self.communities = {}
+        self.table_to_community = {}
+
+        for summary in summaries:
+            community_id = summary["community_id"]
+            tables = set(summary.get("tables", []))
+            self.communities[community_id] = tables
+            for table in tables:
+                self.table_to_community[table] = community_id
+
+        logger.info(f"Restored {len(self.communities)} communities from saved state")
+        return True
+
     def get_community(self, table_name: str) -> Optional[int]:
         """
         Get community ID for a table.

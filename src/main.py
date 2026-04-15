@@ -26,6 +26,7 @@ from .oxigraph_store import OxigraphStoreManager, OXIGRAPH_AVAILABLE
 from .paths import (
     get_env_file_path,
     ensure_output_dir,
+    get_connection_dir,
     get_oxigraph_store_dir,
     get_skills_dir,
 )
@@ -411,8 +412,8 @@ def get_session_obqc_validator(ctx: Context) -> Optional[OBQCValidator]:
         ontology_generator = OntologyGenerator(base_uri)
 
         if has_generated_ontology:
-            output_dir = ensure_output_dir()
-            ontology_path = output_dir / session.ontology_file
+            conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+            ontology_path = conn_dir / session.ontology_file
             if ontology_path.exists():
                 ontology_generator.load_from_file(str(ontology_path))
                 logger.debug(f"OBQC loaded ontology from session file: {session.ontology_file}")
@@ -449,8 +450,8 @@ def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
     if not filename:
         raise ValueError("No ontology file in session state. Run generate_ontology first.")
 
-    output_dir = ensure_output_dir()
-    ontology_path = output_dir / filename
+    conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+    ontology_path = conn_dir / filename
 
     if not ontology_path.exists():
         raise ValueError(f"Ontology file not found: {filename}")
@@ -522,6 +523,7 @@ from .handlers import query as _h_query
 from .handlers import chart as _h_chart
 from .handlers import rdf as _h_rdf
 from .handlers import graphrag as _h_graphrag
+from .handlers import workspace as _h_workspace
 from .handlers import info as _h_info
 
 
@@ -537,11 +539,16 @@ from .handlers import info as _h_info
 async def connect_database(ctx: Context, db_type: str) -> str:
     """Connect to a database using credentials from environment variables.
 
+    IMPORTANT: The response may include a 'Previous workspace found' section.
+    If it does, call restore_workspace() as the next step instead of analyze_schema().
+    This avoids redundant re-analysis and restores schema cache, ontology, GraphRAG,
+    and RDF store from the previous session.
+
     Args:
         db_type: Database type - 'postgresql', 'snowflake', 'dremio', 'clickhouse', 'bigquery', 'duckdb', 'databricks', or 'mysql'
 
     Returns:
-        Connection status message or error JSON
+        Connection status message, optionally with workspace restoration guidance
     """
     return await _h_connection.connect_database(
         ctx, db_type,
@@ -877,6 +884,93 @@ async def generate_chart(
         sort_by, sort_order, output_format,
         get_session_data=get_session_data,
         add_resource=mcp.add_resource,
+    )
+
+
+@mcp.tool()
+async def restore_workspace(
+    ctx: Context,
+    schema_name: Optional[str] = None,
+) -> str:
+    """Restore workspace from a previous session's artifacts.
+
+    When reconnecting to the same database, this tool restores schema cache,
+    ontology, GraphRAG, and RDF store from disk — avoiding re-analysis costs.
+
+    IMPORTANT: After a successful restore, do NOT call analyze_schema() or
+    generate_ontology() — the restored data replaces those steps entirely.
+    Proceed directly to the tools listed in the 'Ready to Use' section of
+    the response.
+
+    Args:
+        schema_name: Schema to restore (auto-selects if only one available)
+
+    Returns:
+        Summary of what was restored and what's ready to use
+    """
+    return await _h_workspace.restore_workspace(
+        ctx, schema_name,
+        get_session_data=get_session_data,
+        get_oxigraph_store=get_oxigraph_store,
+        create_error_response=create_error_response,
+    )
+
+
+@mcp.tool()
+async def save_semantic_model(
+    ctx: Context,
+    model_yaml: str,
+    model_name: str,
+    schema_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Save a semantic model (e.g., OBML YAML) to the workspace for reuse across sessions.
+
+    Stores the model definition so it can be retrieved in future sessions via
+    get_semantic_model() and loaded into a Semantic Layer if available.
+
+    Args:
+        model_yaml: The model definition in YAML format
+        model_name: Name to identify this model (e.g., "sales_analytics")
+        schema_name: Database schema this model is based on (auto-detected if omitted)
+    """
+    return await _h_workspace.save_semantic_model(
+        ctx, model_yaml, model_name, schema_name,
+        get_session_data=get_session_data,
+        create_error_response=create_error_response,
+    )
+
+
+@mcp.tool()
+async def get_semantic_model(
+    ctx: Context,
+    model_name: str,
+) -> Dict[str, Any]:
+    """Retrieve a stored semantic model YAML by name.
+
+    Use this to get a previously saved model definition, e.g., to pass it
+    to a Semantic Layer's load_model() tool.
+
+    Args:
+        model_name: Name of the model to retrieve
+    """
+    return await _h_workspace.get_semantic_model(
+        ctx, model_name,
+        get_session_data=get_session_data,
+        create_error_response=create_error_response,
+    )
+
+
+@mcp.tool()
+async def list_semantic_models(ctx: Context) -> Dict[str, Any]:
+    """List all stored semantic models for the current database connection.
+
+    Returns:
+        List of available models with names, schemas, and save dates
+    """
+    return await _h_workspace.list_semantic_models(
+        ctx,
+        get_session_data=get_session_data,
+        create_error_response=create_error_response,
     )
 
 
