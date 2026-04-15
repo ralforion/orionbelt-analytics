@@ -89,11 +89,13 @@ R2RML_BASE_IRI=http://mycompany.com/
 # Output directory for generated files (schema JSON, ontology TTL, R2RML, etc.)
 # Relative to project root. Default: tmp
 #
-# PERSISTENCE WARNING:
-# - The default tmp/ directory is NOT persistent across deployments or container rebuilds
+# PERSISTENCE NOTE:
+# - Workspace data (schema, ontology, GraphRAG, semantic models) persists across server restarts
+# - Chart images are cleaned on each restart (ephemeral)
 # - GraphRAG vector stores: OUTPUT_DIR/chromadb/{connection_id}/
 # - RDF ontology stores: OUTPUT_DIR/oxigraph/{connection_id}/store/
-# - Ontology files: OUTPUT_DIR/ontology_*.ttl
+# - Semantic models: OUTPUT_DIR/{connection_id}/models/
+# - The default tmp/ directory is NOT persistent across deployments or container rebuilds
 #
 # For production deployments:
 # - Use a persistent directory (e.g., /var/lib/orionbelt, /data/orionbelt)

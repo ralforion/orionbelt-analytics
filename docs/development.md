@@ -192,7 +192,7 @@ orionbelt-analytics/
 |   |   |-- chart.py                 #   generate_chart
 |   |   |-- rdf.py                   #   SPARQL tools, RDF store operations
 |   |   |-- graphrag.py              #   GraphRAG initialization, context retrieval
-|   |   |-- workspace.py             #   Workspace tools
+|   |   |-- workspace.py             #   restore_workspace, save/get/list_semantic_model
 |   |   +-- info.py                  #   get_server_info
 |   |
 |   |-- drivers/                     # Database-specific drivers (abstract base pattern)

@@ -50,27 +50,62 @@ def print_startup_info():
     logger.info("MCP server for database ad hoc analysis with ontology support and interactive charting")
     logger.info("="*60)
     
-    logger.info("🔧 Available MCP Tools:")
-    tools = [
-        "connect_database - Connect to PostgreSQL, Snowflake, Dremio, or ClickHouse",
-        "list_schemas - List available database schemas",
-        "analyze_schema - Analyze schema (lightweight or full mode)",
-        "get_table_details - Detailed table metadata and columns",
-        "sample_table_data - Sample table data with security controls",
-        "generate_ontology - Generate RDF ontology with validation",
-        "suggest_semantic_names - Suggest business-friendly names",
-        "apply_semantic_names - Apply semantic names to ontology",
-        "load_my_ontology - Load saved/edited ontology from tmp folder",
-        "validate_sql_syntax - Validate SQL queries before execution",
-        "execute_sql_query - Execute validated SQL queries safely",
-        "generate_chart - Generate interactive charts from query results",
-        "get_server_info - Get comprehensive server information"
-    ]
-    for tool in tools:
-        logger.info(f"  • {tool}")
-    
+    logger.info("🔧 Available MCP Tools (32):")
+    tool_groups = {
+        "Connection & Schema": [
+            "connect_database - Connect to any supported database",
+            "list_schemas - List available database schemas",
+            "analyze_schema - Analyze schema with auto GraphRAG + ontology",
+            "get_table_details - Detailed table metadata and columns",
+            "reset_cache - Clear cached schema and ontology data",
+            "restore_workspace - Restore a previous session's artifacts",
+        ],
+        "Ontology & Semantic": [
+            "generate_ontology - Generate RDF/OWL ontology with SQL annotations",
+            "suggest_semantic_names - Detect abbreviations for renaming",
+            "apply_semantic_names - Apply semantic names to ontology",
+            "load_my_ontology - Load a custom .ttl ontology file",
+            "download_ontology - Download ontology as Turtle file",
+            "download_r2rml - Download R2RML mapping as Turtle file",
+        ],
+        "Query & Visualization": [
+            "sample_table_data - Preview table data with security controls",
+            "validate_sql_syntax - Validate SQL with fan-trap checks",
+            "execute_sql_query - Execute SQL with result validation",
+            "generate_chart - Generate Plotly charts with MCP-UI rendering",
+        ],
+        "GraphRAG": [
+            "initialize_graphrag - Initialize graph + vector index",
+            "graphrag_search - Semantic search across schema elements",
+            "graphrag_query_context - Optimized context for SQL generation",
+            "graphrag_find_join_path - Discover join paths via graph traversal",
+            "graphrag_overview - Schema statistics and clustering overview",
+        ],
+        "SPARQL & RDF": [
+            "store_ontology_in_rdf - Persist ontology in Oxigraph",
+            "query_sparql - Execute SPARQL SELECT queries",
+            "query_sparql_ask - Execute SPARQL ASK queries",
+            "list_tables_sparql - List tables via SPARQL",
+            "find_columns_by_type_sparql - Find columns by data type",
+            "add_rdf_knowledge - Add custom metadata triples",
+            "get_rdf_store_stats - Get RDF store statistics",
+        ],
+        "Semantic Models": [
+            "save_semantic_model - Save a semantic model to workspace",
+            "get_semantic_model - Retrieve a stored semantic model",
+            "list_semantic_models - List all stored semantic models",
+        ],
+        "System": [
+            "get_server_info - Server version, features, and config",
+        ],
+    }
+    for group, tools in tool_groups.items():
+        logger.info(f"  [{group}]")
+        for tool in tools:
+            logger.info(f"    • {tool}")
+
     logger.info("")
-    logger.info("🗄️ Supported Databases: PostgreSQL, Snowflake, Dremio")
+    logger.info("🗄️ Supported Databases: PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, Databricks")
     logger.info("🧠 LLM Enrichment: Available via MCP prompts and tools")
     logger.info("🔒 Security: Credential handling and input validation")
     logger.info("⚡ Performance: Connection pooling and parallel processing")

@@ -71,6 +71,20 @@ def get_skills_dir() -> Path:
     return PROJECT_ROOT / ".claude" / "skills"
 
 
+def get_models_dir(connection_id: str) -> Path:
+    """Get the semantic models directory for a connection.
+
+    Args:
+        connection_id: Database connection fingerprint.
+
+    Returns:
+        Path to models directory for this connection
+    """
+    models_dir = OUTPUT_DIR / connection_id / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    return models_dir
+
+
 def get_charts_dir(connection_id: str) -> Path:
     """Get the charts directory for a connection.
 

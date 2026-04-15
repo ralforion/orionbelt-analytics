@@ -1,16 +1,17 @@
-"""Workspace restore handler implementation."""
+"""Workspace restore and semantic model storage handler implementation."""
 
 import json
 import logging
-from typing import Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from fastmcp import Context
 
 from ..database_manager import TableInfo
 from ..graphrag import GraphRAGManager
-from ..lifecycle.metadata import VersionMetadataManager
+from ..lifecycle.metadata import VersionMetadataManager, update_workspace_section
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
-from ..paths import OUTPUT_DIR, get_connection_dir, ensure_output_dir
+from ..paths import OUTPUT_DIR, get_connection_dir, get_models_dir, ensure_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -231,4 +232,211 @@ async def restore_workspace(
     if "GraphRAG" in str(restored):
         result += "- graphrag_search() for semantic schema search\n"
 
+    # 5. List available semantic models (names only, no content)
+    models_section = workspace.get("models", {})
+    if models_section:
+        result += "\n## Semantic Models Available\n"
+        for model_name, model_info in models_section.items():
+            saved_at = model_info.get("saved_at", "unknown")
+            model_schema = model_info.get("schema_name", "")
+            result += f"- **{model_name}** (schema: {model_schema}, saved: {saved_at})\n"
+        result += "\nUse get_semantic_model(model_name) to retrieve model YAML.\n"
+
     return result
+
+
+async def save_semantic_model(
+    ctx: Context,
+    model_yaml: str,
+    model_name: str,
+    schema_name: Optional[str],
+    get_session_data,
+    create_error_response,
+) -> Dict[str, Any]:
+    """Save a semantic model YAML to the workspace for reuse across sessions.
+
+    Args:
+        ctx: FastMCP context
+        model_yaml: The model definition in YAML format (e.g., OBML)
+        model_name: Name to identify this model
+        schema_name: Database schema this model is based on
+        get_session_data: Function to get session data
+        create_error_response: Function to create error response
+
+    Returns:
+        Save status with file path
+    """
+    session = get_session_data(ctx)
+
+    if not session.connection_id:
+        return create_error_response(
+            "No database connection. Call connect_database first.",
+            "connection_error",
+        )
+
+    connection_id = session.connection_id
+    effective_schema = schema_name or session.get_last_analyzed_schema() or "default"
+
+    # Save model file
+    models_dir = get_models_dir(connection_id)
+    safe_name = model_name.replace(" ", "_").replace("/", "_")
+    model_filename = f"{safe_name}.yaml"
+    model_path = models_dir / model_filename
+
+    try:
+        with open(model_path, "w", encoding="utf-8") as f:
+            f.write(model_yaml)
+        logger.info(f"Saved semantic model '{model_name}' to: {model_path}")
+    except Exception as e:
+        logger.error(f"Failed to save semantic model: {e}")
+        return create_error_response(
+            f"Failed to save model: {e}",
+            "file_error",
+        )
+
+    # Update workspace metadata
+    try:
+        mgr = VersionMetadataManager(connection_id, OUTPUT_DIR)
+        workspace = mgr.metadata.setdefault("workspace", {
+            "updated_at": datetime.now().isoformat(),
+            "schemas": {},
+        })
+        models = workspace.setdefault("models", {})
+        models[model_name] = {
+            "file": model_filename,
+            "schema_name": effective_schema,
+            "saved_at": datetime.now().isoformat(),
+        }
+        workspace["updated_at"] = datetime.now().isoformat()
+        mgr._save_metadata()
+    except Exception as e:
+        logger.warning(f"Failed to update workspace metadata for model: {e}")
+
+    await ctx.info(f"Saved semantic model '{model_name}' for schema '{effective_schema}'")
+
+    return {
+        "success": True,
+        "model_name": model_name,
+        "schema_name": effective_schema,
+        "file": model_filename,
+        "message": f"Model '{model_name}' saved. Use get_semantic_model('{model_name}') to retrieve it in future sessions.",
+    }
+
+
+async def get_semantic_model(
+    ctx: Context,
+    model_name: str,
+    get_session_data,
+    create_error_response,
+) -> Dict[str, Any]:
+    """Retrieve a stored semantic model YAML by name.
+
+    Args:
+        ctx: FastMCP context
+        model_name: Name of the model to retrieve
+        get_session_data: Function to get session data
+        create_error_response: Function to create error response
+
+    Returns:
+        Model YAML content and metadata
+    """
+    session = get_session_data(ctx)
+
+    if not session.connection_id:
+        return create_error_response(
+            "No database connection. Call connect_database first.",
+            "connection_error",
+        )
+
+    connection_id = session.connection_id
+
+    # Look up model in workspace metadata
+    mgr = VersionMetadataManager(connection_id, OUTPUT_DIR)
+    workspace = mgr.get_workspace()
+
+    if not workspace:
+        return create_error_response(
+            "No workspace found for this connection.",
+            "workspace_not_found",
+        )
+
+    models = workspace.get("models", {})
+    model_info = models.get(model_name)
+
+    if not model_info:
+        available = list(models.keys())
+        return create_error_response(
+            f"Model '{model_name}' not found. Available models: {available or 'none'}",
+            "model_not_found",
+        )
+
+    # Read model file
+    model_filename = model_info["file"]
+    models_dir = get_models_dir(connection_id)
+    model_path = models_dir / model_filename
+
+    if not model_path.exists():
+        return create_error_response(
+            f"Model file missing: {model_filename}",
+            "file_not_found",
+        )
+
+    try:
+        model_yaml = model_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return create_error_response(
+            f"Failed to read model file: {e}",
+            "file_error",
+        )
+
+    await ctx.info(f"Retrieved semantic model '{model_name}'")
+
+    return {
+        "success": True,
+        "model_name": model_name,
+        "schema_name": model_info.get("schema_name", ""),
+        "saved_at": model_info.get("saved_at", ""),
+        "model_yaml": model_yaml,
+    }
+
+
+async def list_semantic_models(
+    ctx: Context,
+    get_session_data,
+    create_error_response,
+) -> Dict[str, Any]:
+    """List all stored semantic models for the current connection.
+
+    Args:
+        ctx: FastMCP context
+        get_session_data: Function to get session data
+        create_error_response: Function to create error response
+
+    Returns:
+        List of available models with metadata
+    """
+    session = get_session_data(ctx)
+
+    if not session.connection_id:
+        return create_error_response(
+            "No database connection. Call connect_database first.",
+            "connection_error",
+        )
+
+    mgr = VersionMetadataManager(session.connection_id, OUTPUT_DIR)
+    workspace = mgr.get_workspace()
+
+    if not workspace:
+        return {"models": [], "count": 0}
+
+    models = workspace.get("models", {})
+    model_list = [
+        {
+            "model_name": name,
+            "schema_name": info.get("schema_name", ""),
+            "saved_at": info.get("saved_at", ""),
+        }
+        for name, info in models.items()
+    ]
+
+    return {"models": model_list, "count": len(model_list)}

@@ -10,7 +10,7 @@
 [![Version 1.3.0](https://img.shields.io/badge/version-1.3.0-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
-[![FastMCP](https://img.shields.io/badge/FastMCP-3.2.3+-blue)](https://github.com/jlowin/fastmcp)
+[![FastMCP](https://img.shields.io/badge/FastMCP-3.2.4+-blue)](https://github.com/jlowin/fastmcp)
 [![RDF/OWL](https://img.shields.io/badge/RDF%2FOWL-Ontology-orange)](https://www.w3.org/OWL/)
 
 [![BigQuery](https://img.shields.io/badge/BigQuery-669DF6.svg?logo=googlebigquery&logoColor=white)](https://cloud.google.com/bigquery)
@@ -125,7 +125,7 @@ OrionBelt works with LangChain, OpenAI Agents SDK, CrewAI, Google ADK, Vercel AI
 
 ## Tools
 
-OrionBelt exposes 29 MCP tools. Here is a summary by category:
+OrionBelt exposes 32 MCP tools. Here is a summary by category:
 
 ### Connection & Schema
 
@@ -179,6 +179,14 @@ OrionBelt exposes 29 MCP tools. Here is a summary by category:
 | `find_columns_by_type_sparql` | Find columns by data type via SPARQL |
 | `add_rdf_knowledge` | Add custom metadata triples to the RDF store |
 | `get_rdf_store_stats` | Get RDF store statistics |
+
+### Semantic Models
+
+| Tool | Description |
+|------|-------------|
+| `save_semantic_model` | Save a semantic model (e.g., OBML YAML) to the workspace |
+| `get_semantic_model` | Retrieve a stored semantic model by name |
+| `list_semantic_models` | List all stored semantic models for the current connection |
 
 ### System
 

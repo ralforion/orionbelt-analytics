@@ -29,9 +29,8 @@ Complete reference for all OrionBelt Analytics MCP tools. These tools are invoke
 
 1. **connect_database** -- connect
 2. **analyze_schema** -- lightweight mode (default) for fast overview
-3. **get_table_details** -- drill into specific tables on demand
-4. **sample_table_data** -- preview actual data
-5. **execute_sql_query** -- run queries
+3. **sample_table_data** -- preview actual data
+4. **execute_sql_query** -- run queries
 
 ---
 
@@ -420,16 +419,68 @@ Restore a workspace from a previous session's artifacts, avoiding the cost of re
 - Requires `connect_database` first (same database as the previous session)
 - Restores up to four components from disk:
   - **Schema cache** -- cached table metadata from `analyze_schema`
-  - **Ontology** -- generated or loaded `.ttl` ontology file
+  - **Ontology** -- generated or loaded `.ttl` ontology file (tracks enrichment state)
   - **RDF store** -- Oxigraph persistent SPARQL database
   - **GraphRAG** -- graph index and vector embeddings
+- Lists available **semantic models** stored via `save_semantic_model`
 - If multiple schemas exist in the workspace, auto-selects the first one and reports alternatives
-- Reports both successfully restored and failed components
-- After restoration, tools like `suggest_semantic_names`, `validate_sql_syntax`, and `graphrag_search` work immediately without re-running the analysis pipeline
+- Reports "DO NOT CALL" tools (already restored) and "Ready to Use" tools
+- After restoration, tools like `validate_sql_syntax`, `graphrag_search`, and `execute_sql_query` work immediately without re-running the analysis pipeline
+- Workspace data persists across server restarts (chart images are cleaned on startup)
 
 ---
 
-### 15. get_server_info
+### 15. save_semantic_model
+
+Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse across sessions.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model_yaml` | string | Yes | -- | The model definition in YAML format |
+| `model_name` | string | Yes | -- | Name to identify this model (e.g., "sales_analytics") |
+| `schema_name` | string | No | Auto-detected | Database schema this model is based on |
+
+**Returns:** Dictionary with `success`, `model_name`, `schema_name`, `file`, and `message`.
+
+**Key Features:**
+- Stores model YAML in `tmp/{connection_id}/models/{name}.yaml`
+- Tracks models in workspace metadata for `restore_workspace` discovery
+- Model content is treated as opaque -- no parsing or validation of the YAML structure
+- Enables cross-session model persistence for use with external Semantic Layer tools
+
+---
+
+### 16. get_semantic_model
+
+Retrieve a stored semantic model YAML by name.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model_name` | string | Yes | -- | Name of the model to retrieve |
+
+**Returns:** Dictionary with `success`, `model_name`, `schema_name`, `saved_at`, and `model_yaml`.
+
+**Key Features:**
+- Returns the full YAML content of a previously saved model
+- Use this to pass model content to a Semantic Layer's `load_model` tool
+
+---
+
+### 17. list_semantic_models
+
+List all stored semantic models for the current database connection.
+
+**Parameters:** None
+
+**Returns:** Dictionary with `models` array (each entry has `model_name`, `schema_name`, `saved_at`) and `count`.
+
+---
+
+### 18. get_server_info
 
 Retrieve server metadata, capabilities, and the full list of available tools.
 

@@ -917,6 +917,64 @@ async def restore_workspace(
 
 
 @mcp.tool()
+async def save_semantic_model(
+    ctx: Context,
+    model_yaml: str,
+    model_name: str,
+    schema_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Save a semantic model (e.g., OBML YAML) to the workspace for reuse across sessions.
+
+    Stores the model definition so it can be retrieved in future sessions via
+    get_semantic_model() and loaded into a Semantic Layer if available.
+
+    Args:
+        model_yaml: The model definition in YAML format
+        model_name: Name to identify this model (e.g., "sales_analytics")
+        schema_name: Database schema this model is based on (auto-detected if omitted)
+    """
+    return await _h_workspace.save_semantic_model(
+        ctx, model_yaml, model_name, schema_name,
+        get_session_data=get_session_data,
+        create_error_response=create_error_response,
+    )
+
+
+@mcp.tool()
+async def get_semantic_model(
+    ctx: Context,
+    model_name: str,
+) -> Dict[str, Any]:
+    """Retrieve a stored semantic model YAML by name.
+
+    Use this to get a previously saved model definition, e.g., to pass it
+    to a Semantic Layer's load_model() tool.
+
+    Args:
+        model_name: Name of the model to retrieve
+    """
+    return await _h_workspace.get_semantic_model(
+        ctx, model_name,
+        get_session_data=get_session_data,
+        create_error_response=create_error_response,
+    )
+
+
+@mcp.tool()
+async def list_semantic_models(ctx: Context) -> Dict[str, Any]:
+    """List all stored semantic models for the current database connection.
+
+    Returns:
+        List of available models with names, schemas, and save dates
+    """
+    return await _h_workspace.list_semantic_models(
+        ctx,
+        get_session_data=get_session_data,
+        create_error_response=create_error_response,
+    )
+
+
+@mcp.tool()
 async def get_server_info(ctx: Context) -> Dict[str, Any]:
     """Get information about the MCP server and its capabilities.
 
