@@ -33,10 +33,11 @@ async def reset_cache(
     cache_type_lower = (cache_type or "all").lower()
 
     if cache_type_lower in ("schema", "all"):
-        session.clear_schema_cache()
+        # Clear current schema's cache only
+        current = session.current_schema
+        session.clear_schema_cache(current)
         session.schema_file = None
         session.r2rml_file = None
-        session.schema_cache._last_analyzed_schema = None
         cleared.append("schema")
 
     if cache_type_lower in ("ontology", "all"):
@@ -84,6 +85,10 @@ async def analyze_schema(
     # Check cache
     session = get_session_data(ctx)
     effective_schema = schema_name or ""
+
+    # Set current schema so per-schema state (ontology, GraphRAG) is isolated
+    session.set_current_schema(effective_schema or "default")
+
     cached_tables = session.get_cached_schema(effective_schema)
 
     logger.debug(f"Cache check result - cached_tables: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")

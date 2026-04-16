@@ -289,6 +289,11 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
                 self.graphrag_manager = None
                 self.graphrag = Mock()
                 self._cache = cached_data
+                self._current_schema = None
+                self.ontology_enriched = False
+                self.loaded_ontology = None
+                self.loaded_ontology_path = None
+                self.r2rml_file = None
 
             def get_cached_schema(self, schema_name):
                 return self._cache.get(schema_name)
@@ -298,6 +303,14 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
 
             def get_last_analyzed_schema(self):
                 return "public" if "public" in self._cache else None
+
+            def set_current_schema(self, schema_name):
+                self._current_schema = schema_name
+                return self
+
+            @property
+            def current_schema(self):
+                return self._current_schema
 
         session = FakeSession()
         mock_session_data.return_value = session

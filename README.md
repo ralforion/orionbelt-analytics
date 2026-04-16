@@ -47,6 +47,7 @@ Run Analytics and Semantic Layer side-by-side in Claude Desktop for schema-aware
 - **SPARQL 1.1** query interface via persistent Oxigraph RDF store
 - **Fan-trap prevention** -- automatic detection and safe query pattern suggestions
 - **Interactive charting** -- Plotly charts with MCP-UI rendering in Claude Desktop
+- **Multi-schema support** -- analyze multiple schemas simultaneously; ontology and GraphRAG state are isolated per schema
 - **Workspace persistence** -- reconnect to the same database and restore your previous session
 
 ## Quick Start
@@ -136,7 +137,7 @@ OrionBelt exposes 32 MCP tools. Here is a summary by category:
 | `reset_cache` | Clear cached schema and ontology data for the current session |
 | `analyze_schema` | Analyze schema structure with automatic GraphRAG + ontology generation |
 | `get_table_details` | Get detailed column, key, and constraint info for a specific table |
-| `restore_workspace` | Restore a previous session's schema cache, ontology, GraphRAG, and RDF store |
+| `cleanup_workspace` | Delete all workspace files for the current connection and start fresh |
 
 ### Ontology & Semantic
 
@@ -213,9 +214,9 @@ connect_database("duckdb") -> list_schemas() -> sample_table_data("events")
 validate_sql_syntax(query) -> execute_sql_query(query) -> generate_chart(data, "bar", ...)
 ```
 
-**Resume a previous session:**
+**Resume a previous session (auto-restores workspace):**
 ```
-connect_database("postgresql") -> restore_workspace("public")
+connect_database("postgresql") -> execute_sql_query(...)
 ```
 
 ## Documentation

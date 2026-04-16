@@ -162,7 +162,7 @@ orionbelt-analytics/
 |-- src/
 |   |-- __init__.py                  # Package version (__version__)
 |   |-- main.py                      # FastMCP server setup, @mcp.tool() registration
-|   |-- session.py                   # SessionData -- per-session state isolation
+|   |-- session.py                   # SessionData -- per-session + per-schema state isolation
 |   |-- config.py                    # Configuration management, .env loading
 |   |-- constants.py                 # Shared constants
 |   |-- paths.py                     # Centralized path resolution (output, skills, config)
@@ -192,7 +192,7 @@ orionbelt-analytics/
 |   |   |-- chart.py                 #   generate_chart
 |   |   |-- rdf.py                   #   SPARQL tools, RDF store operations
 |   |   |-- graphrag.py              #   GraphRAG initialization, context retrieval
-|   |   |-- workspace.py             #   restore_workspace, save/get/list_semantic_model
+|   |   |-- workspace.py             #   cleanup_workspace, save/get/list_semantic_model
 |   |   +-- info.py                  #   get_server_info
 |   |
 |   |-- drivers/                     # Database-specific drivers (abstract base pattern)
@@ -283,11 +283,15 @@ Adding a new database requires implementing the `BaseDriver` interface and regis
 
 Each MCP session maintains its own `SessionData` instance (`src/session.py`), which contains:
 
-- **ConnectionState** -- active database manager, connection ID
-- **OntologyState** -- generated ontology content, file paths, OBQC validator
-- **SchemaCache** -- cached schema analysis results
-- **GraphRAGState** -- GraphRAG manager instance, initialization status
-- **RDFStoreState** -- Oxigraph store instance, initialization status
+- **ConnectionState** -- active database manager, connection ID (session-scoped)
+- **SchemaCache** -- cached schema analysis results (multi-schema, dict-based)
+- **SchemaState** (per schema) -- bundles:
+  - **OntologyState** -- generated ontology content, file paths, OBQC validator
+  - **schema_file** -- saved schema JSON reference
+- **GraphRAGState** -- GraphRAG manager instance, initialization status (connection-scoped, accumulative)
+- **RDFStoreState** -- Oxigraph store instance (connection-scoped, multi-schema via named graphs)
+
+Ontology state is isolated per schema via `SchemaState`. GraphRAG and the Oxigraph RDF store are connection-scoped: each `analyze_schema()` call accumulates tables into the same graph and vector store, enabling cross-schema join path discovery and unified semantic search. Switching schemas (e.g., `analyze_schema("analytics")` after `analyze_schema("public")`) does not destroy the previous schema's ontology state, and both schemas' tables are searchable in GraphRAG simultaneously.
 
 This isolation prevents cross-session interference when multiple clients connect to the server simultaneously. Idle sessions are automatically evicted based on `SESSION_IDLE_TIMEOUT_SECONDS`.
 

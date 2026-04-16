@@ -68,6 +68,7 @@ class GraphRAGManager:
 
         self._initialized = False
         self._schema_name: Optional[str] = schema_name
+        self._schema_names: List[str] = []
         self._connection_id: Optional[str] = connection_id or "default"
 
     def initialize_from_schema(
@@ -107,7 +108,58 @@ class GraphRAGManager:
         self.community_detector.detect_communities(method="label_propagation")
 
         self._initialized = True
+        if schema_name not in self._schema_names:
+            self._schema_names.append(schema_name)
         logger.info("GraphRAG initialization complete")
+
+    def accumulate_schema(
+        self,
+        tables_info: List[Dict[str, Any]],
+        schema_name: str = "default"
+    ):
+        """Add a schema's tables to an already-initialized GraphRAG (accumulative).
+
+        Unlike initialize_from_schema(), this does not clear existing data.
+        New tables and embeddings are added alongside existing ones, enabling
+        cross-schema join path discovery and unified semantic search.
+
+        Args:
+            tables_info: List of table metadata dictionaries
+            schema_name: Schema identifier being added
+        """
+        logger.info(
+            f"Accumulating schema '{schema_name}' into GraphRAG "
+            f"({len(tables_info)} tables, existing schemas: {self._schema_names})"
+        )
+
+        # Step 1: Create embeddings for new tables
+        logger.info("Creating embeddings for new schema...")
+        embeddings = self.embedder.batch_embed_schema(tables_info)
+
+        # Step 2: Add to vector store (ChromaDB upserts by ID, JSON appends)
+        self.vector_store.add_elements_batch(embeddings["tables"])
+        self.vector_store.add_elements_batch(embeddings["columns"])
+        self.vector_store.add_elements_batch(embeddings["relationships"])
+        self.vector_store.build_index()
+
+        # Step 3: Add to graph (accumulative, no clear)
+        logger.info("Adding to relationship graph...")
+        self.graph_retriever.add_to_graph(tables_info)
+
+        # Step 4: Re-detect communities on the combined graph
+        logger.info("Re-detecting communities on combined graph...")
+        self.community_detector = CommunityDetector(self.graph_retriever.graph)
+        self.community_detector.detect_communities(method="label_propagation")
+
+        self._schema_name = schema_name  # Last added schema
+        if schema_name not in self._schema_names:
+            self._schema_names.append(schema_name)
+        self._initialized = True
+
+        logger.info(
+            f"Schema '{schema_name}' accumulated. Total schemas: {self._schema_names}, "
+            f"Total tables: {self.graph_retriever.graph.number_of_nodes()}"
+        )
 
     def search_schema(
         self,
@@ -339,6 +391,9 @@ class GraphRAGManager:
         """
         Save GraphRAG state to disk.
 
+        Saves combined state (all accumulated schemas) plus per-schema files
+        for backward compatibility with workspace metadata.
+
         Args:
             output_dir: Output directory
         """
@@ -348,22 +403,22 @@ class GraphRAGManager:
         connection_dir = output_dir / self._connection_id
         connection_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save vector store
-        vector_store_path = connection_dir / f"vector_store_{self._schema_name}.json"
-        self.vector_store.save(vector_store_path)
+        # Combined graph with all schemas' tables_info
+        all_tables_info = list(self.graph_retriever._tables_info.values())
 
-        # Save graph (includes tables_info for clean restore)
-        graph_path = connection_dir / f"graph_{self._schema_name}.json"
+        # Save combined graph
+        graph_path = connection_dir / "graph_combined.json"
         graph_data = {
-            "tables_info": list(self.graph_retriever._tables_info.values()),
+            "schema_names": self._schema_names,
+            "tables_info": all_tables_info,
             "visualization": self.graph_retriever.export_graph_for_visualization(),
         }
         with open(graph_path, 'w') as f:
             json.dump(graph_data, f, indent=2)
 
-        # Save communities
+        # Save combined communities
         if self.community_detector:
-            communities_path = connection_dir / f"communities_{self._schema_name}.json"
+            communities_path = connection_dir / "communities_combined.json"
             communities_data = {
                 "summaries": self.community_detector.get_all_summaries(),
                 "domain_names": self.community_detector.suggest_domain_names()
@@ -371,12 +426,42 @@ class GraphRAGManager:
             with open(communities_path, 'w') as f:
                 json.dump(communities_data, f, indent=2)
 
-        logger.info(f"Saved GraphRAG state to {connection_dir}")
+        # Also save per-schema files (backward compat with workspace metadata)
+        for schema_name in self._schema_names:
+            vector_store_path = connection_dir / f"vector_store_{schema_name}.json"
+            self.vector_store.save(vector_store_path)
+
+            # Per-schema graph subset
+            schema_tables = [t for t in all_tables_info if t.get("schema") == schema_name]
+            if not schema_tables:
+                schema_tables = all_tables_info  # Fallback for single schema
+            per_schema_graph_path = connection_dir / f"graph_{schema_name}.json"
+            per_schema_data = {
+                "tables_info": schema_tables,
+                "visualization": self.graph_retriever.export_graph_for_visualization(),
+            }
+            with open(per_schema_graph_path, 'w') as f:
+                json.dump(per_schema_data, f, indent=2)
+
+            if self.community_detector:
+                communities_path = connection_dir / f"communities_{schema_name}.json"
+                communities_data = {
+                    "summaries": self.community_detector.get_all_summaries(),
+                    "domain_names": self.community_detector.suggest_domain_names()
+                }
+                with open(communities_path, 'w') as f:
+                    json.dump(communities_data, f, indent=2)
+
+        logger.info(
+            f"Saved GraphRAG state to {connection_dir} "
+            f"(schemas: {self._schema_names})"
+        )
 
     def load_state(self, output_dir: Path) -> bool:
         """Restore GraphRAG state from disk.
 
-        Rebuilds graph and communities from saved JSON files.
+        Prefers combined state (graph_combined.json) for multi-schema support.
+        Falls back to per-schema files (graph_{schema}.json) for backward compat.
         ChromaDB vector store reconnects implicitly via get_or_create_collection.
 
         Args:
@@ -406,20 +491,29 @@ class GraphRAGManager:
         except Exception as e:
             logger.warning(f"Failed to verify ChromaDB: {e}")
 
-        # 2. Load graph from saved tables_info
-        graph_path = connection_dir / f"graph_{schema_name}.json"
+        # 2. Load graph — prefer combined, fallback to per-schema
+        combined_graph_path = connection_dir / "graph_combined.json"
+        per_schema_graph_path = connection_dir / f"graph_{schema_name}.json"
+
+        graph_path = combined_graph_path if combined_graph_path.exists() else per_schema_graph_path
+
         if graph_path.exists():
             try:
                 with open(graph_path, 'r') as f:
                     graph_data = json.load(f)
 
-                # New format: {"tables_info": [...], "visualization": {...}}
                 tables_info = graph_data.get("tables_info")
                 if tables_info:
                     self.graph_retriever.load_graph(tables_info)
                     restored_components.append(
                         f"graph ({self.graph_retriever.graph.number_of_nodes()} tables)"
                     )
+                    # Restore schema names list
+                    saved_schemas = graph_data.get("schema_names")
+                    if saved_schemas:
+                        self._schema_names = saved_schemas
+                    elif schema_name not in self._schema_names:
+                        self._schema_names.append(schema_name)
                 else:
                     logger.warning("Graph file missing tables_info — graph not restored")
             except Exception as e:
@@ -427,8 +521,11 @@ class GraphRAGManager:
         else:
             logger.warning(f"Graph file not found: {graph_path}")
 
-        # 3. Load communities
-        communities_path = connection_dir / f"communities_{schema_name}.json"
+        # 3. Load communities — prefer combined, fallback to per-schema
+        combined_communities_path = connection_dir / "communities_combined.json"
+        per_schema_communities_path = connection_dir / f"communities_{schema_name}.json"
+        communities_path = combined_communities_path if combined_communities_path.exists() else per_schema_communities_path
+
         if communities_path.exists():
             try:
                 with open(communities_path, 'r') as f:
@@ -450,7 +547,8 @@ class GraphRAGManager:
         if self.graph_retriever.graph.number_of_nodes() > 0:
             self._initialized = True
             logger.info(
-                f"Restored GraphRAG state: {', '.join(restored_components)}"
+                f"Restored GraphRAG state: {', '.join(restored_components)} "
+                f"(schemas: {self._schema_names})"
             )
             return True
 

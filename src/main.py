@@ -232,19 +232,15 @@ def _clear_session_state(session: SessionData, reason: str = "connection change"
     logger.info(f"Clearing session state ({reason})")
 
     session.clear_schema_cache()
-    session.schema_file = None
-    session.ontology_file = None
-    session.r2rml_file = None
-    session.loaded_ontology = None
-    session.loaded_ontology_path = None
 
-    session.obqc_validator = None
+    # Clear all per-schema state (ontology for every schema)
+    session.clear_all_schema_states()
 
-    session.oxigraph_store = None
-    session.oxigraph_initialized = False
-
+    # Clear connection-scoped state
     session.graphrag_manager = None
     session.graphrag_initialized = False
+    session.oxigraph_store = None
+    session.oxigraph_initialized = False
 
     logger.info("Session state cleared")
 
@@ -539,16 +535,15 @@ from .handlers import info as _h_info
 async def connect_database(ctx: Context, db_type: str) -> str:
     """Connect to a database using credentials from environment variables.
 
-    IMPORTANT: The response may include a 'Previous workspace found' section.
-    If it does, call restore_workspace() as the next step instead of analyze_schema().
-    This avoids redundant re-analysis and restores schema cache, ontology, GraphRAG,
-    and RDF store from the previous session.
+    If a previous workspace exists for this connection, it is automatically
+    restored (schema cache, ontology, GraphRAG, RDF store). The response
+    indicates what was restored and which tools are ready to use.
 
     Args:
         db_type: Database type - 'postgresql', 'snowflake', 'dremio', 'clickhouse', 'bigquery', 'duckdb', 'databricks', or 'mysql'
 
     Returns:
-        Connection status message, optionally with workspace restoration guidance
+        Connection status with auto-restored workspace summary if available
     """
     return await _h_connection.connect_database(
         ctx, db_type,
@@ -557,6 +552,7 @@ async def connect_database(ctx: Context, db_type: str) -> str:
         create_error_response=create_error_response,
         _get_connection_fingerprint=_get_connection_fingerprint,
         _clear_session_state=_clear_session_state,
+        get_oxigraph_store=get_oxigraph_store,
     )
 
 
@@ -888,30 +884,21 @@ async def generate_chart(
 
 
 @mcp.tool()
-async def restore_workspace(
-    ctx: Context,
-    schema_name: Optional[str] = None,
-) -> str:
-    """Restore workspace from a previous session's artifacts.
+async def cleanup_workspace(ctx: Context) -> str:
+    """Delete all workspace files for the current database connection and clear session state.
 
-    When reconnecting to the same database, this tool restores schema cache,
-    ontology, GraphRAG, and RDF store from disk — avoiding re-analysis costs.
+    Removes schema JSON, ontology TTL, R2RML mappings, GraphRAG data, ChromaDB vectors,
+    Oxigraph RDF store, semantic models, and metadata for this connection.
+    The database connection itself remains active.
 
-    IMPORTANT: After a successful restore, do NOT call analyze_schema() or
-    generate_ontology() — the restored data replaces those steps entirely.
-    Proceed directly to the tools listed in the 'Ready to Use' section of
-    the response.
-
-    Args:
-        schema_name: Schema to restore (auto-selects if only one available)
+    Use this to start fresh or free disk space. Requires an active connection.
 
     Returns:
-        Summary of what was restored and what's ready to use
+        Summary of what was removed
     """
-    return await _h_workspace.restore_workspace(
-        ctx, schema_name,
+    return await _h_workspace.cleanup_workspace(
+        ctx,
         get_session_data=get_session_data,
-        get_oxigraph_store=get_oxigraph_store,
         create_error_response=create_error_response,
     )
 

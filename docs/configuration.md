@@ -50,7 +50,8 @@ ONTOLOGY_KEEP_VERSIONS=5          # Keep last 5 versions
 ONTOLOGY_MAX_AGE_DAYS=60          # Delete versions older than 60 days
 
 # Cleanup Triggers
-AUTO_CLEANUP_ON_STARTUP=false     # Run retention cleanup when server starts (removes stale workspaces)
+# Options: false (default), true (retention-based), all (remove everything)
+AUTO_CLEANUP_ON_STARTUP=false
 
 # MCP Transport Configuration
 # Options: http, sse (Server-Sent Events)
@@ -196,7 +197,7 @@ DATABRICKS_SCHEMA=default
 | `GRAPHRAG_MAX_AGE_DAYS` | `30` | Maximum age in days for GraphRAG versions |
 | `ONTOLOGY_KEEP_VERSIONS` | `5` | Number of ontology versions to retain |
 | `ONTOLOGY_MAX_AGE_DAYS` | `60` | Maximum age in days for ontology versions |
-| `AUTO_CLEANUP_ON_STARTUP` | `false` | Run retention cleanup on startup (removes stale workspaces) |
+| `AUTO_CLEANUP_ON_STARTUP` | `false` | Startup cleanup: `false` (none), `true` (retention-based), `all` (remove all workspaces) |
 | `WORKSPACE_MAX_AGE_DAYS` | `30` | Maximum age in days for workspace directories |
 | `ONTOLOGY_BASE_URI` | `http://example.com/ontology/` | Base URI for generated RDF ontologies |
 | `R2RML_BASE_IRI` | `http://mycompany.com/` | Base IRI for R2RML subject templates |
