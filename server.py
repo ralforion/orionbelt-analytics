@@ -181,6 +181,10 @@ def cleanup_tmp_folder():
         return
 
     max_age_days = int(os.getenv("WORKSPACE_MAX_AGE_DAYS", "30"))
+    logger.info(
+        f"Retention cleanup enabled (WORKSPACE_MAX_AGE_DAYS={max_age_days}), "
+        f"scanning {len(workspace_dirs)} workspace(s)..."
+    )
     cutoff = datetime.now() - timedelta(days=max_age_days)
     cleaned = 0
 
@@ -217,6 +221,8 @@ def cleanup_tmp_folder():
 
     if cleaned > 0:
         logger.info(f"Retention cleanup: removed {cleaned} stale workspace(s)")
+    else:
+        logger.info("Retention cleanup: all workspaces within retention period")
 
 def main():
     """Start the OrionBelt Analytics MCP server."""
