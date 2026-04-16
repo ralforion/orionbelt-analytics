@@ -144,7 +144,7 @@ class TestPhase2FunctionalityPreserved:
             "validate_sql_syntax",
             "execute_sql_query",
             "generate_chart",
-            "restore_workspace",
+            "cleanup_workspace",
             "get_server_info"
         ]
 

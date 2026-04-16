@@ -8,7 +8,7 @@ Covers:
 4. Workspace summary formatting
 5. GraphRAG load_state
 6. TableInfo.from_dict deserialization
-7. restore_workspace tool registration
+7. cleanup_workspace tool registration
 """
 
 import asyncio
@@ -244,7 +244,7 @@ class TestWorkspaceDetection:
         assert "enriched" in summary
         assert "RDF store" in summary
         assert "312 embeddings" in summary
-        assert "restore_workspace" in summary
+        assert "Auto-restore was not available" in summary
 
 
 class TestGraphRetrieverLoadGraph:
@@ -362,24 +362,21 @@ class TestTableInfoFromDict:
 
 
 class TestToolRegistration:
-    """Test restore_workspace is properly registered."""
+    """Test cleanup_workspace is properly registered."""
 
     @pytest.mark.asyncio
-    async def test_restore_workspace_registered(self):
-        """Verify restore_workspace tool exists in MCP."""
+    async def test_cleanup_workspace_registered(self):
+        """Verify cleanup_workspace tool exists in MCP."""
         tools = await mcp.list_tools()
         tool_names = [t.name for t in tools]
-        assert "restore_workspace" in tool_names
+        assert "cleanup_workspace" in tool_names
 
-    def test_restore_workspace_has_schema_param(self):
-        """Verify restore_workspace has optional schema_name parameter."""
-        import inspect
-        fn = _get_tool_fn("restore_workspace")
-        sig = inspect.signature(fn)
-        params = sig.parameters
-
-        assert "schema_name" in params
-        assert params["schema_name"].default is None
+    @pytest.mark.asyncio
+    async def test_restore_workspace_removed(self):
+        """Verify restore_workspace tool no longer exists (replaced by auto-restore)."""
+        tools = await mcp.list_tools()
+        tool_names = [t.name for t in tools]
+        assert "restore_workspace" not in tool_names
 
 
 class TestGraphRAGManagerLoadState:

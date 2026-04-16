@@ -21,9 +21,8 @@ Complete reference for all OrionBelt Analytics MCP tools. These tools are invoke
 
 ### Resuming a Previous Session
 
-1. **connect_database** -- reconnect to the same database
-2. **restore_workspace** -- reload schema cache, ontology, GraphRAG, and RDF store from disk
-3. Continue with **execute_sql_query**, **generate_chart**, etc.
+1. **connect_database** -- reconnect (auto-restores workspace if one exists)
+2. Continue with **execute_sql_query**, **generate_chart**, etc.
 
 ### Quick Data Exploration
 
@@ -403,30 +402,19 @@ Generate interactive Plotly charts rendered via MCP Apps, or export as static PN
 
 ---
 
-### 14. restore_workspace
+### 14. cleanup_workspace
 
-Restore a workspace from a previous session's artifacts, avoiding the cost of re-analyzing the schema and regenerating the ontology.
+Delete all workspace files for the current database connection and clear session state. The database connection remains active.
 
-**Parameters:**
+**Parameters:** None
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `schema_name` | string | No | Auto-selects first available | Schema to restore |
-
-**Returns:** Markdown-formatted summary listing what was restored and what is ready to use.
+**Returns:** Markdown-formatted summary of what was removed.
 
 **Key Features:**
-- Requires `connect_database` first (same database as the previous session)
-- Restores up to four components from disk:
-  - **Schema cache** -- cached table metadata from `analyze_schema`
-  - **Ontology** -- generated or loaded `.ttl` ontology file (tracks enrichment state)
-  - **RDF store** -- Oxigraph persistent SPARQL database
-  - **GraphRAG** -- graph index and vector embeddings
-- Lists available **semantic models** stored via `save_semantic_model`
-- If multiple schemas exist in the workspace, auto-selects the first one and reports alternatives
-- Reports "DO NOT CALL" tools (already restored) and "Ready to Use" tools
-- After restoration, tools like `validate_sql_syntax`, `graphrag_search`, and `execute_sql_query` work immediately without re-running the analysis pipeline
-- Workspace data persists across server restarts (chart images are cleaned on startup)
+- Removes the workspace directory (`tmp/{connection_id}/`), Oxigraph RDF store, and ChromaDB vector store
+- Clears all in-memory session state (schema cache, ontology, GraphRAG, RDF store)
+- Database connection stays active -- call `analyze_schema()` to start fresh
+- Safe: only affects the current connection's workspace, not other sessions
 
 ---
 
@@ -446,7 +434,7 @@ Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse ac
 
 **Key Features:**
 - Stores model YAML in `tmp/{connection_id}/models/{name}.yaml`
-- Tracks models in workspace metadata for `restore_workspace` discovery
+- Tracks models in workspace metadata for auto-restore discovery
 - Model content is treated as opaque -- no parsing or validation of the YAML structure
 - Enables cross-session model persistence for use with external Semantic Layer tools
 

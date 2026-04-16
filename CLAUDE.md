@@ -80,7 +80,7 @@ Each handler maps to a group of MCP tools:
 - `chart.py` - `generate_chart`
 - `rdf.py` - SPARQL query tools, RDF store operations
 - `graphrag.py` - GraphRAG initialization and context retrieval
-- `workspace.py` - `restore_workspace`, `save_semantic_model`, `get_semantic_model`, `list_semantic_models`
+- `workspace.py` - `cleanup_workspace`, `save_semantic_model`, `get_semantic_model`, `list_semantic_models`
 - `info.py` - `get_server_info`
 
 ### Database Driver Pattern (`src/drivers/`)

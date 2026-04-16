@@ -58,7 +58,7 @@ def print_startup_info():
             "analyze_schema - Analyze schema with auto GraphRAG + ontology",
             "get_table_details - Detailed table metadata and columns",
             "reset_cache - Clear cached schema and ontology data",
-            "restore_workspace - Restore a previous session's artifacts",
+            "cleanup_workspace - Delete workspace files and start fresh",
         ],
         "Ontology & Semantic": [
             "generate_ontology - Generate RDF/OWL ontology with SQL annotations",
@@ -124,7 +124,7 @@ def cleanup_tmp_folder():
 
     Connection-scoped directories (tmp/{connection_id}/) contain workspace
     artifacts (metadata.json, schema JSON, ontology TTL, Oxigraph store,
-    ChromaDB) that must survive server restarts for restore_workspace() to work.
+    ChromaDB) that must survive server restarts for workspace auto-restore to work.
 
     Only removes top-level files that are not inside a connection directory.
 

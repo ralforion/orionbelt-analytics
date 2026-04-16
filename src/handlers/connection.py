@@ -10,6 +10,7 @@ from ..exceptions import ConnectionError, ValidationError
 from ..lifecycle.metadata import VersionMetadataManager
 from ..paths import OUTPUT_DIR
 from ..workspace import detect_workspace, format_workspace_summary
+from .workspace import _restore_workspace_core, _format_restore_summary
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +23,12 @@ async def connect_database(
     create_error_response,
     _get_connection_fingerprint,
     _clear_session_state,
+    get_oxigraph_store=None,
 ) -> str:
     """Connect to a database using credentials from environment variables.
+
+    If a previous workspace exists for this connection, it is automatically
+    restored (schema cache, ontology, GraphRAG, RDF store).
 
     Args:
         ctx: FastMCP context
@@ -33,6 +38,7 @@ async def connect_database(
         create_error_response: Error response helper
         _get_connection_fingerprint: Connection fingerprint function
         _clear_session_state: State clearing function
+        get_oxigraph_store: Function to get/init Oxigraph store (for auto-restore)
 
     Returns:
         Connection status message or error JSON
@@ -289,10 +295,24 @@ async def connect_database(
         except Exception as e:
             logger.warning(f"Failed to write workspace connection info: {e}")
 
-        # Detect existing workspace for this connection
+        # Detect and auto-restore existing workspace
         response = f"Successfully connected to {db_type} database: {db_name}"
         workspace = detect_workspace(new_conn_id)
-        if workspace:
+        if workspace and get_oxigraph_store:
+            try:
+                restore_result = await _restore_workspace_core(
+                    ctx, session, new_conn_id, None, get_oxigraph_store
+                )
+                if restore_result:
+                    response += "\n\n" + _format_restore_summary(restore_result)
+                else:
+                    # Workspace detected but restore returned nothing
+                    response += "\n\n" + format_workspace_summary(workspace)
+            except Exception as e:
+                logger.warning(f"Auto-restore failed: {e}")
+                response += "\n\n" + format_workspace_summary(workspace)
+        elif workspace:
+            # No get_oxigraph_store available (e.g., tests) — show summary only
             response += "\n\n" + format_workspace_summary(workspace)
 
         return response

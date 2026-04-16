@@ -696,7 +696,7 @@ SELECT c.id, c.name FROM customers c JOIN orders o ON c.id = o.customer_id
 
 | Tool | Purpose |
 |------|---------|
-| `restore_workspace()` | Restore previous session (schema, ontology, GraphRAG) |
+| `cleanup_workspace()` | Delete workspace files and start fresh (keeps connection) |
 | `save_semantic_model()` | Save semantic model YAML (e.g., OBML) for cross-session reuse |
 | `get_semantic_model()` | Retrieve stored model YAML by name |
 | `list_semantic_models()` | List all stored models for current connection |
@@ -969,10 +969,9 @@ When available, prefer Semantic Layer MCP for business-friendly queries and metr
 5. generate_chart()
 ```
 
-**Resume Workflow (2 steps):**
+**Resume Workflow (1 step):**
 ```
-1. connect_database()  // detects existing workspace
-2. restore_workspace()  // restores schema, ontology, GraphRAG, lists models
+1. connect_database()  // auto-restores workspace if one exists
 ```
 
 **Advanced Workflow (7+ steps):**
