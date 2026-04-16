@@ -128,9 +128,10 @@ def cleanup_tmp_folder():
 
     Only removes top-level files that are not inside a connection directory.
 
-    When CLEANUP_ON_STARTUP=true, also applies retention-based cleanup to
-    workspace directories: removes connection dirs whose workspace data
-    exceeds WORKSPACE_MAX_AGE_DAYS (default: 30).
+    AUTO_CLEANUP_ON_STARTUP controls workspace cleanup:
+    - "false" (default): no workspace cleanup, only top-level files and charts
+    - "true": retention-based — removes workspaces older than WORKSPACE_MAX_AGE_DAYS
+    - "all": removes ALL workspace directories (fresh start)
     """
     import os
     tmp_dir = Path(__file__).parent / "tmp"
@@ -175,11 +176,26 @@ def cleanup_tmp_folder():
     if workspace_dirs:
         logger.info(f"Found {len(workspace_dirs)} workspace directory/directories")
 
-    # Phase 2: Retention-based workspace cleanup (opt-in via AUTO_CLEANUP_ON_STARTUP)
-    cleanup_enabled = os.getenv("AUTO_CLEANUP_ON_STARTUP", "false").lower() == "true"
-    if not cleanup_enabled:
+    # Phase 2: Workspace cleanup (opt-in via AUTO_CLEANUP_ON_STARTUP)
+    cleanup_mode = os.getenv("AUTO_CLEANUP_ON_STARTUP", "false").lower()
+    if cleanup_mode == "false":
         return
 
+    if cleanup_mode == "all":
+        # Remove ALL workspace directories (fresh start)
+        logger.info(f"Full cleanup enabled, removing {len(workspace_dirs)} workspace(s)...")
+        cleaned = 0
+        for conn_dir in workspace_dirs:
+            try:
+                shutil.rmtree(conn_dir)
+                cleaned += 1
+                logger.info(f"Removed workspace: {conn_dir.name}")
+            except Exception as e:
+                logger.warning(f"Failed to remove workspace {conn_dir.name}: {e}")
+        logger.info(f"Full cleanup: removed {cleaned} workspace(s)")
+        return
+
+    # cleanup_mode == "true": retention-based cleanup
     max_age_days = int(os.getenv("WORKSPACE_MAX_AGE_DAYS", "30"))
     logger.info(
         f"Retention cleanup enabled (WORKSPACE_MAX_AGE_DAYS={max_age_days}), "
