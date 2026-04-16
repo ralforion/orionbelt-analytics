@@ -27,14 +27,16 @@ async def _restore_workspace_core(
     """Core workspace restore logic shared by connect_database and cleanup recovery.
 
     Loads schema cache, ontology, GraphRAG, and RDF store from disk into
-    the session. Returns a structured result dict, or None if no workspace
-    or schemas exist.
+    the session. When schema_name is None, restores ALL schemas in the
+    workspace. Per-schema state (schema cache, ontology) is restored for
+    each schema; connection-scoped state (GraphRAG, RDF store) is restored
+    once.
 
     Args:
         ctx: FastMCP context
         session: SessionData instance (already resolved)
         connection_id: Database connection fingerprint
-        schema_name: Schema to restore (auto-selects first if None)
+        schema_name: Schema to restore. If None, restores all schemas.
         get_oxigraph_store: Function to get/init Oxigraph store
 
     Returns:
@@ -53,71 +55,78 @@ async def _restore_workspace_core(
     if not schemas:
         return None
 
-    # Resolve schema name
     all_schemas = list(schemas.keys())
-    if not schema_name:
-        schema_name = all_schemas[0]
-        if len(all_schemas) > 1:
-            await ctx.info(
-                f"Multiple schemas available: {', '.join(all_schemas)}. "
-                f"Auto-restoring '{schema_name}'."
-            )
 
-    schema_data = schemas.get(schema_name)
-    if not schema_data:
+    # Determine which schemas to restore
+    if schema_name:
+        schemas_to_restore = [schema_name] if schema_name in schemas else []
+    else:
+        schemas_to_restore = all_schemas
+
+    if not schemas_to_restore:
         return None
 
     restored: List[str] = []
     failed: List[str] = []
+    any_ontology_enriched = False
 
-    # 1. Restore schema cache
-    schema_section = schema_data.get("schema", {})
-    schema_file = schema_section.get("schema_file")
-    if schema_file:
-        schema_path = conn_dir / schema_file
-        if schema_path.exists():
-            try:
-                with open(schema_path, "r", encoding="utf-8") as f:
-                    schema_json = json.load(f)
+    # --- Per-schema restore: schema cache + ontology ---
+    for sname in schemas_to_restore:
+        schema_data = schemas[sname]
+        session.set_current_schema(sname)
 
-                tables_raw = schema_json.get("tables", [])
-                tables_info = [TableInfo.from_dict(t) for t in tables_raw]
+        # 1. Restore schema cache
+        schema_section = schema_data.get("schema", {})
+        schema_file = schema_section.get("schema_file")
+        if schema_file:
+            schema_path = conn_dir / schema_file
+            if schema_path.exists():
+                try:
+                    with open(schema_path, "r", encoding="utf-8") as f:
+                        schema_json = json.load(f)
 
-                session.cache_schema_analysis(schema_name, tables_info)
-                session.schema_file = schema_file
-                restored.append(f"Schema analysis: {len(tables_info)} tables")
-            except Exception as e:
-                logger.error(f"Failed to restore schema cache: {e}")
-                failed.append(f"Schema cache: {e}")
-        else:
-            failed.append(f"Schema file missing: {schema_file}")
+                    tables_raw = schema_json.get("tables", [])
+                    tables_info = [TableInfo.from_dict(t) for t in tables_raw]
 
-    # 2. Restore ontology
-    ontology_section = schema_data.get("ontology", {})
-    ontology_file = ontology_section.get("ontology_file")
-    if ontology_file:
-        ontology_path = conn_dir / ontology_file
-        if ontology_path.exists():
-            try:
-                session.ontology_file = ontology_file
-                is_enriched = ontology_section.get("enriched", False)
-                session.ontology_enriched = is_enriched
-                enriched_tag = " (enriched)" if is_enriched else ""
-                restored.append(f"Ontology file{enriched_tag}")
+                    session.cache_schema_analysis(sname, tables_info)
+                    session.schema_file = schema_file
+                    restored.append(f"Schema '{sname}': {len(tables_info)} tables")
+                except Exception as e:
+                    logger.error(f"Failed to restore schema cache for '{sname}': {e}")
+                    failed.append(f"Schema cache '{sname}': {e}")
+            else:
+                failed.append(f"Schema file missing for '{sname}': {schema_file}")
 
-                ontology_content = ontology_path.read_text(encoding="utf-8")
-                session.loaded_ontology = ontology_content
-                session.loaded_ontology_path = str(ontology_path)
-            except Exception as e:
-                logger.error(f"Failed to restore ontology: {e}")
-                failed.append(f"Ontology: {e}")
-        else:
-            failed.append(f"Ontology file missing: {ontology_file}")
+        # 2. Restore ontology (into this schema's state)
+        ontology_section = schema_data.get("ontology", {})
+        ontology_file = ontology_section.get("ontology_file")
+        if ontology_file:
+            ontology_path = conn_dir / ontology_file
+            if ontology_path.exists():
+                try:
+                    session.ontology_file = ontology_file
+                    is_enriched = ontology_section.get("enriched", False)
+                    session.ontology_enriched = is_enriched
+                    if is_enriched:
+                        any_ontology_enriched = True
+                    enriched_tag = " (enriched)" if is_enriched else ""
+                    restored.append(f"Ontology '{sname}'{enriched_tag}")
 
-    # Restore R2RML file reference
-    r2rml_file = schema_section.get("r2rml_file")
-    if r2rml_file and (conn_dir / r2rml_file).exists():
-        session.r2rml_file = r2rml_file
+                    ontology_content = ontology_path.read_text(encoding="utf-8")
+                    session.loaded_ontology = ontology_content
+                    session.loaded_ontology_path = str(ontology_path)
+                except Exception as e:
+                    logger.error(f"Failed to restore ontology for '{sname}': {e}")
+                    failed.append(f"Ontology '{sname}': {e}")
+            else:
+                failed.append(f"Ontology file missing for '{sname}': {ontology_file}")
+
+        # Restore R2RML file reference
+        r2rml_file = schema_section.get("r2rml_file")
+        if r2rml_file and (conn_dir / r2rml_file).exists():
+            session.r2rml_file = r2rml_file
+
+    # --- Connection-scoped restore (once, not per-schema) ---
 
     # 3. Restore Oxigraph RDF store
     rdf_store = workspace.get("rdf_store", {})
@@ -125,55 +134,52 @@ async def _restore_workspace_core(
         try:
             store = get_oxigraph_store(ctx)
             if store:
-                graph_uri = ontology_section.get("graph_uri")
-                if graph_uri:
-                    try:
-                        graph_data = store.export_graph(graph_uri, format="turtle")
-                        if graph_data and len(graph_data) > 100:
-                            restored.append(f"RDF store (graph: {graph_uri})")
-                        else:
-                            failed.append("RDF store: graph empty or not found")
-                    except Exception:
-                        failed.append("RDF store: graph verification failed")
-                else:
-                    restored.append("RDF store (initialized)")
+                restored.append("RDF store (initialized)")
         except Exception as e:
             logger.error(f"Failed to restore RDF store: {e}")
             failed.append(f"RDF store: {e}")
 
-    # 4. Restore GraphRAG
-    graphrag_section = schema_data.get("graphrag", {})
-    if graphrag_section.get("initialized"):
-        try:
-            manager = GraphRAGManager(
-                embedding_model="tfidf",
-                embedding_dimension=384,
-                connection_id=connection_id,
-                schema_name=schema_name,
-            )
-            if manager.load_state(ensure_output_dir()):
-                session.graphrag_manager = manager
-                session.graphrag_initialized = True
-                stats = manager.vector_store.get_statistics()
-                restored.append(
-                    f"GraphRAG: {stats.get('total_elements', 0)} embeddings, "
-                    f"{manager.graph_retriever.graph.number_of_nodes()} tables"
-                )
-            else:
-                failed.append("GraphRAG: load_state returned False")
-        except Exception as e:
-            logger.error(f"Failed to restore GraphRAG: {e}")
-            failed.append(f"GraphRAG: {e}")
+    # 4. Restore GraphRAG (connection-scoped, accumulative)
+    if not session.graphrag_initialized:
+        # Find first schema with graphrag initialized to trigger load
+        for sname in schemas_to_restore:
+            graphrag_section = schemas[sname].get("graphrag", {})
+            if graphrag_section.get("initialized"):
+                try:
+                    manager = GraphRAGManager(
+                        embedding_model="tfidf",
+                        embedding_dimension=384,
+                        connection_id=connection_id,
+                        schema_name=sname,
+                    )
+                    if manager.load_state(ensure_output_dir()):
+                        session.graphrag_manager = manager
+                        session.graphrag_initialized = True
+                        stats = manager.vector_store.get_statistics()
+                        restored.append(
+                            f"GraphRAG: {stats.get('total_elements', 0)} embeddings, "
+                            f"{manager.graph_retriever.graph.number_of_nodes()} tables"
+                        )
+                    else:
+                        failed.append("GraphRAG: load_state returned False")
+                except Exception as e:
+                    logger.error(f"Failed to restore GraphRAG: {e}")
+                    failed.append(f"GraphRAG: {e}")
+                break  # Connection-scoped — load once from combined state
 
     # Collect semantic models
     models = workspace.get("models", {})
 
+    # Set current schema to the first restored schema
+    session.set_current_schema(schemas_to_restore[0])
+
     return {
-        "schema_name": schema_name,
+        "schema_name": schemas_to_restore[0],
         "all_schemas": all_schemas,
+        "restored_schemas": schemas_to_restore,
         "restored": restored,
         "failed": failed,
-        "ontology_enriched": session.ontology_enriched,
+        "ontology_enriched": any_ontology_enriched,
         "models": models,
     }
 
@@ -187,20 +193,19 @@ def _format_restore_summary(result: Dict[str, Any]) -> str:
     Returns:
         Formatted markdown string
     """
-    schema_name = result["schema_name"]
     restored = result["restored"]
     failed = result["failed"]
     ontology_enriched = result.get("ontology_enriched", False)
     models = result.get("models", {})
-    all_schemas = result.get("all_schemas", [schema_name])
+    restored_schemas = result.get("restored_schemas", [result["schema_name"]])
+
+    restored_str = str(restored)
 
     lines = ["# Workspace Auto-Restored", ""]
-    lines.append(f"Schema: {schema_name}")
-
-    if len(all_schemas) > 1:
-        others = [s for s in all_schemas if s != schema_name]
-        lines.append(f"Other schemas available: {', '.join(others)}")
-        lines.append("Use analyze_schema(schema_name) to switch schemas.")
+    if len(restored_schemas) == 1:
+        lines.append(f"Schema: {restored_schemas[0]}")
+    else:
+        lines.append(f"Schemas: {', '.join(restored_schemas)}")
     lines.append("")
 
     if restored:
@@ -221,9 +226,9 @@ def _format_restore_summary(result: Dict[str, Any]) -> str:
 
     # Build "do not call" list
     skip_tools = []
-    if "Schema analysis" in str(restored):
+    if "Schema '" in restored_str:
         skip_tools.append("analyze_schema()")
-    if "Ontology" in str(restored):
+    if "Ontology '" in restored_str:
         skip_tools.append("generate_ontology()")
         if ontology_enriched:
             skip_tools.append("suggest_semantic_names()")
@@ -236,16 +241,16 @@ def _format_restore_summary(result: Dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("## Ready to Use")
-    if "Schema analysis" in str(restored):
-        if not ontology_enriched and "Ontology" not in str(restored):
+    if "Schema '" in restored_str:
+        if not ontology_enriched and "Ontology '" not in restored_str:
             lines.append("- generate_ontology() to create ontology from cached schema")
-        if not ontology_enriched and "Ontology" in str(restored):
+        if not ontology_enriched and "Ontology '" in restored_str:
             lines.append("- suggest_semantic_names() to enrich the ontology")
-    if "Ontology" in str(restored):
+    if "Ontology '" in restored_str:
         lines.append("- query_sparql() for semantic queries")
         lines.append("- validate_sql_syntax() with ontology-aware validation")
         lines.append("- execute_sql_query() for data queries")
-    if "GraphRAG" in str(restored):
+    if "GraphRAG" in restored_str:
         lines.append("- graphrag_search() for semantic schema search")
 
     if models:
@@ -300,7 +305,7 @@ async def cleanup_workspace(
         except Exception as e:
             logger.debug(f"Oxigraph close during cleanup: {e}")
 
-    # Drop GraphRAG reference (releases ChromaDB handle)
+    # Drop GraphRAG reference (connection-scoped, releases ChromaDB handle)
     session.graphrag_manager = None
 
     # 2. Delete workspace directories
@@ -320,17 +325,11 @@ async def cleanup_workspace(
 
     # 3. Clear all in-memory session state (keep connection alive)
     session.clear_schema_cache()
-    session.schema_file = None
-    session.ontology_file = None
-    session.r2rml_file = None
-    session.loaded_ontology = None
-    session.loaded_ontology_path = None
-    session.ontology_enriched = False
-    session.obqc_validator = None
-    session.oxigraph_store = None
-    session.oxigraph_initialized = False
+    session.clear_all_schema_states()
     session.graphrag_manager = None
     session.graphrag_initialized = False
+    session.oxigraph_store = None
+    session.oxigraph_initialized = False
 
     await ctx.info(f"Workspace cleaned for connection {connection_id[:8]}...")
 

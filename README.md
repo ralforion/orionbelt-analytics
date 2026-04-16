@@ -47,6 +47,7 @@ Run Analytics and Semantic Layer side-by-side in Claude Desktop for schema-aware
 - **SPARQL 1.1** query interface via persistent Oxigraph RDF store
 - **Fan-trap prevention** -- automatic detection and safe query pattern suggestions
 - **Interactive charting** -- Plotly charts with MCP-UI rendering in Claude Desktop
+- **Multi-schema support** -- analyze multiple schemas simultaneously; ontology and GraphRAG state are isolated per schema
 - **Workspace persistence** -- reconnect to the same database and restore your previous session
 
 ## Quick Start

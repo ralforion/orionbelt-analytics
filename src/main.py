@@ -232,20 +232,15 @@ def _clear_session_state(session: SessionData, reason: str = "connection change"
     logger.info(f"Clearing session state ({reason})")
 
     session.clear_schema_cache()
-    session.schema_file = None
-    session.ontology_file = None
-    session.r2rml_file = None
-    session.loaded_ontology = None
-    session.loaded_ontology_path = None
-    session.ontology_enriched = False
 
-    session.obqc_validator = None
+    # Clear all per-schema state (ontology for every schema)
+    session.clear_all_schema_states()
 
-    session.oxigraph_store = None
-    session.oxigraph_initialized = False
-
+    # Clear connection-scoped state
     session.graphrag_manager = None
     session.graphrag_initialized = False
+    session.oxigraph_store = None
+    session.oxigraph_initialized = False
 
     logger.info("Session state cleared")
 

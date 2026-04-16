@@ -15,7 +15,7 @@ import asyncio
 import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from src.database_manager import TableInfo, ColumnInfo
 from src.lifecycle.metadata import (
@@ -432,6 +432,158 @@ class TestGraphRAGManagerLoadState:
         assert mgr2._initialized is True
         assert mgr2.graph_retriever.graph.number_of_nodes() == 2
         assert mgr2.graph_retriever.graph.number_of_edges() == 1
+
+
+class TestMultiSchemaSessionState:
+    """Test that SessionData isolates per-schema state (ontology, GraphRAG)."""
+
+    def test_set_current_schema_creates_state(self):
+        """set_current_schema creates a SchemaState and sets it as active."""
+        from src.session import SessionData
+
+        session = SessionData()
+        assert session.current_schema is None
+
+        ss = session.set_current_schema("public")
+        assert session.current_schema == "public"
+        assert ss.schema_name == "public"
+        assert ss.ontology.ontology_file is None
+
+    def test_schema_isolation_ontology(self):
+        """Ontology state is isolated per schema."""
+        from src.session import SessionData
+
+        session = SessionData()
+
+        # Set up "public" schema ontology
+        session.set_current_schema("public")
+        session.ontology_file = "ontology_public.ttl"
+        session.ontology_enriched = True
+
+        # Switch to "analytics"
+        session.set_current_schema("analytics")
+        session.ontology_file = "ontology_analytics.ttl"
+        session.ontology_enriched = False
+
+        # Verify isolation
+        session.set_current_schema("public")
+        assert session.ontology_file == "ontology_public.ttl"
+        assert session.ontology_enriched is True
+
+        session.set_current_schema("analytics")
+        assert session.ontology_file == "ontology_analytics.ttl"
+        assert session.ontology_enriched is False
+
+    def test_graphrag_is_connection_scoped(self):
+        """GraphRAG state is connection-scoped (shared across schemas)."""
+        from src.session import SessionData
+        from unittest.mock import Mock
+
+        session = SessionData()
+        manager = Mock(name="graphrag_manager")
+        session.graphrag_manager = manager
+        session.graphrag_initialized = True
+
+        # GraphRAG is the same regardless of current schema
+        session.set_current_schema("public")
+        assert session.graphrag_manager is manager
+        assert session.graphrag_initialized is True
+
+        session.set_current_schema("analytics")
+        assert session.graphrag_manager is manager
+        assert session.graphrag_initialized is True
+
+    def test_schema_isolation_schema_file(self):
+        """Schema file reference is isolated per schema."""
+        from src.session import SessionData
+
+        session = SessionData()
+
+        session.set_current_schema("public")
+        session.schema_file = "schema_public.json"
+
+        session.set_current_schema("analytics")
+        session.schema_file = "schema_analytics.json"
+
+        session.set_current_schema("public")
+        assert session.schema_file == "schema_public.json"
+
+        session.set_current_schema("analytics")
+        assert session.schema_file == "schema_analytics.json"
+
+    def test_rdf_store_is_connection_scoped(self):
+        """RDF store remains connection-scoped (shared across schemas)."""
+        from src.session import SessionData
+        from unittest.mock import Mock
+
+        session = SessionData()
+        store = Mock(name="oxigraph_store")
+        session.oxigraph_store = store
+
+        session.set_current_schema("public")
+        assert session.oxigraph_store is store
+
+        session.set_current_schema("analytics")
+        assert session.oxigraph_store is store
+
+    def test_schema_cache_is_multi_schema(self):
+        """SchemaCache can hold multiple schemas simultaneously."""
+        from src.session import SessionData
+
+        session = SessionData()
+        public_tables = [Mock(name="t1")]
+        analytics_tables = [Mock(name="t2"), Mock(name="t3")]
+
+        session.cache_schema_analysis("public", public_tables)
+        session.cache_schema_analysis("analytics", analytics_tables)
+
+        assert len(session.get_cached_schema("public")) == 1
+        assert len(session.get_cached_schema("analytics")) == 2
+
+    def test_clear_all_schema_states(self):
+        """clear_all_schema_states removes all per-schema state."""
+        from src.session import SessionData
+
+        session = SessionData()
+
+        session.set_current_schema("public")
+        session.ontology_file = "ontology_public.ttl"
+
+        session.set_current_schema("analytics")
+        session.ontology_file = "ontology_analytics.ttl"
+
+        session.clear_all_schema_states()
+        assert session.current_schema is None
+        assert session.schema_names == []
+        assert session.ontology_file is None
+        assert session.graphrag_manager is None
+
+    def test_get_schema_state_specific(self):
+        """get_schema_state can access non-current schema state."""
+        from src.session import SessionData
+
+        session = SessionData()
+
+        session.set_current_schema("public")
+        session.ontology_file = "pub.ttl"
+
+        session.set_current_schema("analytics")
+
+        # Access public's state while analytics is current
+        pub_state = session.get_schema_state("public")
+        assert pub_state is not None
+        assert pub_state.ontology.ontology_file == "pub.ttl"
+
+    def test_schema_names_lists_all(self):
+        """schema_names lists all schemas with active state."""
+        from src.session import SessionData
+
+        session = SessionData()
+        session.set_current_schema("public")
+        session.set_current_schema("analytics")
+        session.set_current_schema("staging")
+
+        assert sorted(session.schema_names) == ["analytics", "public", "staging"]
 
 
 if __name__ == "__main__":

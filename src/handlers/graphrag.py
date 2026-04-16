@@ -56,7 +56,11 @@ async def _auto_generate_ontology_background(
     session: Any,
     ctx: Context,
 ) -> None:
-    """Background task: Auto-generate ontology after GraphRAG completes."""
+    """Background task: Auto-generate ontology after GraphRAG completes.
+
+    Uses direct schema state access (not convenience properties) to avoid
+    race conditions when the user switches schemas during background work.
+    """
     from ..config import config_manager
 
     try:
@@ -79,12 +83,14 @@ async def _auto_generate_ontology_background(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         ontology_file = conn_dir / f"ontology_{schema_name}_{timestamp}.ttl"
         ontology_file.write_text(ontology_ttl, encoding="utf-8")
-        session.ontology_file = ontology_file.name
+
+        # Write to the specific schema's state (not current schema)
+        schema_state = session.get_or_create_schema_state(schema_name)
+        schema_state.ontology.ontology_file = ontology_file.name
 
         if OXIGRAPH_AVAILABLE:
             try:
-
-                # Direct store access for background task
+                # Direct store access for background task (connection-scoped)
                 if session.oxigraph_store:
                     graph_uri = f"{base_uri}{schema_name}"
                     triple_count = session.oxigraph_store.load_ontology(
@@ -109,23 +115,32 @@ async def _auto_initialize_graphrag_background(
     session: Any,
     ctx: Context,
 ) -> None:
-    """Background task: Auto-initialize GraphRAG after schema analysis."""
+    """Background task: Auto-initialize or accumulate GraphRAG after schema analysis.
+
+    GraphRAG is connection-scoped and accumulative. If already initialized,
+    new schema tables are added to the existing graph and vector store.
+    """
     try:
         start_time = time.time()
-        logger.info(f"Auto-initializing GraphRAG for schema '{schema_name}'...")
+        tables_dict = [_table_info_to_dict(t) for t in tables_info]
 
         if session.graphrag_manager is None:
+            # First schema — initialize from scratch
+            logger.info(f"Initializing GraphRAG for schema '{schema_name}'...")
             session.graphrag_manager = GraphRAGManager(
                 embedding_model="tfidf",
                 connection_id=session.connection_id,
                 schema_name=schema_name,
             )
-
-        tables_dict = [_table_info_to_dict(t) for t in tables_info]
-
-        session.graphrag_manager.initialize_from_schema(
-            tables_info=tables_dict, schema_name=schema_name
-        )
+            session.graphrag_manager.initialize_from_schema(
+                tables_info=tables_dict, schema_name=schema_name
+            )
+        else:
+            # Additional schema — accumulate into existing graph
+            logger.info(f"Accumulating schema '{schema_name}' into existing GraphRAG...")
+            session.graphrag_manager.accumulate_schema(
+                tables_info=tables_dict, schema_name=schema_name
+            )
 
         output_dir = ensure_output_dir()
         session.graphrag_manager.save_state(output_dir)
@@ -133,8 +148,12 @@ async def _auto_initialize_graphrag_background(
         elapsed = time.time() - start_time
         session.graphrag_initialized = True
 
-        logger.info(f"GraphRAG auto-initialized successfully ({elapsed:.2f}s)")
-        logger.info(f"Indexed {len(tables_dict)} tables with their metadata")
+        total_tables = session.graphrag_manager.graph_retriever.graph.number_of_nodes()
+        schemas = session.graphrag_manager._schema_names
+        logger.info(
+            f"GraphRAG auto-initialized successfully ({elapsed:.2f}s) — "
+            f"{total_tables} tables across schemas: {schemas}"
+        )
 
         # Write workspace metadata for graphrag section
         if session.connection_id:
@@ -149,6 +168,7 @@ async def _auto_initialize_graphrag_background(
                         "initialized": True,
                         "table_count": len(tables_dict),
                         "embedding_count": stats.get("total_elements", 0),
+                        "schemas": schemas,
                         "initialized_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                     },
                 )
@@ -194,6 +214,9 @@ async def initialize_graphrag(
         if effective_schema:
             logger.info(f"Using last analyzed schema: {effective_schema}")
 
+    # Set current schema for per-schema state isolation
+    session.set_current_schema(effective_schema or "default")
+
     tables_info = session.get_cached_schema(effective_schema or "")
 
     if not tables_info:
@@ -226,23 +249,32 @@ async def initialize_graphrag(
     # Convert TableInfo objects to dictionaries
     tables_dict = [_table_info_to_dict(t) for t in tables_info]
 
+    eff_schema = effective_schema or "default"
+
     try:
         if session.graphrag_manager is None:
             session.graphrag_manager = GraphRAGManager(
                 embedding_model=embedding_model,
                 embedding_dimension=384,
                 connection_id=session.connection_id,
-                schema_name=effective_schema or "default",
+                schema_name=eff_schema,
             )
-
-        session.graphrag_manager.initialize_from_schema(
-            tables_info=tables_dict, schema_name=effective_schema or "default"
-        )
+            session.graphrag_manager.initialize_from_schema(
+                tables_info=tables_dict, schema_name=eff_schema
+            )
+        else:
+            # Accumulate into existing graph
+            session.graphrag_manager.accumulate_schema(
+                tables_info=tables_dict, schema_name=eff_schema
+            )
 
         session.graphrag_initialized = True
 
         output_dir = ensure_output_dir()
         session.graphrag_manager.save_state(output_dir)
+
+        total_tables = session.graphrag_manager.graph_retriever.graph.number_of_nodes()
+        schemas = session.graphrag_manager._schema_names
 
         # Write workspace metadata for graphrag section
         if session.connection_id:
@@ -251,12 +283,13 @@ async def initialize_graphrag(
                 await update_workspace_section(
                     connection_id=session.connection_id,
                     output_dir=OUTPUT_DIR,
-                    schema_name=effective_schema or "default",
+                    schema_name=eff_schema,
                     section="graphrag",
                     data={
                         "initialized": True,
                         "table_count": len(tables_dict),
                         "embedding_count": stats.get("total_elements", 0),
+                        "schemas": schemas,
                         "initialized_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                     },
                 )
@@ -264,18 +297,21 @@ async def initialize_graphrag(
                 logger.warning(f"Failed to write workspace metadata: {e}")
 
         await ctx.info(
-            f"GraphRAG initialized for schema '{effective_schema or 'default'}' with {len(tables_dict)} tables"
+            f"GraphRAG initialized for schema '{eff_schema}' with {len(tables_dict)} tables "
+            f"(total: {total_tables} tables across {len(schemas)} schema(s))"
         )
 
         return (
             f"GraphRAG initialized successfully!\n\n"
-            f"Schema: {effective_schema or 'default'}\n"
-            f"Tables: {len(tables_dict)}\n"
+            f"Schema: {eff_schema}\n"
+            f"Tables added: {len(tables_dict)}\n"
+            f"Total tables in graph: {total_tables}\n"
+            f"Schemas: {', '.join(schemas)}\n"
             f"Embedding model: {embedding_model}\n\n"
             f"You can now use:\n"
-            f"- graphrag_search() for semantic search\n"
+            f"- graphrag_search() for semantic search across all schemas\n"
             f"- graphrag_query_context() for optimized query context\n"
-            f"- graphrag_find_join_path() for relationship discovery\n"
+            f"- graphrag_find_join_path() for cross-schema relationship discovery\n"
             f"- graphrag_overview() for schema statistics"
         )
 

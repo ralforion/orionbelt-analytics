@@ -146,12 +146,15 @@ GraphRAG state persists across sessions. All three components -- vector store, r
 tmp/
   chromadb/{connection_id}/       # ChromaDB persistent storage (automatic)
   {connection_id}/
-    vector_store_{schema}.json    # Vector store JSON export (backup)
-    graph_{schema}.json           # Graph structure with tables_info
+    graph_combined.json           # Combined graph (all schemas, with schema_names list)
+    vector_store_{schema}.json    # Vector store JSON export (backup, per-schema)
+    graph_{schema}.json           # Per-schema graph backup (backward compat)
     communities_{schema}.json     # Community assignments and summaries
 ```
 
-ChromaDB uses its own persistent storage that reconnects automatically when a new `GraphRAGManager` is created with the same `connection_id` and `schema_name`. The JSON files serve as backup and contain the `tables_info` needed to rebuild the NetworkX graph and community assignments.
+GraphRAG is connection-scoped and accumulative. Each `analyze_schema()` call adds tables to the same graph and vector store, enabling cross-schema join path discovery and unified semantic search. The combined state file (`graph_combined.json`) stores all accumulated schemas in a single graph; per-schema files are saved alongside for backward compatibility.
+
+ChromaDB uses its own persistent storage that reconnects automatically when a new `GraphRAGManager` is created with the same `connection_id`. The JSON files serve as backup and contain the `tables_info` needed to rebuild the NetworkX graph and community assignments.
 
 ### Restoring a Workspace
 
@@ -171,4 +174,4 @@ This restores:
 
 After auto-restore, all GraphRAG tools (`graphrag_search`, `graphrag_query_context`, `graphrag_find_join_path`, `graphrag_overview`) work immediately without re-analysis. The workspace metadata file tracks which components were initialized and when.
 
-If multiple schemas exist in the workspace, the first schema is auto-restored and the response lists the alternatives. Use `analyze_schema(schema_name)` to switch to a different schema.
+If multiple schemas exist in the workspace, all schemas are auto-restored on reconnect -- each schema's cache and ontology are loaded, and the connection-scoped GraphRAG state (covering all schemas) is restored once. Ontology state is per-schema (switching schemas preserves each schema's ontology), while GraphRAG is accumulative (all schemas share one graph for cross-schema discovery).

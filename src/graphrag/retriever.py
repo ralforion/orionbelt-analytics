@@ -65,6 +65,53 @@ class GraphRetriever:
             f"and {self.graph.number_of_edges()} edges"
         )
 
+    def add_to_graph(self, tables_info: List[Dict[str, Any]]):
+        """Add tables and relationships to the existing graph (accumulative).
+
+        Unlike build_graph(), this does NOT clear the graph first.
+        Duplicate nodes are updated, new edges are added.
+
+        Args:
+            tables_info: List of table metadata with columns and foreign keys
+        """
+        added_nodes = 0
+        added_edges = 0
+
+        for table in tables_info:
+            table_name = table['name']
+            self._tables_info[table_name] = table
+
+            if table_name not in self.graph:
+                added_nodes += 1
+            self.graph.add_node(
+                table_name,
+                node_type='table',
+                column_count=len(table.get('columns', [])),
+                has_comment=bool(table.get('comment')),
+                comment=table.get('comment', '')
+            )
+
+        for table in tables_info:
+            table_name = table['name']
+            for fk in table.get('foreign_keys', []):
+                referenced_table = fk['referenced_table']
+                if referenced_table in self.graph:
+                    if not self.graph.has_edge(table_name, referenced_table):
+                        added_edges += 1
+                    self.graph.add_edge(
+                        table_name,
+                        referenced_table,
+                        edge_type='foreign_key',
+                        column=fk['column'],
+                        referenced_column=fk['referenced_column']
+                    )
+
+        logger.info(
+            f"Added to graph: +{added_nodes} nodes, +{added_edges} edges "
+            f"(total: {self.graph.number_of_nodes()} nodes, "
+            f"{self.graph.number_of_edges()} edges)"
+        )
+
     def find_join_path(
         self,
         from_table: str,

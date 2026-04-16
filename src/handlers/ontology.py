@@ -107,8 +107,15 @@ async def generate_ontology(
 
     Extracts implementation from main.py's generate_ontology tool.
     """
-    # Check if ontology is already generated
+    # Resolve effective schema and set current schema for state isolation
     session = get_session_data(ctx)
+    effective_schema_for_state = schema_name
+    if not effective_schema_for_state:
+        effective_schema_for_state = session.get_last_analyzed_schema()
+    if effective_schema_for_state:
+        session.set_current_schema(effective_schema_for_state)
+
+    # Check if ontology is already generated
     if session.ontology_file:
         if session.ontology_enriched:
             await ctx.info("Ontology CACHED and already enriched — ready to use")

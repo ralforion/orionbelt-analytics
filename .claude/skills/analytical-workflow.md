@@ -665,6 +665,21 @@ SELECT c.id, c.name FROM customers c JOIN orders o ON c.id = o.customer_id
 
 ---
 
+### Multi-Schema Support
+
+**Ontology state is per-schema; GraphRAG is connection-scoped and accumulative.** Each `analyze_schema()` adds tables to the same graph, enabling cross-schema join path discovery:
+
+```
+analyze_schema(schema_name="public")     # → ontology for public, GraphRAG adds public tables
+analyze_schema(schema_name="analytics")  # → ontology for analytics, GraphRAG adds analytics tables
+graphrag_search("customers")             # → searches across ALL analyzed schemas
+graphrag_find_join_path("public.orders", "analytics.events")  # → cross-schema path
+```
+
+Ontology state is isolated per schema — switching schemas does not destroy the previous schema's ontology. GraphRAG and the RDF store are connection-scoped and support all schemas simultaneously.
+
+---
+
 ## Tool Reference
 
 ### Core Tools (Most Used)

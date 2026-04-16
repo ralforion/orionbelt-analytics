@@ -60,7 +60,7 @@ server.py → src/main.py (@mcp.tool decorators)
 ### Core Modules
 
 - **`src/main.py`** - FastMCP server setup, tool registration, resource/prompt definitions
-- **`src/session.py`** - `SessionData` class for per-session state isolation
+- **`src/session.py`** - `SessionData` class for per-session state isolation with multi-schema support (per-schema ontology and GraphRAG via `SchemaState`)
 - **`src/database_manager.py`** - Connection pooling, schema analysis, SQLAlchemy integration
 - **`src/ontology_generator.py`** - RDF/OWL generation using rdflib with `oba:` (OrionBelt Analytics) namespace annotations
 - **`src/oxigraph_store.py`** - Persistent RDF storage with SPARQL 1.1 query support
@@ -110,7 +110,7 @@ Graph-based Retrieval Augmented Generation for schema intelligence:
 
 ### Key Patterns
 
-**Per-Session State Isolation**: Each MCP session maintains isolated `SessionData` (in `src/session.py`) with its own `DatabaseManager`, GraphRAG manager, and file paths, preventing cross-session interference.
+**Per-Session State Isolation**: Each MCP session maintains isolated `SessionData` (in `src/session.py`) with its own `DatabaseManager`, GraphRAG manager, and file paths, preventing cross-session interference. Ontology state is per-schema via `SchemaState` — switching schemas does not destroy the previous schema's ontology. GraphRAG and Oxigraph RDF store are connection-scoped and accumulative: each `analyze_schema()` adds tables to the same graph, enabling cross-schema join path discovery and unified semantic search.
 
 **Fan-Trap Prevention**: Multi-step validation prevents data multiplication errors:
 1. `analyze_schema()` extracts FK relationships
