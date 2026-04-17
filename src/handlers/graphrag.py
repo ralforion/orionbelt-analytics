@@ -310,9 +310,9 @@ async def initialize_graphrag(
             f"Embedding model: {embedding_model}\n\n"
             f"You can now use:\n"
             f"- graphrag_search() for semantic search across all schemas\n"
+            f"- graphrag_search(overview=True) for schema statistics\n"
             f"- graphrag_query_context() for optimized query context\n"
-            f"- graphrag_find_join_path() for cross-schema relationship discovery\n"
-            f"- graphrag_overview() for schema statistics"
+            f"- graphrag_find_join_path() for cross-schema relationship discovery"
         )
 
     except Exception as e:
@@ -335,7 +335,7 @@ async def graphrag_search(
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
         return create_error_response(
-            "GraphRAG not initialized. Please call initialize_graphrag() first.",
+            "GraphRAG not initialized. Please call analyze_schema() first.",
             "graphrag_not_initialized",
         )
 
@@ -366,7 +366,7 @@ async def graphrag_query_context(
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
         return create_error_response(
-            "GraphRAG not initialized. Please call initialize_graphrag() first.",
+            "GraphRAG not initialized. Please call analyze_schema() first.",
             "graphrag_not_initialized",
         )
 
@@ -411,7 +411,7 @@ async def graphrag_find_join_path(
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
         return create_error_response(
-            "GraphRAG not initialized. Please call initialize_graphrag() first.",
+            "GraphRAG not initialized. Please call analyze_schema() first.",
             "graphrag_not_initialized",
         )
 
@@ -461,7 +461,7 @@ async def graphrag_overview(
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
         return create_error_response(
-            "GraphRAG not initialized. Please call initialize_graphrag() first.",
+            "GraphRAG not initialized. Please call analyze_schema() first.",
             "graphrag_not_initialized",
         )
 

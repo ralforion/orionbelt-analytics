@@ -101,15 +101,26 @@ async def store_ontology_in_rdf(
             f"Graph URI: <{graph_uri}>\n"
             f"Triples loaded: {triple_count}\n\n"
             f"You can now query using:\n"
-            f"- query_sparql() - Execute SPARQL SELECT queries\n"
-            f"- query_sparql_ask() - Execute SPARQL ASK queries\n"
-            f"- list_tables_sparql() - List tables via SPARQL\n"
-            f"- find_columns_by_type_sparql() - Find columns by data type"
+            f"- query_sparql() - Execute SPARQL queries (SELECT, ASK, CONSTRUCT)"
         )
 
     except Exception as e:
         logger.error(f"Failed to store ontology in RDF: {e}", exc_info=True)
         return RDFError(f"Failed to store ontology: {str(e)}").to_response()
+
+
+def _detect_sparql_type(sparql_query: str) -> str:
+    """Detect SPARQL query type from the query string."""
+    stripped = sparql_query.strip()
+    # Skip PREFIX declarations to find the actual query keyword
+    import re
+    body = re.sub(r"(?i)^\s*(PREFIX\s+\S+\s+<[^>]+>\s*)+", "", stripped).strip()
+    upper = body.upper()
+    if upper.startswith("ASK"):
+        return "ASK"
+    if upper.startswith("CONSTRUCT"):
+        return "CONSTRUCT"
+    return "SELECT"
 
 
 async def query_sparql(
@@ -119,7 +130,7 @@ async def query_sparql(
     get_oxigraph_store,
     create_error_response,
 ) -> Dict[str, Any]:
-    """Execute SPARQL SELECT query against stored ontologies."""
+    """Execute SPARQL query (SELECT, ASK, or CONSTRUCT) against stored ontologies."""
     if not OXIGRAPH_AVAILABLE:
         return DependencyError("pyoxigraph not installed").to_response()
 
@@ -127,16 +138,37 @@ async def query_sparql(
     if store is None:
         return StoreNotInitializedError("Oxigraph store not initialized").to_response()
 
-    try:
-        results = store.query_sparql(sparql_query, timeout_seconds=timeout_seconds)
-        await ctx.info(f"SPARQL query returned {len(results)} results")
+    query_type = _detect_sparql_type(sparql_query)
 
-        return {
-            "success": True,
-            "result_count": len(results),
-            "results": results,
-            "query": sparql_query,
-        }
+    try:
+        if query_type == "ASK":
+            result = store.query_sparql_ask(sparql_query)
+            await ctx.info(f"SPARQL ASK query returned: {result}")
+            return {
+                "success": True,
+                "query_type": "ASK",
+                "result": result,
+                "query": sparql_query,
+            }
+        elif query_type == "CONSTRUCT":
+            result = store.query_sparql_construct(sparql_query)
+            await ctx.info("SPARQL CONSTRUCT query completed")
+            return {
+                "success": True,
+                "query_type": "CONSTRUCT",
+                "result": result,
+                "query": sparql_query,
+            }
+        else:
+            results = store.query_sparql(sparql_query, timeout_seconds=timeout_seconds)
+            await ctx.info(f"SPARQL query returned {len(results)} results")
+            return {
+                "success": True,
+                "query_type": "SELECT",
+                "result_count": len(results),
+                "results": results,
+                "query": sparql_query,
+            }
 
     except Exception as e:
         logger.error(f"SPARQL query failed: {e}", exc_info=True)
