@@ -676,16 +676,17 @@ async def suggest_semantic_names(
 @mcp.tool()
 async def apply_semantic_names(
     ctx: Context,
-    suggestions: str,
+    suggestions: Union[str, Dict[str, Any]],
     ontology_file: Optional[str] = None,
     save_to_file: bool = True,
 ) -> str:
     """Apply semantic name suggestions to an existing ontology.
 
-    The suggestions parameter must be a JSON object with 'classes', 'properties',
-    and/or 'relationships' arrays. Each entry needs 'original_name' and 'suggested_name'.
+    The suggestions parameter accepts a JSON object (or JSON string) with 'classes',
+    'properties', and/or 'relationships' arrays. Each entry needs 'original_name'
+    and 'suggested_name'.
 
-    Example suggestions JSON:
+    Example suggestions:
     {
       "classes": [
         {"original_name": "acctbal", "suggested_name": "AccountBalance", "description": "Account balance records"}
@@ -699,7 +700,7 @@ async def apply_semantic_names(
     }
 
     Args:
-        suggestions: JSON string with classes/properties/relationships arrays (see example above)
+        suggestions: JSON object or string with classes/properties/relationships arrays (see example above)
         ontology_file: The ontology filename from generate_ontology response
         save_to_file: Whether to save the updated ontology to a file
     """

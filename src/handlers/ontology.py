@@ -6,7 +6,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 
 from fastmcp import Context
 
@@ -480,7 +480,7 @@ async def suggest_semantic_names(
 
 async def apply_semantic_names(
     ctx: Context,
-    suggestions: str,
+    suggestions: Union[str, Dict[str, Any]],
     ontology_file: Optional[str],
     save_to_file: bool,
     get_session_data,
