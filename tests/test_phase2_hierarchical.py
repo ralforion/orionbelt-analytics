@@ -141,7 +141,6 @@ class TestPhase2FunctionalityPreserved:
             "apply_semantic_names",
             "load_my_ontology",
             "sample_table_data",
-            "validate_sql_syntax",
             "execute_sql_query",
             "generate_chart",
             "cleanup_workspace",

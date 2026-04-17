@@ -70,8 +70,7 @@ def print_startup_info():
         ],
         "Query & Visualization": [
             "sample_table_data - Preview table data with security controls",
-            "validate_sql_syntax - Validate SQL with fan-trap checks",
-            "execute_sql_query - Execute SQL with result validation",
+            "execute_sql_query - Execute SQL with built-in validation and fan-trap checks",
             "generate_chart - Generate Plotly charts with MCP-UI rendering",
         ],
         "GraphRAG": [

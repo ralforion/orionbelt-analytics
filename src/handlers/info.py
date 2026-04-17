@@ -46,7 +46,6 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
             "download_ontology",
             "download_r2rml",
             "sample_table_data",
-            "validate_sql_syntax",
             "execute_sql_query",
             "generate_chart",
             "initialize_graphrag",

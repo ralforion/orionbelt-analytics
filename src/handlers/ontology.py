@@ -126,8 +126,7 @@ async def generate_ontology(
                 f"Do NOT call generate_ontology, analyze_schema, or suggest_semantic_names again.\n\n"
                 f"## READY TO USE:\n"
                 f"- query_sparql() for semantic queries\n"
-                f"- execute_sql_query() for data queries\n"
-                f"- validate_sql_syntax() for query validation"
+                f"- execute_sql_query() for data queries (includes built-in validation)"
             )
         await ctx.info("Ontology CACHED - call suggest_semantic_names() for enrichment")
         return (

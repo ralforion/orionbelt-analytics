@@ -110,7 +110,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 
 - Always fully qualify identifiers: `schema.table.column`
 - Review foreign_keys from analyze_schema() before complex JOINs
-- Use validate_sql_syntax() before executing queries
+- execute_sql_query() includes built-in syntax, security, and OBQC validation
 - For multi-fact aggregation, use UNION ALL pattern (see /fan-trap-prevention)
 
 Version: {__version__}
@@ -801,23 +801,6 @@ async def sample_table_data(
 
 
 @mcp.tool()
-async def validate_sql_syntax(ctx: Context, sql_query: str) -> Dict[str, Any]:
-    """Validate SQL syntax, security, and fan-trap risks before execution.
-
-    Args:
-        sql_query: SQL SELECT statement to validate
-
-    Returns:
-        Validation results with warnings and suggestions
-    """
-    return await _h_query.validate_sql_syntax(
-        ctx, sql_query,
-        get_session_db_manager=get_session_db_manager,
-        get_session_obqc_validator=get_session_obqc_validator,
-    )
-
-
-@mcp.tool()
 async def execute_sql_query(
     ctx: Context,
     sql_query: str,
@@ -825,7 +808,12 @@ async def execute_sql_query(
     checklist_completed: bool = False,
     query_intent: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Execute SQL query with validation and fan-trap protection.
+    """Execute SQL query with built-in syntax validation, security checks, OBQC
+    validation, and fan-trap protection.
+
+    Automatically validates SQL syntax and security before execution. If an ontology
+    is loaded, OBQC checks (fan-trap detection, semantic validation) run too — errors
+    block execution, warnings are included in the result.
 
     REQUIRES: connect_database must be called first.
 
@@ -839,6 +827,7 @@ async def execute_sql_query(
         ctx, sql_query, limit, checklist_completed, query_intent,
         get_session_data=get_session_data,
         get_session_db_manager=get_session_db_manager,
+        get_session_obqc_validator=get_session_obqc_validator,
         create_error_response=create_error_response,
     )
 

@@ -187,9 +187,10 @@ async def execute_sql_query(
     query_intent: Optional[str],
     get_session_data,
     get_session_db_manager,
+    get_session_obqc_validator,
     create_error_response,
 ) -> Dict[str, Any]:
-    """Execute SQL query with validation and fan-trap protection.
+    """Execute SQL query with built-in validation and fan-trap protection.
 
     Args:
         ctx: FastMCP context
@@ -199,6 +200,7 @@ async def execute_sql_query(
         query_intent: Natural language query description
         get_session_data: Function to get session data
         get_session_db_manager: Function to get session db manager
+        get_session_obqc_validator: Function to get OBQC validator
         create_error_response: Error response helper
     """
     try:
@@ -231,6 +233,53 @@ async def execute_sql_query(
                 details="You must complete the pre-execution checklist before executing SQL queries. Review the tool documentation for required steps.",
             ).to_response()
 
+        # OBQC validation (fan-trap detection, ontology-aware checks)
+        obqc_warnings = []
+        obqc_validator = get_session_obqc_validator(ctx)
+        if obqc_validator:
+            db_type = db_manager.connection_info.get("type", "postgresql")
+            obqc_result = obqc_validator.validate(sql_query.strip(), dialect=db_type)
+
+            if not obqc_result.is_valid:
+                error_details = []
+                for issue in obqc_result.issues:
+                    detail = issue.message
+                    if issue.suggestion:
+                        detail += f" — {issue.suggestion}"
+                    error_details.append(detail)
+                return {
+                    "success": False,
+                    "data": [],
+                    "columns": [],
+                    "row_count": 0,
+                    "execution_time_ms": None,
+                    "error": "OBQC validation failed",
+                    "error_type": "obqc_error",
+                    "obqc_issues": error_details,
+                    "fan_trap_risk": obqc_result.fan_trap_risk,
+                    "warnings": [],
+                    "query_plan": None,
+                    "limit_applied": False,
+                }
+
+            for issue in obqc_result.issues:
+                if issue.severity.value == "warning":
+                    msg = f"[OBQC] {issue.message}"
+                    if issue.suggestion:
+                        msg += f" — {issue.suggestion}"
+                    obqc_warnings.append(msg)
+
+            if obqc_result.fan_trap_risk:
+                obqc_warnings.append(
+                    "[OBQC] FAN-TRAP RISK: Query aggregates across multiple "
+                    "1:many relationships. Consider UNION ALL pattern."
+                )
+
+            logger.debug(
+                f"OBQC validation: valid={obqc_result.is_valid}, "
+                f"issues={len(obqc_result.issues)}"
+            )
+
         # Auto-inject GraphRAG context if available
         session = get_session_data(ctx)
         if session.graphrag_initialized and session.graphrag_manager:
@@ -253,6 +302,11 @@ async def execute_sql_query(
                 logger.debug(f"Context auto-retrieval failed (non-critical): {e}")
 
         result = db_manager.execute_sql_query(sql_query.strip(), limit)
+
+        # Merge OBQC warnings into result
+        if obqc_warnings:
+            existing_warnings = result.get("warnings", [])
+            result["warnings"] = existing_warnings + obqc_warnings
 
         if result.get("success"):
             logger.info(
