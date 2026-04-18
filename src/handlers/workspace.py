@@ -226,7 +226,7 @@ def _format_restore_summary(result: Dict[str, Any]) -> str:
 
     # Build "do not call" list
     skip_tools = []
-    if "Schema '" in restored_str:
+    if "Schema '" in restored_str or "Ontology '" in restored_str:
         skip_tools.append("analyze_schema()")
     if "Ontology '" in restored_str:
         skip_tools.append("generate_ontology()")
