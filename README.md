@@ -7,7 +7,7 @@
 
 <p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
 
-[![Version 1.3.0](https://img.shields.io/badge/version-1.3.0-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
+[![Version 1.4.0](https://img.shields.io/badge/version-1.4.0-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
 [![FastMCP](https://img.shields.io/badge/FastMCP-3.2.4+-blue)](https://github.com/jlowin/fastmcp)
@@ -147,39 +147,31 @@ OrionBelt exposes 32 MCP tools. Here is a summary by category:
 | `suggest_semantic_names` | Detect abbreviations and cryptic names for business-friendly renaming |
 | `apply_semantic_names` | Apply LLM-suggested semantic names and descriptions to ontology |
 | `load_my_ontology` | Load a custom `.ttl` ontology file from an import folder |
-| `download_ontology` | Download the current ontology as a Turtle file |
-| `download_r2rml` | Download the R2RML mapping as a Turtle file |
+| `download_artifact` | Download ontology or R2RML mapping as a Turtle file |
 
 ### Query & Visualization
 
 | Tool | Description |
 |------|-------------|
 | `sample_table_data` | Preview table data with row limit and injection protection |
-| `validate_sql_syntax` | Validate SQL with dialect detection, security analysis, fan-trap checks |
-| `execute_sql_query` | Execute SQL with fan-trap detection and result validation |
+| `execute_sql_query` | Execute SQL with built-in validation, security checks, and fan-trap detection |
 | `generate_chart` | Generate Plotly charts (bar, line, scatter, heatmap) with MCP-UI rendering |
 
 ### GraphRAG
 
 | Tool | Description |
 |------|-------------|
-| `initialize_graphrag` | Initialize graph + vector index for schema intelligence |
-| `graphrag_search` | Semantic search across schema elements |
+| `graphrag_search` | Semantic search + schema overview (auto-initialized by `analyze_schema`) |
 | `graphrag_query_context` | Get optimized context for SQL generation (85-95% token reduction) |
 | `graphrag_find_join_path` | Discover join paths between tables via graph traversal |
-| `graphrag_overview` | Schema statistics and community clustering overview |
 
 ### SPARQL & RDF
 
 | Tool | Description |
 |------|-------------|
 | `store_ontology_in_rdf` | Persist ontology in Oxigraph for SPARQL access |
-| `query_sparql` | Execute SPARQL SELECT queries |
-| `query_sparql_ask` | Execute SPARQL ASK queries (true/false) |
-| `list_tables_sparql` | List tables via SPARQL |
-| `find_columns_by_type_sparql` | Find columns by data type via SPARQL |
+| `query_sparql` | Execute SPARQL queries (SELECT, ASK, CONSTRUCT — auto-detected) |
 | `add_rdf_knowledge` | Add custom metadata triples to the RDF store |
-| `get_rdf_store_stats` | Get RDF store statistics |
 
 ### Semantic Models
 
