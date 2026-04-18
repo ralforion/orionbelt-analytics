@@ -82,12 +82,25 @@ async def discover_schema(
     # Log function entry to verify code is being called
     logger.debug(f"discover_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
 
-    # Check cache
     session = get_session_data(ctx)
     effective_schema = schema_name or ""
 
     # Set current schema so per-schema state (ontology, GraphRAG) is isolated
     session.set_current_schema(effective_schema or "default")
+
+    # Early exit: workspace already fully restored — nothing to do
+    if session.ontology_enriched and session.get_cached_schema(effective_schema):
+        await ctx.info("Schema already discovered and ontology enriched — skipping.")
+        return {
+            "schema": effective_schema or "default",
+            "status": "already_complete",
+            "message": (
+                "Schema is already discovered and the ontology is enriched. "
+                "Nothing to do. Use execute_sql_query() to query data, "
+                "query_sparql() for semantic queries, or graphrag_search() "
+                "for schema navigation."
+            ),
+        }
 
     cached_tables = session.get_cached_schema(effective_schema)
 
