@@ -141,14 +141,6 @@ class TestPhase1TokenReduction:
         # Should mention chart-related content
         assert "chart" in docstring.lower()
 
-    def test_validate_sql_syntax_docstring_condensed(self):
-        """Verify validate_sql_syntax docstring is condensed."""
-        docstring = _get_tool_docstring('validate_sql_syntax')
-        assert docstring is not None, "validate_sql_syntax has no docstring"
-
-        # Original was ~4,465 chars, should be much smaller now
-        assert len(docstring) < 2000, f"validate_sql_syntax docstring not condensed: {len(docstring)} chars"
-
     def test_analyze_schema_docstring_condensed(self):
         """Verify analyze_schema docstring is condensed."""
         docstring = _get_tool_docstring('analyze_schema')
@@ -175,7 +167,6 @@ class TestPhase1TokenReduction:
             "apply_semantic_names",
             "load_my_ontology",
             "sample_table_data",
-            "validate_sql_syntax",
             "execute_sql_query",
             "generate_chart",
             "get_server_info"
@@ -234,7 +225,6 @@ class TestFunctionalityPreserved:
             "list_schemas",
             "analyze_schema",
             "generate_ontology",
-            "validate_sql_syntax",
             "execute_sql_query",
             "generate_chart"
         ]

@@ -40,9 +40,9 @@ query_analyst = Agent(
     goal="Write safe SQL queries based on schema analysis, validate them, and execute.",
     backstory=(
         "You are a SQL expert who writes precise queries based on schema information. "
-        "You always validate SQL syntax and check for fan-trap risks before execution. "
-        "You use sample_table_data to preview data and validate_sql_syntax before "
-        "calling execute_sql_query with checklist_completed=true."
+        "You always check for fan-trap risks before execution. "
+        "You use sample_table_data to preview data before "
+        "calling execute_sql_query with checklist_completed=true (validation is built-in)."
     ),
     mcps=[MCP_SERVER_CONFIG],
     verbose=True,
@@ -81,8 +81,7 @@ query_task = Task(
     description=(
         "Based on the schema analysis:\n"
         "1. Write a SQL query to show the top 10 most populated tables.\n"
-        "2. Validate the SQL using validate_sql_syntax.\n"
-        "3. Execute the query using execute_sql_query with checklist_completed=true.\n"
+        "2. Execute the query using execute_sql_query with checklist_completed=true.\n"
         "4. Sample data from the largest table."
     ),
     expected_output=(

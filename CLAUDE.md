@@ -75,11 +75,11 @@ server.py → src/main.py (@mcp.tool decorators)
 Each handler maps to a group of MCP tools:
 - `connection.py` - `connect_database`, `list_schemas`
 - `schema.py` - `analyze_schema`, `get_table_details`, `reset_cache`
-- `ontology.py` - `generate_ontology`, `suggest_semantic_names`, `apply_semantic_names`, `load_my_ontology`
-- `query.py` - `validate_sql_syntax`, `execute_sql_query`, `sample_table_data`
+- `ontology.py` - `generate_ontology`, `suggest_semantic_names`, `apply_semantic_names`, `load_my_ontology`, `download_artifact`
+- `query.py` - `execute_sql_query` (includes built-in validation), `sample_table_data`
 - `chart.py` - `generate_chart`
-- `rdf.py` - SPARQL query tools, RDF store operations
-- `graphrag.py` - GraphRAG initialization and context retrieval
+- `rdf.py` - `query_sparql` (SELECT/ASK/CONSTRUCT), `store_ontology_in_rdf`, `add_rdf_knowledge`
+- `graphrag.py` - `graphrag_search` (includes overview mode), `graphrag_query_context`, `graphrag_find_join_path`
 - `workspace.py` - `cleanup_workspace`, `save_semantic_model`, `get_semantic_model`, `list_semantic_models`
 - `info.py` - `get_server_info`
 

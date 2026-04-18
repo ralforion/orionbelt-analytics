@@ -248,8 +248,7 @@ def _format_restore_summary(result: Dict[str, Any]) -> str:
             lines.append("- suggest_semantic_names() to enrich the ontology")
     if "Ontology '" in restored_str:
         lines.append("- query_sparql() for semantic queries")
-        lines.append("- validate_sql_syntax() with ontology-aware validation")
-        lines.append("- execute_sql_query() for data queries")
+        lines.append("- execute_sql_query() for data queries (includes OBQC validation)")
     if "GraphRAG" in restored_str:
         lines.append("- graphrag_search() for semantic schema search")
 

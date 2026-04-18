@@ -110,7 +110,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 
 - Always fully qualify identifiers: `schema.table.column`
 - Review foreign_keys from analyze_schema() before complex JOINs
-- Use validate_sql_syntax() before executing queries
+- execute_sql_query() includes built-in syntax, security, and OBQC validation
 - For multi-fact aggregation, use UNION ALL pattern (see /fan-trap-prevention)
 
 Version: {__version__}
@@ -676,16 +676,17 @@ async def suggest_semantic_names(
 @mcp.tool()
 async def apply_semantic_names(
     ctx: Context,
-    suggestions: str,
+    suggestions: Union[str, Dict[str, Any]],
     ontology_file: Optional[str] = None,
     save_to_file: bool = True,
 ) -> str:
     """Apply semantic name suggestions to an existing ontology.
 
-    The suggestions parameter must be a JSON object with 'classes', 'properties',
-    and/or 'relationships' arrays. Each entry needs 'original_name' and 'suggested_name'.
+    The suggestions parameter accepts a JSON object (or JSON string) with 'classes',
+    'properties', and/or 'relationships' arrays. Each entry needs 'original_name'
+    and 'suggested_name'.
 
-    Example suggestions JSON:
+    Example suggestions:
     {
       "classes": [
         {"original_name": "acctbal", "suggested_name": "AccountBalance", "description": "Account balance records"}
@@ -699,7 +700,7 @@ async def apply_semantic_names(
     }
 
     Args:
-        suggestions: JSON string with classes/properties/relationships arrays (see example above)
+        suggestions: JSON object or string with classes/properties/relationships arrays (see example above)
         ontology_file: The ontology filename from generate_ontology response
         save_to_file: Whether to save the updated ontology to a file
     """
@@ -738,44 +739,38 @@ async def load_my_ontology(
 
 
 @mcp.tool()
-async def download_ontology(
+async def download_artifact(
     ctx: Context,
+    artifact_type: str,
     schema_name: Optional[str] = None,
     source: str = "rdf",
 ) -> Dict[str, Any]:
-    """Download ontology as TTL file from RDF store or tmp folder.
+    """Download a generated artifact as TTL file.
 
     Args:
+        artifact_type: Type of artifact to download ("ontology" or "r2rml")
         schema_name: Name of the schema
-        source: Where to get the ontology from ("rdf" or "file")
+        source: Where to get the artifact from ("rdf" or "file"), only applies to ontology
 
     Returns:
-        Dictionary with ontology content and file info
+        Dictionary with artifact content and file info
     """
-    return await _h_ontology.download_ontology(
-        ctx, schema_name, source,
-        get_session_data=get_session_data,
-        get_oxigraph_store=get_oxigraph_store,
-        create_error_response=create_error_response,
-    )
-
-
-@mcp.tool()
-async def download_r2rml(
-    ctx: Context,
-    schema_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Download R2RML mapping file from tmp folder.
-
-    Args:
-        schema_name: Name of the schema
-
-    Returns:
-        Dictionary with R2RML content and file info
-    """
-    return await _h_ontology.download_r2rml(
-        ctx, schema_name, get_session_data=get_session_data
-    )
+    if artifact_type == "ontology":
+        return await _h_ontology.download_ontology(
+            ctx, schema_name, source,
+            get_session_data=get_session_data,
+            get_oxigraph_store=get_oxigraph_store,
+            create_error_response=create_error_response,
+        )
+    elif artifact_type == "r2rml":
+        return await _h_ontology.download_r2rml(
+            ctx, schema_name, get_session_data=get_session_data
+        )
+    else:
+        return create_error_response(
+            f"Invalid artifact_type: {artifact_type}. Must be 'ontology' or 'r2rml'.",
+            "parameter_error",
+        )
 
 
 @mcp.tool()
@@ -800,23 +795,6 @@ async def sample_table_data(
 
 
 @mcp.tool()
-async def validate_sql_syntax(ctx: Context, sql_query: str) -> Dict[str, Any]:
-    """Validate SQL syntax, security, and fan-trap risks before execution.
-
-    Args:
-        sql_query: SQL SELECT statement to validate
-
-    Returns:
-        Validation results with warnings and suggestions
-    """
-    return await _h_query.validate_sql_syntax(
-        ctx, sql_query,
-        get_session_db_manager=get_session_db_manager,
-        get_session_obqc_validator=get_session_obqc_validator,
-    )
-
-
-@mcp.tool()
 async def execute_sql_query(
     ctx: Context,
     sql_query: str,
@@ -824,7 +802,12 @@ async def execute_sql_query(
     checklist_completed: bool = False,
     query_intent: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Execute SQL query with validation and fan-trap protection.
+    """Execute SQL query with built-in syntax validation, security checks, OBQC
+    validation, and fan-trap protection.
+
+    Automatically validates SQL syntax and security before execution. If an ontology
+    is loaded, OBQC checks (fan-trap detection, semantic validation) run too — errors
+    block execution, warnings are included in the result.
 
     REQUIRES: connect_database must be called first.
 
@@ -838,6 +821,7 @@ async def execute_sql_query(
         ctx, sql_query, limit, checklist_completed, query_intent,
         get_session_data=get_session_data,
         get_session_db_manager=get_session_db_manager,
+        get_session_obqc_validator=get_session_obqc_validator,
         create_error_response=create_error_response,
     )
 
@@ -974,45 +958,36 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
 # --- GraphRAG Tools ---
 
 @mcp.tool()
-async def initialize_graphrag(
-    ctx: Context,
-    schema_name: Optional[str] = None,
-    embedding_model: str = "tfidf",
-) -> str:
-    """Initialize GraphRAG for intelligent schema navigation and retrieval.
-
-    Args:
-        schema_name: Schema to initialize (uses last analyzed if not specified)
-        embedding_model: Embedding type ("tfidf" or "sentence-transformers")
-
-    Returns:
-        Initialization status message
-    """
-    return await _h_graphrag.initialize_graphrag(
-        ctx, schema_name, embedding_model,
-        get_session_data=get_session_data,
-        get_session_db_manager=get_session_db_manager,
-        create_error_response=create_error_response,
-    )
-
-
-@mcp.tool()
 async def graphrag_search(
     ctx: Context,
-    query: str,
+    query: Optional[str] = None,
     top_k: int = 5,
     element_type: Optional[str] = None,
+    overview: bool = False,
 ) -> Dict[str, Any]:
-    """Search schema using natural language via GraphRAG semantic search.
+    """Search schema using natural language via GraphRAG, or get a schema overview.
+
+    GraphRAG is auto-initialized by analyze_schema. Pass overview=True to get
+    schema statistics and community clustering instead of search results.
 
     Args:
-        query: Natural language search query
+        query: Natural language search query (required unless overview=True)
         top_k: Number of results to return
         element_type: Filter by type ("table", "column", "relationship", or None)
+        overview: If True, return schema statistics and communities instead of search
 
     Returns:
-        Dictionary with search results and similarity scores
+        Dictionary with search results or schema overview
     """
+    if overview:
+        return await _h_graphrag.graphrag_overview(
+            ctx, get_session_data=get_session_data, create_error_response=create_error_response
+        )
+    if not query:
+        return create_error_response(
+            "query parameter is required when overview=False",
+            "parameter_error",
+        )
     return await _h_graphrag.graphrag_search(
         ctx, query, top_k, element_type,
         get_session_data=get_session_data,
@@ -1068,18 +1043,6 @@ async def graphrag_find_join_path(
     )
 
 
-@mcp.tool()
-async def graphrag_overview(ctx: Context) -> Dict[str, Any]:
-    """Get GraphRAG schema overview with statistics and communities.
-
-    Returns:
-        Dictionary with comprehensive schema statistics
-    """
-    return await _h_graphrag.graphrag_overview(
-        ctx, get_session_data=get_session_data, create_error_response=create_error_response
-    )
-
-
 # --- Oxigraph RDF Store & SPARQL Tools ---
 
 @mcp.tool()
@@ -1111,34 +1074,18 @@ async def query_sparql(
     sparql_query: str,
     timeout_seconds: int = 30,
 ) -> Dict[str, Any]:
-    """Execute SPARQL SELECT query against stored ontologies.
+    """Execute SPARQL query against stored ontologies. Supports SELECT, ASK,
+    and CONSTRUCT query types (auto-detected from query string).
 
     Args:
-        sparql_query: SPARQL SELECT query string
+        sparql_query: SPARQL query string (SELECT, ASK, or CONSTRUCT)
         timeout_seconds: Query timeout
 
     Returns:
-        Query results as list of bindings
+        Query results (bindings for SELECT, boolean for ASK, Turtle string for CONSTRUCT)
     """
     return await _h_rdf.query_sparql(
         ctx, sparql_query, timeout_seconds,
-        get_oxigraph_store=get_oxigraph_store,
-        create_error_response=create_error_response,
-    )
-
-
-@mcp.tool()
-async def query_sparql_ask(ctx: Context, sparql_query: str) -> Dict[str, Any]:
-    """Execute SPARQL ASK query (returns true/false).
-
-    Args:
-        sparql_query: SPARQL ASK query
-
-    Returns:
-        Boolean result
-    """
-    return await _h_rdf.query_sparql_ask(
-        ctx, sparql_query,
         get_oxigraph_store=get_oxigraph_store,
         create_error_response=create_error_response,
     )
@@ -1165,63 +1112,6 @@ async def add_rdf_knowledge(
     """
     return await _h_rdf.add_rdf_knowledge(
         ctx, subject, predicate, object, metadata,
-        get_oxigraph_store=get_oxigraph_store,
-        create_error_response=create_error_response,
-    )
-
-
-@mcp.tool()
-async def list_tables_sparql(
-    ctx: Context,
-    schema_graph: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List all tables from stored ontology using SPARQL.
-
-    Args:
-        schema_graph: Optional graph URI to query
-
-    Returns:
-        List of table names
-    """
-    return await _h_rdf.list_tables_sparql(
-        ctx, schema_graph,
-        get_session_data=get_session_data,
-        get_oxigraph_store=get_oxigraph_store,
-        create_error_response=create_error_response,
-    )
-
-
-@mcp.tool()
-async def find_columns_by_type_sparql(
-    ctx: Context,
-    data_type: str,
-    schema_graph: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Find columns by data type using SPARQL.
-
-    Args:
-        data_type: SQL data type (e.g., "INTEGER", "VARCHAR", "DATE")
-        schema_graph: Optional graph URI
-
-    Returns:
-        List of matching columns
-    """
-    return await _h_rdf.find_columns_by_type_sparql(
-        ctx, data_type, schema_graph,
-        get_oxigraph_store=get_oxigraph_store,
-        create_error_response=create_error_response,
-    )
-
-
-@mcp.tool()
-async def get_rdf_store_stats(ctx: Context) -> Dict[str, Any]:
-    """Get statistics about the persistent RDF store.
-
-    Returns:
-        Store statistics including triple counts and graphs
-    """
-    return await _h_rdf.get_rdf_store_stats(
-        ctx,
         get_oxigraph_store=get_oxigraph_store,
         create_error_response=create_error_response,
     )

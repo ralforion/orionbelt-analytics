@@ -50,7 +50,7 @@ def print_startup_info():
     logger.info("MCP server for database ad hoc analysis with ontology support and interactive charting")
     logger.info("="*60)
     
-    logger.info("🔧 Available MCP Tools (32):")
+    logger.info("🔧 Available MCP Tools (22):")
     tool_groups = {
         "Connection & Schema": [
             "connect_database - Connect to any supported database",
@@ -65,30 +65,22 @@ def print_startup_info():
             "suggest_semantic_names - Detect abbreviations for renaming",
             "apply_semantic_names - Apply semantic names to ontology",
             "load_my_ontology - Load a custom .ttl ontology file",
-            "download_ontology - Download ontology as Turtle file",
-            "download_r2rml - Download R2RML mapping as Turtle file",
+            "download_artifact - Download ontology or R2RML as Turtle file",
         ],
         "Query & Visualization": [
             "sample_table_data - Preview table data with security controls",
-            "validate_sql_syntax - Validate SQL with fan-trap checks",
-            "execute_sql_query - Execute SQL with result validation",
+            "execute_sql_query - Execute SQL with built-in validation and fan-trap checks",
             "generate_chart - Generate Plotly charts with MCP-UI rendering",
         ],
         "GraphRAG": [
-            "initialize_graphrag - Initialize graph + vector index",
-            "graphrag_search - Semantic search across schema elements",
+            "graphrag_search - Semantic search + overview (auto-initialized by analyze_schema)",
             "graphrag_query_context - Optimized context for SQL generation",
             "graphrag_find_join_path - Discover join paths via graph traversal",
-            "graphrag_overview - Schema statistics and clustering overview",
         ],
         "SPARQL & RDF": [
             "store_ontology_in_rdf - Persist ontology in Oxigraph",
-            "query_sparql - Execute SPARQL SELECT queries",
-            "query_sparql_ask - Execute SPARQL ASK queries",
-            "list_tables_sparql - List tables via SPARQL",
-            "find_columns_by_type_sparql - Find columns by data type",
+            "query_sparql - Execute SPARQL queries (SELECT, ASK, CONSTRUCT)",
             "add_rdf_knowledge - Add custom metadata triples",
-            "get_rdf_store_stats - Get RDF store statistics",
         ],
         "Semantic Models": [
             "save_semantic_model - Save a semantic model to workspace",

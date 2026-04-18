@@ -31,15 +31,13 @@ safe SQL queries with fan-trap prevention.
 3. Call analyze_schema to get the schema structure with relationships.
 4. Use get_table_details for deep-dive into specific tables.
 5. Call generate_ontology to create RDF/OWL ontology with SQL mappings.
-6. Use validate_sql_syntax before running queries.
-7. Use execute_sql_query to run validated SQL (set checklist_completed=true).
-8. Use generate_chart to visualize query results.
-9. Use graphrag_query_context for intelligent schema discovery via natural language.
+6. Use execute_sql_query to run SQL (set checklist_completed=true) — validation is built-in.
+7. Use generate_chart to visualize query results.
+8. Use graphrag_query_context for intelligent schema discovery via natural language.
 
 ## Rules
 
-- Always validate SQL before execution using validate_sql_syntax.
-- Set checklist_completed=true when calling execute_sql_query after validation.
+- Set checklist_completed=true when calling execute_sql_query.
 - Fan-trap warnings must be resolved before executing multi-fact queries.
 - Present SQL in code blocks. Explain ontology triples in plain language.
 - Use GraphRAG tools for natural language schema exploration.

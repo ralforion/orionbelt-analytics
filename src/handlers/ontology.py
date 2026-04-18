@@ -6,7 +6,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 
 from fastmcp import Context
 
@@ -84,7 +84,7 @@ def _build_minimal_graph_summary(ontology_ttl: str) -> str:
     for r in sorted(set(rels)):
         lines.append(r)
     lines.append(
-        "\nUse download_ontology() to retrieve the full Turtle serialization."
+        '\nUse download_artifact(artifact_type="ontology") to retrieve the full Turtle serialization.'
     )
     return "\n".join(lines)
 
@@ -126,8 +126,7 @@ async def generate_ontology(
                 f"Do NOT call generate_ontology, analyze_schema, or suggest_semantic_names again.\n\n"
                 f"## READY TO USE:\n"
                 f"- query_sparql() for semantic queries\n"
-                f"- execute_sql_query() for data queries\n"
-                f"- validate_sql_syntax() for query validation"
+                f"- execute_sql_query() for data queries (includes built-in validation)"
             )
         await ctx.info("Ontology CACHED - call suggest_semantic_names() for enrichment")
         return (
@@ -348,7 +347,7 @@ Triples stored: {triple_count:,}
 
 Ontology is now persistent in Oxigraph RDF database.
 Use query_sparql() to explore the schema graph.
-Use download_ontology(schema_name="{schema_name or "default"}") to get the TTL file.
+Use download_artifact(artifact_type='ontology', schema_name='{schema_name or "default"}') to get the TTL file.
 
 Token savings: ~{len(ontology_ttl)//4} tokens saved by auto-persisting to RDF store!"""
 
@@ -480,7 +479,7 @@ async def suggest_semantic_names(
 
 async def apply_semantic_names(
     ctx: Context,
-    suggestions: str,
+    suggestions: Union[str, Dict[str, Any]],
     ontology_file: Optional[str],
     save_to_file: bool,
     get_session_data,
@@ -596,7 +595,7 @@ async def apply_semantic_names(
                     triple_count = store.load_ontology(updated_ontology, graph_uri, schema_name)
                     result += f"\nPersisted to Oxigraph: {triple_count:,} triples in <{graph_uri}>"
                     result += f"\nToken savings: ~{len(updated_ontology) // 4} tokens saved by auto-persisting to RDF store!"
-                    result += "\nUse query_sparql() to explore or download_ontology() to get the TTL file."
+                    result += '\nUse query_sparql() to explore or download_artifact(artifact_type="ontology") to get the TTL file.'
                     persisted = True
             except Exception as e:
                 logger.warning(f"Auto-persist semantic ontology to Oxigraph failed: {e}")
