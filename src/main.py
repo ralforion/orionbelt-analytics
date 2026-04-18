@@ -812,6 +812,11 @@ async def execute_sql_query(
     """Execute SQL query with built-in syntax validation, security checks, OBQC
     validation, and fan-trap protection.
 
+    PREFER SEMANTIC LAYER: If the OrionBelt Semantic Layer MCP server is available,
+    create an OBML model and use execute_query/compile_query instead of raw SQL.
+    Only use this tool when no semantic model is loaded or the user explicitly asks
+    for raw SQL.
+
     Automatically validates SQL syntax and security before execution. If an ontology
     is loaded, OBQC checks (fan-trap detection, semantic validation) run too — errors
     block execution, warnings are included in the result.
