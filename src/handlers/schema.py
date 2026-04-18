@@ -450,6 +450,7 @@ async def get_table_details(
     ctx: Context,
     table_name: str,
     schema_name: Optional[str],
+    get_session_data,
     get_session_db_manager,
 ) -> Dict[str, Any]:
     """Get detailed metadata for a single table.
@@ -458,8 +459,46 @@ async def get_table_details(
         ctx: FastMCP context
         table_name: Name of the table to analyze
         schema_name: Schema containing the table
+        get_session_data: Function to get session data
         get_session_db_manager: Function to get session db manager
     """
+    session = get_session_data(ctx)
+
+    if not schema_name:
+        schema_name = session.get_last_analyzed_schema()
+
+    # Return from cache if schema was already discovered
+    cached_tables = session.get_cached_schema(schema_name or "")
+    if cached_tables:
+        for t in cached_tables:
+            if t.name.lower() == table_name.lower():
+                await ctx.info(
+                    f"Table '{table_name}' found in cache — no database call needed"
+                )
+                return {
+                    "success": True,
+                    "name": t.name,
+                    "schema": t.schema,
+                    "columns": [
+                        {
+                            "name": col.name,
+                            "data_type": col.data_type,
+                            "is_nullable": col.is_nullable,
+                            "is_primary_key": col.is_primary_key,
+                            "is_foreign_key": col.is_foreign_key,
+                            "foreign_key_table": col.foreign_key_table,
+                            "foreign_key_column": col.foreign_key_column,
+                            "comment": col.comment,
+                        }
+                        for col in t.columns
+                    ],
+                    "primary_keys": t.primary_keys,
+                    "foreign_keys": t.foreign_keys,
+                    "comment": t.comment,
+                    "row_count": t.row_count,
+                    "cache_hit": True,
+                }
+
     db_manager = get_session_db_manager(ctx)
 
     try:

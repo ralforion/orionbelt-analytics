@@ -608,16 +608,21 @@ async def get_table_details(
     table_name: str,
     schema_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Get detailed metadata for a single table.
+    """Get detailed metadata for a single table. Only use when you need to
+    inspect a specific table that the user asked about — do NOT call this for
+    every table. discover_schema() and the ontology already contain full
+    schema structure including columns, keys, and relationships.
 
     REQUIRES: connect_database must be called first.
 
     Args:
         table_name: Name of the table to analyze
-        schema_name: Schema containing the table (optional)
+        schema_name: Schema containing the table (optional, auto-detected)
     """
     return await _h_schema.get_table_details(
-        ctx, table_name, schema_name, get_session_db_manager=get_session_db_manager
+        ctx, table_name, schema_name,
+        get_session_data=get_session_data,
+        get_session_db_manager=get_session_db_manager,
     )
 
 
