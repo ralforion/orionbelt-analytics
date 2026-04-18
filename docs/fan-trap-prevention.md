@@ -50,9 +50,9 @@ Result: **200** (each item row is duplicated per shipment). The query executes w
 
 OrionBelt Analytics applies fan-trap detection at three layers, each catching different scenarios.
 
-### Layer 1: Schema Analysis (`analyze_schema`)
+### Layer 1: Schema Analysis (`discover_schema`)
 
-When `analyze_schema()` inspects foreign keys, it flags any table that references multiple other tables as a potential fan-trap bridge:
+When `discover_schema()` inspects foreign keys, it flags any table that references multiple other tables as a potential fan-trap bridge:
 
 ```python
 # From src/handlers/schema.py
@@ -67,7 +67,7 @@ if len(table_info.foreign_keys) > 1:
     })
 ```
 
-These warnings appear in the `analyze_schema()` output so the LLM (or user) is aware of risky join paths before writing any SQL.
+These warnings appear in the `discover_schema()` output so the LLM (or user) is aware of risky join paths before writing any SQL.
 
 ### Layer 2: OBQC Query Validation (`validate_sql_syntax`)
 
@@ -324,7 +324,7 @@ Even with automatic detection, verify your results:
 
 3. **Use `validate_sql_syntax()` before execution.** It runs OBQC checks and will flag fan-trap risks in the response.
 
-4. **Review the `fan_trap_warnings` from `analyze_schema()`.** They list which tables have multiple foreign keys and are therefore fan-trap candidates.
+4. **Review the `fan_trap_warnings` from `discover_schema()`.** They list which tables have multiple foreign keys and are therefore fan-trap candidates.
 
 5. **Look at business expectations.** If a customer's total suddenly jumps by an order of magnitude after adding a second join, investigate.
 
@@ -348,7 +348,7 @@ Even with automatic detection, verify your results:
 
 ```
 1. connect_database()
-2. analyze_schema()        --> fan_trap_warnings in output
+2. discover_schema()        --> fan_trap_warnings in output
 3. generate_ontology()     --> oba:relationshipType annotations stored
 4. validate_sql_syntax()   --> OBQC checks for fan-trap patterns
 5. execute_sql_query()     --> runs with fan-trap protection active

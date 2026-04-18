@@ -335,7 +335,7 @@ async def graphrag_search(
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
         return create_error_response(
-            "GraphRAG not initialized. Please call analyze_schema() first.",
+            "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
 
@@ -366,7 +366,7 @@ async def graphrag_query_context(
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
         return create_error_response(
-            "GraphRAG not initialized. Please call analyze_schema() first.",
+            "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
 
@@ -411,7 +411,7 @@ async def graphrag_find_join_path(
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
         return create_error_response(
-            "GraphRAG not initialized. Please call analyze_schema() first.",
+            "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
 
@@ -461,7 +461,7 @@ async def graphrag_overview(
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
         return create_error_response(
-            "GraphRAG not initialized. Please call analyze_schema() first.",
+            "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
 

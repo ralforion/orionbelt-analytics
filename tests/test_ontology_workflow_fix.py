@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test that ontology generation works correctly after analyze_schema(lightweight=True).
+Test that ontology generation works correctly after discover_schema(lightweight=True).
 
 This test verifies the bug fix for Phase 2 where lightweight mode wasn't caching
 TableInfo objects, causing generate_ontology() to fail or re-query the database.
@@ -158,9 +158,9 @@ async def test_lightweight_caches_for_ontology(mock_context, mock_db_manager, tm
         session.cache_schema_analysis = Mock(side_effect=cache_schema)
         mock_session_data.return_value = session
 
-        # Step 1: Call analyze_schema in lightweight mode
+        # Step 1: Call discover_schema in lightweight mode
         # Use .fn accessor to handle both FunctionTool (under coverage) and plain function
-        analyze_fn = getattr(main_module.analyze_schema, 'fn', main_module.analyze_schema)
+        analyze_fn = getattr(main_module.discover_schema, 'fn', main_module.discover_schema)
         result = await analyze_fn(mock_context, schema_name="public", lightweight=True)
 
         # Verify lightweight result structure
@@ -330,10 +330,10 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
         mock_server_state.get_ontology_generator.return_value = mock_generator
 
         # Use .fn accessor to handle both FunctionTool (under coverage) and plain function
-        analyze_fn = getattr(main_module.analyze_schema, 'fn', main_module.analyze_schema)
+        analyze_fn = getattr(main_module.discover_schema, 'fn', main_module.discover_schema)
         generate_fn = getattr(main_module.generate_ontology, 'fn', main_module.generate_ontology)
 
-        # Step 1: analyze_schema(lightweight=True)
+        # Step 1: discover_schema(lightweight=True)
         schema_result = await analyze_fn(mock_context, schema_name="public", lightweight=True)
 
         assert schema_result["mode"] == "lightweight"

@@ -25,10 +25,10 @@ The subsystem lives under `src/graphrag/` and is composed of four core modules:
 
 ### Schema Discovery Workflow
 
-GraphRAG initialization follows a four-step pipeline, triggered automatically when `analyze_schema()` completes:
+GraphRAG initialization follows a four-step pipeline, triggered automatically when `discover_schema()` completes:
 
 ```
-analyze_schema()
+discover_schema()
     |
     v
 1. Create Embeddings
@@ -92,7 +92,7 @@ GraphRAG serves as the schema intelligence layer that bridges raw database struc
 
 ### 1. Schema Discovery (Analytics + GraphRAG)
 
-The starting point. Connect to a database, run `analyze_schema()`, and GraphRAG auto-initializes. At this stage you have:
+The starting point. Connect to a database, run `discover_schema()`, and GraphRAG auto-initializes. At this stage you have:
 
 - A complete graph of table relationships
 - Vector embeddings for semantic search
@@ -126,7 +126,7 @@ GraphRAG is what makes OBML model creation scalable. Without it, an LLM would ne
 
 ## Key Benefits
 
-**Zero-setup intelligence.** GraphRAG initializes automatically as part of `analyze_schema()`. No separate configuration, no manual graph definition, no embedding model training. Connect to a database, analyze the schema, and GraphRAG is ready.
+**Zero-setup intelligence.** GraphRAG initializes automatically as part of `discover_schema()`. No separate configuration, no manual graph definition, no embedding model training. Connect to a database, analyze the schema, and GraphRAG is ready.
 
 **Automatic relationship discovery.** Foreign key relationships are extracted from the database catalog and built into a traversable graph. Join paths between any two tables are found algorithmically (shortest path with up to 12 hops), including mixed-direction paths where FK arrows point in different directions.
 
@@ -152,7 +152,7 @@ tmp/
     communities_{schema}.json     # Community assignments and summaries
 ```
 
-GraphRAG is connection-scoped and accumulative. Each `analyze_schema()` call adds tables to the same graph and vector store, enabling cross-schema join path discovery and unified semantic search. The combined state file (`graph_combined.json`) stores all accumulated schemas in a single graph; per-schema files are saved alongside for backward compatibility.
+GraphRAG is connection-scoped and accumulative. Each `discover_schema()` call adds tables to the same graph and vector store, enabling cross-schema join path discovery and unified semantic search. The combined state file (`graph_combined.json`) stores all accumulated schemas in a single graph; per-schema files are saved alongside for backward compatibility.
 
 ChromaDB uses its own persistent storage that reconnects automatically when a new `GraphRAGManager` is created with the same `connection_id`. The JSON files serve as backup and contain the `tables_info` needed to rebuild the NetworkX graph and community assignments.
 
@@ -167,7 +167,7 @@ connect_database("postgresql")
 
 This restores:
 
-1. **Schema cache** -- The analyzed table metadata, so `analyze_schema()` does not need to re-query the database catalog.
+1. **Schema cache** -- The analyzed table metadata, so `discover_schema()` does not need to re-query the database catalog.
 2. **Ontology** -- The generated RDF/OWL file and its loaded state.
 3. **RDF store** -- The Oxigraph triple store with SPARQL query support.
 4. **GraphRAG** -- Vector embeddings (via ChromaDB reconnection), relationship graph (rebuilt from saved `tables_info`), and community assignments.

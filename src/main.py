@@ -77,7 +77,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 
 1. `connect_database()` -> Establish secure connection
 2. `list_schemas()` -> Discover available schemas
-3. `analyze_schema()` -> Get schema structure with relationships
+3. `discover_schema()` -> Get schema structure with relationships
 4. `generate_ontology()` -> Create semantic ontology with oba: annotations
 5. `execute_sql_query()` -> Run validated SQL with fan-trap protection
 6. `generate_chart()` -> Visualize results
@@ -109,7 +109,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 ## Important Notes
 
 - Always fully qualify identifiers: `schema.table.column`
-- Review foreign_keys from analyze_schema() before complex JOINs
+- Review foreign_keys from discover_schema() before complex JOINs
 - execute_sql_query() includes built-in syntax, security, and OBQC validation
 - For multi-fact aggregation, use UNION ALL pattern (see /fan-trap-prevention)
 
@@ -579,7 +579,7 @@ async def reset_cache(ctx: Context, cache_type: Optional[str] = None) -> Dict[st
 
 
 @mcp.tool()
-async def analyze_schema(
+async def discover_schema(
     ctx: Context,
     schema_name: Optional[str] = None,
     lightweight: bool = True,
@@ -593,7 +593,7 @@ async def analyze_schema(
         lightweight: If True (default), return minimal data (table names, FK relationships, fan-trap warnings).
                      If False, return full schema with all column details.
     """
-    return await _h_schema.analyze_schema(
+    return await _h_schema.discover_schema(
         ctx, schema_name, lightweight,
         get_session_data=get_session_data,
         get_session_db_manager=get_session_db_manager,
@@ -608,16 +608,21 @@ async def get_table_details(
     table_name: str,
     schema_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Get detailed metadata for a single table.
+    """Get detailed metadata for a single table. Only use when you need to
+    inspect a specific table that the user asked about — do NOT call this for
+    every table. discover_schema() and the ontology already contain full
+    schema structure including columns, keys, and relationships.
 
     REQUIRES: connect_database must be called first.
 
     Args:
         table_name: Name of the table to analyze
-        schema_name: Schema containing the table (optional)
+        schema_name: Schema containing the table (optional, auto-detected)
     """
     return await _h_schema.get_table_details(
-        ctx, table_name, schema_name, get_session_db_manager=get_session_db_manager
+        ctx, table_name, schema_name,
+        get_session_data=get_session_data,
+        get_session_db_manager=get_session_db_manager,
     )
 
 
@@ -790,7 +795,9 @@ async def sample_table_data(
         limit: Maximum number of rows to return (default: 10, max: 100)
     """
     return await _h_schema.sample_table_data(
-        ctx, table_name, schema_name, limit, get_session_db_manager=get_session_db_manager
+        ctx, table_name, schema_name, limit,
+        get_session_data=get_session_data,
+        get_session_db_manager=get_session_db_manager,
     )
 
 
@@ -804,6 +811,11 @@ async def execute_sql_query(
 ) -> Dict[str, Any]:
     """Execute SQL query with built-in syntax validation, security checks, OBQC
     validation, and fan-trap protection.
+
+    PREFER SEMANTIC LAYER: If the OrionBelt Semantic Layer MCP server is available,
+    create an OBML model and use execute_query/compile_query instead of raw SQL.
+    Only use this tool when no semantic model is loaded or the user explicitly asks
+    for raw SQL.
 
     Automatically validates SQL syntax and security before execution. If an ontology
     is loaded, OBQC checks (fan-trap detection, semantic validation) run too — errors
@@ -967,7 +979,7 @@ async def graphrag_search(
 ) -> Dict[str, Any]:
     """Search schema using natural language via GraphRAG, or get a schema overview.
 
-    GraphRAG is auto-initialized by analyze_schema. Pass overview=True to get
+    GraphRAG is auto-initialized by discover_schema. Pass overview=True to get
     schema statistics and community clustering instead of search results.
 
     Args:

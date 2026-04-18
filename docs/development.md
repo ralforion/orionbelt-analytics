@@ -184,7 +184,7 @@ orionbelt-analytics/
 |   |
 |   |-- handlers/                    # MCP tool implementations (handler layer)
 |   |   |-- connection.py            #   connect_database, list_schemas
-|   |   |-- schema.py                #   analyze_schema, get_table_details, reset_cache
+|   |   |-- schema.py                #   discover_schema, get_table_details, reset_cache
 |   |   |-- ontology.py              #   generate_ontology, suggest/apply semantic names,
 |   |   |                            #     load_my_ontology
 |   |   |-- query.py                 #   validate_sql_syntax, execute_sql_query,
@@ -207,7 +207,7 @@ orionbelt-analytics/
 |   |   +-- databricks.py            #   Databricks SQL driver
 |   |
 |   |-- graphrag/                    # Graph-based RAG for schema intelligence
-|   |   |-- manager.py               #   Orchestrator (auto-init by analyze_schema)
+|   |   |-- manager.py               #   Orchestrator (auto-init by discover_schema)
 |   |   |-- embedder.py              #   Vector embeddings for schema elements
 |   |   |-- retriever.py             #   Graph traversal, relationship discovery (12 hops)
 |   |   |-- community_detector.py    #   Schema clustering via community detection
@@ -291,7 +291,7 @@ Each MCP session maintains its own `SessionData` instance (`src/session.py`), wh
 - **GraphRAGState** -- GraphRAG manager instance, initialization status (connection-scoped, accumulative)
 - **RDFStoreState** -- Oxigraph store instance (connection-scoped, multi-schema via named graphs)
 
-Ontology state is isolated per schema via `SchemaState`. GraphRAG and the Oxigraph RDF store are connection-scoped: each `analyze_schema()` call accumulates tables into the same graph and vector store, enabling cross-schema join path discovery and unified semantic search. Switching schemas (e.g., `analyze_schema("analytics")` after `analyze_schema("public")`) does not destroy the previous schema's ontology state, and both schemas' tables are searchable in GraphRAG simultaneously.
+Ontology state is isolated per schema via `SchemaState`. GraphRAG and the Oxigraph RDF store are connection-scoped: each `discover_schema()` call accumulates tables into the same graph and vector store, enabling cross-schema join path discovery and unified semantic search. Switching schemas (e.g., `discover_schema("analytics")` after `discover_schema("public")`) does not destroy the previous schema's ontology state, and both schemas' tables are searchable in GraphRAG simultaneously.
 
 This isolation prevents cross-session interference when multiple clients connect to the server simultaneously. Idle sessions are automatically evicted based on `SESSION_IDLE_TIMEOUT_SECONDS`.
 
@@ -301,7 +301,7 @@ This isolation prevents cross-session interference when multiple clients connect
 
 **Ontology triple storage**: RDF graphs embed SQL metadata using the `oba:` (OrionBelt Analytics) namespace. Tables become OWL classes with `oba:tableName` and `oba:primaryKey` annotations; relationships become OWL object properties with `oba:sqlJoinCondition`. The Oxigraph store provides persistent SPARQL 1.1 query access.
 
-**GraphRAG auto-initialization**: When `analyze_schema()` runs, GraphRAG is automatically initialized in the background (controlled by `AUTO_GRAPHRAG`). The graph structure supports up to 12-hop traversal for relationship discovery, and ChromaDB stores vector embeddings for semantic similarity search.
+**GraphRAG auto-initialization**: When `discover_schema()` runs, GraphRAG is automatically initialized in the background (controlled by `AUTO_GRAPHRAG`). The graph structure supports up to 12-hop traversal for relationship discovery, and ChromaDB stores vector embeddings for semantic similarity search.
 
 **MCP resources**: Skills stored in `.claude/skills/` (fan-trap prevention, SQL best practices, chart examples, analytical workflow) are exposed as MCP resources via `@mcp.resource()` decorators.
 

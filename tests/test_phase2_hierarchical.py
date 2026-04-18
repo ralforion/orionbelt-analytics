@@ -2,8 +2,8 @@
 Test suite for Phase 2 hierarchical schema retrieval changes.
 
 Verifies that:
-1. analyze_schema(lightweight=True) returns minimal data
-2. analyze_schema(lightweight=False) returns full schema
+1. discover_schema(lightweight=True) returns minimal data
+2. discover_schema(lightweight=False) returns full schema
 3. get_table_details() works correctly
 4. Token savings are achieved
 5. No functionality regression
@@ -38,11 +38,11 @@ def _get_tool_docstring(name):
 
 
 class TestPhase2LightweightMode:
-    """Test lightweight mode for analyze_schema()."""
+    """Test lightweight mode for discover_schema()."""
 
-    def test_analyze_schema_has_lightweight_parameter(self):
-        """Verify analyze_schema has lightweight parameter."""
-        fn = _get_tool_fn('analyze_schema')
+    def test_discover_schema_has_lightweight_parameter(self):
+        """Verify discover_schema has lightweight parameter."""
+        fn = _get_tool_fn('discover_schema')
         sig = inspect.signature(fn)
         params = sig.parameters
 
@@ -69,9 +69,9 @@ class TestPhase2LightweightMode:
         assert "table_name" in params
         assert "schema_name" in params
 
-    def test_analyze_schema_docstring_mentions_lightweight(self):
-        """Verify analyze_schema docstring explains lightweight mode."""
-        docstring = _get_tool_docstring('analyze_schema')
+    def test_discover_schema_docstring_mentions_lightweight(self):
+        """Verify discover_schema docstring explains lightweight mode."""
+        docstring = _get_tool_docstring('discover_schema')
         assert docstring is not None
 
         # Should explain lightweight mode
@@ -114,9 +114,9 @@ class TestPhase2TokenSavings:
 class TestPhase2FunctionalityPreserved:
     """Test that existing functionality still works."""
 
-    def test_analyze_schema_backward_compatible(self):
-        """Verify analyze_schema defaults to lightweight=True."""
-        fn = _get_tool_fn('analyze_schema')
+    def test_discover_schema_backward_compatible(self):
+        """Verify discover_schema defaults to lightweight=True."""
+        fn = _get_tool_fn('discover_schema')
         sig = inspect.signature(fn)
         lightweight_param = sig.parameters["lightweight"]
 
@@ -134,7 +134,7 @@ class TestPhase2FunctionalityPreserved:
             "connect_database",
             "list_schemas",
             "reset_cache",
-            "analyze_schema",
+            "discover_schema",
             "get_table_details",
             "generate_ontology",
             "suggest_semantic_names",
@@ -152,25 +152,25 @@ class TestPhase2FunctionalityPreserved:
 
     @pytest.mark.asyncio
     async def test_tool_order_preserved(self):
-        """Verify get_table_details is positioned after analyze_schema."""
+        """Verify get_table_details is positioned after discover_schema."""
         # list_tools() is async in FastMCP and returns list[FunctionTool]
         tools = await mcp.list_tools()
         tool_names = [t.name for t in tools]
 
-        analyze_idx = tool_names.index("analyze_schema")
+        analyze_idx = tool_names.index("discover_schema")
         get_details_idx = tool_names.index("get_table_details")
         generate_ont_idx = tool_names.index("generate_ontology")
 
-        # get_table_details should be between analyze_schema and generate_ontology
+        # get_table_details should be between discover_schema and generate_ontology
         assert analyze_idx < get_details_idx < generate_ont_idx
 
     def test_imports_still_work(self):
         """Verify all imports still work after changes."""
         try:
-            from src.main import mcp, analyze_schema, get_table_details
+            from src.main import mcp, discover_schema, get_table_details
             from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
 
-            assert all([mcp, analyze_schema, get_table_details,
+            assert all([mcp, discover_schema, get_table_details,
                        DatabaseManager, TableInfo, ColumnInfo])
         except ImportError as e:
             pytest.fail(f"Import failed: {e}")
@@ -181,10 +181,10 @@ class TestPhase2HierarchicalWorkflow:
 
     def test_workflow_documentation_in_docstrings(self):
         """Verify hierarchical workflow is documented."""
-        analyze_doc = _get_tool_docstring('analyze_schema')
+        analyze_doc = _get_tool_docstring('discover_schema')
         details_doc = _get_tool_docstring('get_table_details')
 
-        # analyze_schema should mention lightweight mode
+        # discover_schema should mention lightweight mode
         assert "lightweight" in analyze_doc.lower()
 
         # get_table_details should mention table analysis
@@ -228,7 +228,7 @@ class TestPhase2HierarchicalWorkflow:
 class TestPhase2EdgeCases:
     """Test edge cases and error handling."""
 
-    def test_analyze_schema_with_no_tables(self):
+    def test_discover_schema_with_no_tables(self):
         """Test behavior when schema has no tables."""
         # This should be handled gracefully
         # Lightweight mode should return empty lists

@@ -55,7 +55,7 @@ def print_startup_info():
         "Connection & Schema": [
             "connect_database - Connect to any supported database",
             "list_schemas - List available database schemas",
-            "analyze_schema - Analyze schema with auto GraphRAG + ontology",
+            "discover_schema - Analyze schema with auto GraphRAG + ontology",
             "get_table_details - Detailed table metadata and columns",
             "reset_cache - Clear cached schema and ontology data",
             "cleanup_workspace - Delete workspace files and start fresh",
@@ -73,7 +73,7 @@ def print_startup_info():
             "generate_chart - Generate Plotly charts with MCP-UI rendering",
         ],
         "GraphRAG": [
-            "graphrag_search - Semantic search + overview (auto-initialized by analyze_schema)",
+            "graphrag_search - Semantic search + overview (auto-initialized by discover_schema)",
             "graphrag_query_context - Optimized context for SQL generation",
             "graphrag_find_join_path - Discover join paths via graph traversal",
         ],

@@ -79,7 +79,7 @@ list_schemas()
 
 #### 2.1 Analyze Schema
 
-**Tool:** `analyze_schema()`
+**Tool:** `discover_schema()`
 
 **Purpose:** Get complete schema structure with automatic GraphRAG initialization
 
@@ -88,7 +88,7 @@ list_schemas()
 User: "Analyze the public schema"
 
 Claude calls:
-analyze_schema(
+discover_schema(
   schema_name="public",
   lightweight=false
 )
@@ -489,7 +489,7 @@ generate_chart(
 ### Auto-Features (Enabled by Default)
 
 **1. GraphRAG Auto-Init**
-- Automatically triggers on `analyze_schema()`
+- Automatically triggers on `discover_schema()`
 - No manual initialization needed
 - Configure: `AUTO_GRAPHRAG=true` in `.env`
 
@@ -516,7 +516,7 @@ generate_chart(
 
 ```
 1. connect_database()
-2. analyze_schema()
+2. discover_schema()
 3. Ask: "What tables are related to X?"
 4. sample_table_data()
 5. execute_sql_query()
@@ -532,7 +532,7 @@ generate_chart(
 ```
 1. connect_database()
 2. list_schemas()
-3. analyze_schema()
+3. discover_schema()
 4. generate_ontology()  // auto-persist enabled
 5. Ask: "Find join path between X and Y"
 6. validate_sql_syntax()
@@ -549,7 +549,7 @@ generate_chart(
 
 ```
 1. connect_database()
-2. analyze_schema()
+2. discover_schema()
 3. generate_ontology()
 4. download_ontology()  // for external tools
 5. query_sparql()  // semantic queries
@@ -667,11 +667,11 @@ SELECT c.id, c.name FROM customers c JOIN orders o ON c.id = o.customer_id
 
 ### Multi-Schema Support
 
-**Ontology state is per-schema; GraphRAG is connection-scoped and accumulative.** Each `analyze_schema()` adds tables to the same graph, enabling cross-schema join path discovery:
+**Ontology state is per-schema; GraphRAG is connection-scoped and accumulative.** Each `discover_schema()` adds tables to the same graph, enabling cross-schema join path discovery:
 
 ```
-analyze_schema(schema_name="public")     # → ontology for public, GraphRAG adds public tables
-analyze_schema(schema_name="analytics")  # → ontology for analytics, GraphRAG adds analytics tables
+discover_schema(schema_name="public")     # → ontology for public, GraphRAG adds public tables
+discover_schema(schema_name="analytics")  # → ontology for analytics, GraphRAG adds analytics tables
 graphrag_search("customers")             # → searches across ALL analyzed schemas
 graphrag_find_join_path("public.orders", "analytics.events")  # → cross-schema path
 ```
@@ -687,7 +687,7 @@ Ontology state is isolated per schema — switching schemas does not destroy the
 | Tool | Purpose | Phase |
 |------|---------|-------|
 | `connect_database()` | Establish connection | 1 |
-| `analyze_schema()` | Get schema + auto-init GraphRAG | 2 |
+| `discover_schema()` | Get schema + auto-init GraphRAG | 2 |
 | `generate_ontology()` | Create RDF ontology (auto-persist) | 4 |
 | `execute_sql_query()` | Safe SQL execution | 6 |
 | `generate_chart()` | Data visualization | 7 |
@@ -781,7 +781,7 @@ When creating OBML models, users and LLMs leverage GraphRAG to:
 
 ```
 1. Schema Discovery with GraphRAG (Analytics)
-   → analyze_schema(schema_name="sales")
+   → discover_schema(schema_name="sales")
    → GraphRAG auto-initializes with graph + vector embeddings
 
 2. Intelligent Schema Exploration (Analytics + GraphRAG)
@@ -805,7 +805,7 @@ When creating OBML models, users and LLMs leverage GraphRAG to:
 
 ```
 1. Schema Analysis (Analytics)
-   → analyze_schema()  # Optional - for validation/updates
+   → discover_schema()  # Optional - for validation/updates
 
 2. Business Queries (Semantic Layer - Primary)
    → semantic_layer.query("revenue by customer segment")
@@ -847,7 +847,7 @@ When creating OBML models, users and LLMs leverage GraphRAG to:
 User: "Create a semantic model for our sales database"
 
 Step 1: Schema Discovery (Analytics + GraphRAG)
-analyze_schema(schema_name="sales")
+discover_schema(schema_name="sales")
 → GraphRAG auto-initializes: graph structure + vector embeddings
 
 Step 2: Explore Relationships (GraphRAG)
@@ -898,7 +898,7 @@ generate_chart(data=..., chart_type="bar")
 - ❌ Extensive user guidance needed for modeling
 
 **With GraphRAG:**
-- ✅ **Zero-setup schema intelligence** - Automatic on `analyze_schema()`
+- ✅ **Zero-setup schema intelligence** - Automatic on `discover_schema()`
 - ✅ **Intelligent relationship discovery** - Graph algorithms (12 hop traversal)
 - ✅ **Semantic similarity search** - Vector embeddings find related concepts
 - ✅ **OBML model creation** - LLM can create accurate models automatically
@@ -971,14 +971,14 @@ When available, prefer Semantic Layer MCP for business-friendly queries and metr
 **Minimal Workflow (3 steps):**
 ```
 1. connect_database()
-2. analyze_schema()  // auto-inits GraphRAG
+2. discover_schema()  // auto-inits GraphRAG
 3. execute_sql_query()
 ```
 
 **Optimal Workflow (5 steps):**
 ```
 1. connect_database()
-2. analyze_schema()  // auto-inits GraphRAG
+2. discover_schema()  // auto-inits GraphRAG
 3. generate_ontology()  // auto-persist
 4. execute_sql_query()
 5. generate_chart()
@@ -993,7 +993,7 @@ When available, prefer Semantic Layer MCP for business-friendly queries and metr
 ```
 1. connect_database()
 2. list_schemas()
-3. analyze_schema()
+3. discover_schema()
 4. generate_ontology()
 5. query_sparql()  // semantic discovery
 6. validate_sql_syntax()

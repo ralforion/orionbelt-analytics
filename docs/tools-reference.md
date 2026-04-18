@@ -12,7 +12,7 @@ Complete reference for all OrionBelt Analytics MCP tools. These tools are invoke
 
 1. **connect_database** -- establish a secure database connection
 2. **list_schemas** -- discover available schemas
-3. **analyze_schema** -- extract schema structure with relationships (auto-generates R2RML)
+3. **discover_schema** -- extract schema structure with relationships (auto-generates R2RML)
 4. **generate_ontology** -- create semantic ontology with `oba:` annotations
 5. **suggest_semantic_names** -- identify cryptic/abbreviated names for review
 6. **apply_semantic_names** -- apply LLM-suggested improvements
@@ -27,7 +27,7 @@ Complete reference for all OrionBelt Analytics MCP tools. These tools are invoke
 ### Quick Data Exploration
 
 1. **connect_database** -- connect
-2. **analyze_schema** -- lightweight mode (default) for fast overview
+2. **discover_schema** -- lightweight mode (default) for fast overview
 3. **sample_table_data** -- preview actual data
 4. **execute_sql_query** -- run queries
 
@@ -101,7 +101,7 @@ Clear cached schema and/or ontology data to force re-analysis.
 
 ---
 
-### 4. analyze_schema
+### 4. discover_schema
 
 Analyze database schema and return table metadata with relationships. Automatically generates W3C R2RML mappings and triggers GraphRAG initialization in the background.
 
@@ -152,7 +152,7 @@ Get detailed metadata for a single table, including all columns, data types, key
 
 **Key Features:**
 - Requires `connect_database` first
-- Ideal companion to lightweight `analyze_schema` -- get full details for specific tables only
+- Ideal companion to lightweight `discover_schema` -- get full details for specific tables only
 - Returns foreign key targets with referenced table and column names
 
 ---
@@ -174,7 +174,7 @@ Generate an RDF/OWL ontology from the database schema with `oba:` (OrionBelt Ana
 **Returns:** Status message with ontology file path, table count, and (if auto-persisted) triple count and graph URI.
 
 **Key Features:**
-- Automatically uses cached schema from `analyze_schema` -- no need to pass schema data
+- Automatically uses cached schema from `discover_schema` -- no need to pass schema data
 - Returns cached result if ontology was already generated this session
 - Generates OWL classes for tables with `oba:tableName`, `oba:primaryKey` annotations
 - Generates OWL ObjectProperties for relationships with `oba:sqlJoinCondition`
@@ -413,7 +413,7 @@ Delete all workspace files for the current database connection and clear session
 **Key Features:**
 - Removes the workspace directory (`tmp/{connection_id}/`), Oxigraph RDF store, and ChromaDB vector store
 - Clears all in-memory session state (schema cache, ontology, GraphRAG, RDF store)
-- Database connection stays active -- call `analyze_schema()` to start fresh
+- Database connection stays active -- call `discover_schema()` to start fresh
 - Safe: only affects the current connection's workspace, not other sessions
 
 ---

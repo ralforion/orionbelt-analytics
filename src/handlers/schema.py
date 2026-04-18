@@ -51,15 +51,15 @@ async def reset_cache(
     return {
         "status": "success",
         "cleared_caches": cleared,
-        "message": f"Cleared {', '.join(cleared)} cache(s). You can now re-run analyze_schema and/or generate_ontology.",
+        "message": f"Cleared {', '.join(cleared)} cache(s). You can now re-run discover_schema and/or generate_ontology.",
         "next_steps": {
-            "schema": "Call analyze_schema() to re-analyze database schema",
+            "schema": "Call discover_schema() to re-analyze database schema",
             "ontology": "Call generate_ontology() to regenerate ontology",
         },
     }
 
 
-async def analyze_schema(
+async def discover_schema(
     ctx: Context,
     schema_name: Optional[str],
     lightweight: bool,
@@ -80,14 +80,27 @@ async def analyze_schema(
         _auto_initialize_graphrag_background: Background init function
     """
     # Log function entry to verify code is being called
-    logger.debug(f"analyze_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
+    logger.debug(f"discover_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
 
-    # Check cache
     session = get_session_data(ctx)
     effective_schema = schema_name or ""
 
     # Set current schema so per-schema state (ontology, GraphRAG) is isolated
     session.set_current_schema(effective_schema or "default")
+
+    # Early exit: workspace already fully restored — nothing to do
+    if session.ontology_enriched and session.get_cached_schema(effective_schema):
+        await ctx.info("Schema already discovered and ontology enriched — skipping.")
+        return {
+            "schema": effective_schema or "default",
+            "status": "already_complete",
+            "message": (
+                "Schema is already discovered and the ontology is enriched. "
+                "Nothing to do. Use execute_sql_query() to query data, "
+                "query_sparql() for semantic queries, or graphrag_search() "
+                "for schema navigation."
+            ),
+        }
 
     cached_tables = session.get_cached_schema(effective_schema)
 
@@ -148,7 +161,7 @@ async def analyze_schema(
                 "message": f"Schema already CACHED ({len(cached_tables)} tables). Call generate_ontology() next.",
                 "schema_file": session.schema_file,
                 "next_step": "generate_ontology",
-                "instruction": "Call generate_ontology() NOW - do NOT call analyze_schema again!",
+                "instruction": "Call generate_ontology() NOW - do NOT call discover_schema again!",
             }
             if auto_graphrag == "true":
                 result["graphrag_auto_init"] = "started in background (from cache)"
@@ -358,7 +371,7 @@ async def analyze_schema(
             "recommended": "generate_ontology",
             "reason": "Generate ontology with database schema linking for accurate SQL generation and fan-trap prevention",
             "workflow": [
-                "1. analyze_schema (completed - schema is now CACHED)",
+                "1. discover_schema (completed - schema is now CACHED)",
                 "2. generate_ontology (recommended next - will use cached schema automatically)",
                 "3. execute_sql_query (with ontology context)",
             ],
@@ -366,13 +379,13 @@ async def analyze_schema(
         schema_result["schema_cached"] = True
         schema_result["cache_hint"] = (
             "IMPORTANT: Schema analysis is now CACHED for this session. "
-            "Do NOT call analyze_schema again - just call generate_ontology() directly. "
+            "Do NOT call discover_schema again - just call generate_ontology() directly. "
             "It will automatically use the cached schema data."
         )
         schema_result["analytical_guidance"] = (
             "Recommended next step: Run generate_ontology() - NO parameters needed!\n\n"
             "The schema is CACHED - generate_ontology will use it automatically.\n"
-            "Do NOT call analyze_schema again.\n\n"
+            "Do NOT call discover_schema again.\n\n"
             "This will create an ontology with:\n"
             "- Database schema linking (oba: namespace)\n"
             "- SQL column references for queries\n"
@@ -437,6 +450,7 @@ async def get_table_details(
     ctx: Context,
     table_name: str,
     schema_name: Optional[str],
+    get_session_data,
     get_session_db_manager,
 ) -> Dict[str, Any]:
     """Get detailed metadata for a single table.
@@ -445,8 +459,46 @@ async def get_table_details(
         ctx: FastMCP context
         table_name: Name of the table to analyze
         schema_name: Schema containing the table
+        get_session_data: Function to get session data
         get_session_db_manager: Function to get session db manager
     """
+    session = get_session_data(ctx)
+
+    if not schema_name:
+        schema_name = session.get_last_analyzed_schema()
+
+    # Return from cache if schema was already discovered
+    cached_tables = session.get_cached_schema(schema_name or "")
+    if cached_tables:
+        for t in cached_tables:
+            if t.name.lower() == table_name.lower():
+                await ctx.info(
+                    f"Table '{table_name}' found in cache — no database call needed"
+                )
+                return {
+                    "success": True,
+                    "name": t.name,
+                    "schema": t.schema,
+                    "columns": [
+                        {
+                            "name": col.name,
+                            "data_type": col.data_type,
+                            "is_nullable": col.is_nullable,
+                            "is_primary_key": col.is_primary_key,
+                            "is_foreign_key": col.is_foreign_key,
+                            "foreign_key_table": col.foreign_key_table,
+                            "foreign_key_column": col.foreign_key_column,
+                            "comment": col.comment,
+                        }
+                        for col in t.columns
+                    ],
+                    "primary_keys": t.primary_keys,
+                    "foreign_keys": t.foreign_keys,
+                    "comment": t.comment,
+                    "row_count": t.row_count,
+                    "cache_hit": True,
+                }
+
     db_manager = get_session_db_manager(ctx)
 
     try:
@@ -503,6 +555,7 @@ async def sample_table_data(
     table_name: str,
     schema_name: Optional[str],
     limit: int,
+    get_session_data,
     get_session_db_manager,
 ) -> List[Dict[str, Any]]:
     """Sample data from a specific table for analysis.
@@ -512,6 +565,7 @@ async def sample_table_data(
         table_name: Name of the table to sample
         schema_name: Schema containing the table
         limit: Maximum number of rows to return
+        get_session_data: Function to get session data
         get_session_db_manager: Function to get session db manager
     """
     if not table_name:
@@ -519,6 +573,10 @@ async def sample_table_data(
 
     if limit <= 0 or limit > 100:
         limit = 10
+
+    if not schema_name:
+        session = get_session_data(ctx)
+        schema_name = session.get_last_analyzed_schema()
 
     db_manager = get_session_db_manager(ctx)
     sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
