@@ -123,7 +123,7 @@ async def generate_ontology(
                 f"# ONTOLOGY ALREADY CACHED AND ENRICHED\n\n"
                 f"Ontology file: {session.ontology_file}\n\n"
                 f"Semantic names have already been applied. The ontology is ready to use.\n\n"
-                f"Do NOT call generate_ontology, analyze_schema, or suggest_semantic_names again.\n\n"
+                f"Do NOT call generate_ontology, discover_schema, or suggest_semantic_names again.\n\n"
                 f"## READY TO USE:\n"
                 f"- query_sparql() for semantic queries\n"
                 f"- execute_sql_query() for data queries (includes built-in validation)"
@@ -132,7 +132,7 @@ async def generate_ontology(
         return (
             f"# ONTOLOGY ALREADY CACHED\n\n"
             f"Ontology file: {session.ontology_file}\n\n"
-            f"Do NOT call generate_ontology or analyze_schema again!\n\n"
+            f"Do NOT call generate_ontology or discover_schema again!\n\n"
             f"## FOR ENRICHMENT:\n"
             f"Call suggest_semantic_names() NOW - it will use the cached ontology automatically.\n\n"
             f"That's the ONLY tool you need to call for enrichment!"
@@ -198,7 +198,7 @@ async def generate_ontology(
             schema_name = effective_schema
             tables_info = cached_tables
             logger.info(
-                f"Using CACHED schema from analyze_schema: {len(tables_info)} tables (no re-query needed)"
+                f"Using CACHED schema from discover_schema: {len(tables_info)} tables (no re-query needed)"
             )
             await ctx.info(f"Using cached schema: {len(tables_info)} tables - no database queries needed")
         else:
@@ -930,7 +930,7 @@ async def download_r2rml(
                     "success": False,
                     "error": "No schema_name provided and no schema in session",
                     "error_type": "parameter_error",
-                    "hint": "Provide schema_name parameter or run analyze_schema() first",
+                    "hint": "Provide schema_name parameter or run discover_schema() first",
                 }
 
         schema_safe = schema_name.replace(" ", "_").replace(".", "_")
@@ -948,7 +948,7 @@ async def download_r2rml(
                     "success": False,
                     "error": f"No R2RML file found for schema '{schema_name}' in connection folder",
                     "error_type": "file_not_found",
-                    "hint": "Run analyze_schema() first to generate R2RML mapping",
+                    "hint": "Run discover_schema() first to generate R2RML mapping",
                 }
         else:
             r2rml_file_path = conn_dir / r2rml_filename
@@ -958,7 +958,7 @@ async def download_r2rml(
                 "success": False,
                 "error": f"R2RML file not found: {r2rml_file_path}",
                 "error_type": "file_not_found",
-                "hint": "Run analyze_schema() to generate R2RML mapping",
+                "hint": "Run discover_schema() to generate R2RML mapping",
             }
 
         with open(r2rml_file_path, "r", encoding="utf-8") as f:

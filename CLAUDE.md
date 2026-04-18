@@ -74,7 +74,7 @@ server.py → src/main.py (@mcp.tool decorators)
 
 Each handler maps to a group of MCP tools:
 - `connection.py` - `connect_database`, `list_schemas`
-- `schema.py` - `analyze_schema`, `get_table_details`, `reset_cache`
+- `schema.py` - `discover_schema`, `get_table_details`, `reset_cache`
 - `ontology.py` - `generate_ontology`, `suggest_semantic_names`, `apply_semantic_names`, `load_my_ontology`, `download_artifact`
 - `query.py` - `execute_sql_query` (includes built-in validation), `sample_table_data`
 - `chart.py` - `generate_chart`
@@ -97,7 +97,7 @@ BaseDriver (src/drivers/base.py)
 ### GraphRAG Subsystem (`src/graphrag/`)
 
 Graph-based Retrieval Augmented Generation for schema intelligence:
-- `manager.py` - Orchestrator, auto-initialized by `analyze_schema()`
+- `manager.py` - Orchestrator, auto-initialized by `discover_schema()`
 - `embedder.py` - Vector embeddings for schema elements
 - `retriever.py` - Graph traversal and relationship discovery (up to 12 hops)
 - `vector_store_chromadb.py` - ChromaDB vector storage implementation
@@ -110,10 +110,10 @@ Graph-based Retrieval Augmented Generation for schema intelligence:
 
 ### Key Patterns
 
-**Per-Session State Isolation**: Each MCP session maintains isolated `SessionData` (in `src/session.py`) with its own `DatabaseManager`, GraphRAG manager, and file paths, preventing cross-session interference. Ontology state is per-schema via `SchemaState` — switching schemas does not destroy the previous schema's ontology. GraphRAG and Oxigraph RDF store are connection-scoped and accumulative: each `analyze_schema()` adds tables to the same graph, enabling cross-schema join path discovery and unified semantic search.
+**Per-Session State Isolation**: Each MCP session maintains isolated `SessionData` (in `src/session.py`) with its own `DatabaseManager`, GraphRAG manager, and file paths, preventing cross-session interference. Ontology state is per-schema via `SchemaState` — switching schemas does not destroy the previous schema's ontology. GraphRAG and Oxigraph RDF store are connection-scoped and accumulative: each `discover_schema()` adds tables to the same graph, enabling cross-schema join path discovery and unified semantic search.
 
 **Fan-Trap Prevention**: Multi-step validation prevents data multiplication errors:
-1. `analyze_schema()` extracts FK relationships
+1. `discover_schema()` extracts FK relationships
 2. Pattern detection in `execute_sql_query()`
 3. Suggests UNION ALL patterns for multi-fact aggregation
 

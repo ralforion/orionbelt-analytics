@@ -77,7 +77,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 
 1. `connect_database()` -> Establish secure connection
 2. `list_schemas()` -> Discover available schemas
-3. `analyze_schema()` -> Get schema structure with relationships
+3. `discover_schema()` -> Get schema structure with relationships
 4. `generate_ontology()` -> Create semantic ontology with oba: annotations
 5. `execute_sql_query()` -> Run validated SQL with fan-trap protection
 6. `generate_chart()` -> Visualize results
@@ -109,7 +109,7 @@ Semantic database analysis with ontology-enhanced Text-to-SQL generation.
 ## Important Notes
 
 - Always fully qualify identifiers: `schema.table.column`
-- Review foreign_keys from analyze_schema() before complex JOINs
+- Review foreign_keys from discover_schema() before complex JOINs
 - execute_sql_query() includes built-in syntax, security, and OBQC validation
 - For multi-fact aggregation, use UNION ALL pattern (see /fan-trap-prevention)
 
@@ -579,7 +579,7 @@ async def reset_cache(ctx: Context, cache_type: Optional[str] = None) -> Dict[st
 
 
 @mcp.tool()
-async def analyze_schema(
+async def discover_schema(
     ctx: Context,
     schema_name: Optional[str] = None,
     lightweight: bool = True,
@@ -593,7 +593,7 @@ async def analyze_schema(
         lightweight: If True (default), return minimal data (table names, FK relationships, fan-trap warnings).
                      If False, return full schema with all column details.
     """
-    return await _h_schema.analyze_schema(
+    return await _h_schema.discover_schema(
         ctx, schema_name, lightweight,
         get_session_data=get_session_data,
         get_session_db_manager=get_session_db_manager,
@@ -967,7 +967,7 @@ async def graphrag_search(
 ) -> Dict[str, Any]:
     """Search schema using natural language via GraphRAG, or get a schema overview.
 
-    GraphRAG is auto-initialized by analyze_schema. Pass overview=True to get
+    GraphRAG is auto-initialized by discover_schema. Pass overview=True to get
     schema statistics and community clustering instead of search results.
 
     Args:

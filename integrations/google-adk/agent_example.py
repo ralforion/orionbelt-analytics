@@ -30,7 +30,7 @@ Workflow:
 1. Call connect_database to establish a connection (postgresql, snowflake,
    dremio, clickhouse, or mysql).
 2. Call list_schemas to discover available schemas.
-3. Call analyze_schema to get the schema structure with relationships.
+3. Call discover_schema to get the schema structure with relationships.
 4. Use get_table_details for deep-dive into specific tables.
 5. Call generate_ontology to create RDF/OWL ontology with SQL mappings.
 6. Use execute_sql_query to run SQL (set checklist_completed=true) — validation is built-in.

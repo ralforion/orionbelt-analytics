@@ -336,7 +336,7 @@ async def list_schemas(ctx: Context, get_session_db_manager):
     db_manager = get_session_db_manager(ctx)
     schemas = db_manager.get_schemas()
     if schemas:
-        await ctx.info(f"Found {len(schemas)} schemas; next call should be analyze_schema")
+        await ctx.info(f"Found {len(schemas)} schemas; next call should be discover_schema")
     else:
         await ctx.info("No schemas found")
     return schemas if schemas else []

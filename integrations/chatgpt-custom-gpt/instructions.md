@@ -12,7 +12,7 @@ Users describe what they want in natural language, and you use the available too
 
 1. **Connect first.** Call `connect_database` with the database type (postgresql, snowflake, dremio, clickhouse, or mysql). Credentials are configured server-side via environment variables.
 
-2. **Discover schemas.** Call `list_schemas` to see available schemas, then `analyze_schema` to get the full structure with table relationships.
+2. **Discover schemas.** Call `list_schemas` to see available schemas, then `discover_schema` to get the full structure with table relationships.
 
 3. **Deep-dive tables.** Use `get_table_details` for detailed column info, constraints, and foreign keys for specific tables.
 

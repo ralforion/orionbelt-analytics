@@ -30,7 +30,7 @@ JOIN public.shipments ON public.orders.id = public.shipments.order_id;
 
 Before writing multi-table queries with aggregation:
 
-1. **Review foreign_keys** from `analyze_schema()` FIRST
+1. **Review foreign_keys** from `discover_schema()` FIRST
 2. **Identify relationship patterns:**
    - Safe: 1:1 relationships (customers → customer_profiles)
    - Requires care: 1:many (customers → orders)
@@ -207,7 +207,7 @@ If you suspect fan-trap in existing query:
 
 For queries with 2+ tables and aggregation:
 
-- [ ] Schema analyzed with `analyze_schema()`
+- [ ] Schema analyzed with `discover_schema()`
 - [ ] Relationships reviewed (check foreign_keys)
 - [ ] Fan-trap patterns identified
 - [ ] Syntax validated with `validate_sql_syntax()`

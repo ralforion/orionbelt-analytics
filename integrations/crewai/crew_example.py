@@ -65,7 +65,7 @@ analyze_task = Task(
     description=(
         "1. Connect to PostgreSQL using connect_database.\n"
         "2. List available schemas using list_schemas.\n"
-        "3. Analyze the 'public' schema using analyze_schema.\n"
+        "3. Analyze the 'public' schema using discover_schema.\n"
         "4. Get details for the most important tables.\n"
         "5. Generate an ontology for the schema."
     ),

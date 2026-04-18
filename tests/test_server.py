@@ -395,7 +395,7 @@ class TestMCPToolsAsync:
             with pytest.raises(RuntimeError, match="No database connection"):
                 await main_module.list_schemas(mock_ctx)
 
-    async def test_analyze_schema_success(self, mock_ctx, mock_session_data, sample_users_table, sample_orders_table):
+    async def test_discover_schema_success(self, mock_ctx, mock_session_data, sample_users_table, sample_orders_table):
         """Test successful schema analysis with session isolation."""
         mock_db_manager = Mock()
         mock_db_manager.get_tables.return_value = ["users", "orders"]
@@ -412,7 +412,7 @@ class TestMCPToolsAsync:
              patch('builtins.open', MagicMock()), \
              patch('json.dump'):
 
-            result = await main_module.analyze_schema(mock_ctx, "public", lightweight=False)
+            result = await main_module.discover_schema(mock_ctx, "public", lightweight=False)
 
         assert isinstance(result, dict)
         assert result["schema"] == "public"
@@ -429,7 +429,7 @@ class TestMCPToolsAsync:
         orders_table = next(t for t in result["tables"] if t["name"] == "orders")
         assert len(orders_table["foreign_keys"]) == 1
 
-    async def test_analyze_schema_no_connection(self, mock_ctx, mock_session_data):
+    async def test_discover_schema_no_connection(self, mock_ctx, mock_session_data):
         """Test schema analysis without connection raises exception."""
         mock_db_manager = Mock()
         mock_db_manager.get_tables.side_effect = RuntimeError("No database connection")
@@ -440,7 +440,7 @@ class TestMCPToolsAsync:
 
             # The function raises exception (no internal error handling)
             with pytest.raises(RuntimeError, match="No database connection"):
-                await main_module.analyze_schema(mock_ctx, "public")
+                await main_module.discover_schema(mock_ctx, "public")
 
     async def test_generate_ontology_success(self, mock_ctx, mock_session_data, sample_users_table):
         """Test successful ontology generation with session isolation."""

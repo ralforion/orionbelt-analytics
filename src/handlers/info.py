@@ -37,7 +37,7 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
         "tools": [
             "connect_database",
             "list_schemas",
-            "analyze_schema",
+            "discover_schema",
             "get_table_details",
             "generate_ontology",
             "suggest_semantic_names",

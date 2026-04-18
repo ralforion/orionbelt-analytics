@@ -56,7 +56,7 @@ The MCP Client Tool auto-discovers all tools. Key tools include:
 |------|-------------|
 | `connect_database` | Connect to PostgreSQL, Snowflake, Dremio, ClickHouse, or MySQL |
 | `list_schemas` | Discover available database schemas |
-| `analyze_schema` | Analyze schema structure with relationships |
+| `discover_schema` | Analyze schema structure with relationships |
 | `get_table_details` | Deep-dive into a specific table |
 | `generate_ontology` | Generate RDF/OWL ontology with SQL mappings |
 | `validate_sql_syntax` | Validate SQL syntax, security, and fan-trap risks |

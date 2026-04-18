@@ -163,6 +163,6 @@ def format_workspace_summary(workspace: Dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("NOTE: Auto-restore was not available. Workspace artifacts exist on disk.")
-    lines.append("Call analyze_schema() to re-analyze, or reconnect to trigger auto-restore.")
+    lines.append("Call discover_schema() to re-analyze, or reconnect to trigger auto-restore.")
 
     return "\n".join(lines)

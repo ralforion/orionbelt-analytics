@@ -51,15 +51,15 @@ async def reset_cache(
     return {
         "status": "success",
         "cleared_caches": cleared,
-        "message": f"Cleared {', '.join(cleared)} cache(s). You can now re-run analyze_schema and/or generate_ontology.",
+        "message": f"Cleared {', '.join(cleared)} cache(s). You can now re-run discover_schema and/or generate_ontology.",
         "next_steps": {
-            "schema": "Call analyze_schema() to re-analyze database schema",
+            "schema": "Call discover_schema() to re-analyze database schema",
             "ontology": "Call generate_ontology() to regenerate ontology",
         },
     }
 
 
-async def analyze_schema(
+async def discover_schema(
     ctx: Context,
     schema_name: Optional[str],
     lightweight: bool,
@@ -80,7 +80,7 @@ async def analyze_schema(
         _auto_initialize_graphrag_background: Background init function
     """
     # Log function entry to verify code is being called
-    logger.debug(f"analyze_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
+    logger.debug(f"discover_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
 
     # Check cache
     session = get_session_data(ctx)
@@ -148,7 +148,7 @@ async def analyze_schema(
                 "message": f"Schema already CACHED ({len(cached_tables)} tables). Call generate_ontology() next.",
                 "schema_file": session.schema_file,
                 "next_step": "generate_ontology",
-                "instruction": "Call generate_ontology() NOW - do NOT call analyze_schema again!",
+                "instruction": "Call generate_ontology() NOW - do NOT call discover_schema again!",
             }
             if auto_graphrag == "true":
                 result["graphrag_auto_init"] = "started in background (from cache)"
@@ -358,7 +358,7 @@ async def analyze_schema(
             "recommended": "generate_ontology",
             "reason": "Generate ontology with database schema linking for accurate SQL generation and fan-trap prevention",
             "workflow": [
-                "1. analyze_schema (completed - schema is now CACHED)",
+                "1. discover_schema (completed - schema is now CACHED)",
                 "2. generate_ontology (recommended next - will use cached schema automatically)",
                 "3. execute_sql_query (with ontology context)",
             ],
@@ -366,13 +366,13 @@ async def analyze_schema(
         schema_result["schema_cached"] = True
         schema_result["cache_hint"] = (
             "IMPORTANT: Schema analysis is now CACHED for this session. "
-            "Do NOT call analyze_schema again - just call generate_ontology() directly. "
+            "Do NOT call discover_schema again - just call generate_ontology() directly. "
             "It will automatically use the cached schema data."
         )
         schema_result["analytical_guidance"] = (
             "Recommended next step: Run generate_ontology() - NO parameters needed!\n\n"
             "The schema is CACHED - generate_ontology will use it automatically.\n"
-            "Do NOT call analyze_schema again.\n\n"
+            "Do NOT call discover_schema again.\n\n"
             "This will create an ontology with:\n"
             "- Database schema linking (oba: namespace)\n"
             "- SQL column references for queries\n"

@@ -135,7 +135,7 @@ OrionBelt exposes 32 MCP tools. Here is a summary by category:
 | `connect_database` | Connect to any supported database using `.env` credentials |
 | `list_schemas` | List available schemas in the connected database |
 | `reset_cache` | Clear cached schema and ontology data for the current session |
-| `analyze_schema` | Analyze schema structure with automatic GraphRAG + ontology generation |
+| `discover_schema` | Analyze schema structure with automatic GraphRAG + ontology generation |
 | `get_table_details` | Get detailed column, key, and constraint info for a specific table |
 | `cleanup_workspace` | Delete all workspace files for the current connection and start fresh |
 
@@ -161,7 +161,7 @@ OrionBelt exposes 32 MCP tools. Here is a summary by category:
 
 | Tool | Description |
 |------|-------------|
-| `graphrag_search` | Semantic search + schema overview (auto-initialized by `analyze_schema`) |
+| `graphrag_search` | Semantic search + schema overview (auto-initialized by `discover_schema`) |
 | `graphrag_query_context` | Get optimized context for SQL generation (85-95% token reduction) |
 | `graphrag_find_join_path` | Discover join paths between tables via graph traversal |
 
@@ -193,7 +193,7 @@ For full parameter details, return values, and examples, see [docs/tools-referen
 
 **Full analysis session:**
 ```
-connect_database("postgresql") -> analyze_schema("public") -> generate_ontology() -> execute_sql_query(...)
+connect_database("postgresql") -> discover_schema("public") -> generate_ontology() -> execute_sql_query(...)
 ```
 
 **Quick data exploration:**

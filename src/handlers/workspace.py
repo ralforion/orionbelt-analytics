@@ -227,7 +227,7 @@ def _format_restore_summary(result: Dict[str, Any]) -> str:
     # Build "do not call" list
     skip_tools = []
     if "Schema '" in restored_str or "Ontology '" in restored_str:
-        skip_tools.append("analyze_schema()")
+        skip_tools.append("discover_schema()")
     if "Ontology '" in restored_str:
         skip_tools.append("generate_ontology()")
         if ontology_enriched:
@@ -345,7 +345,7 @@ async def cleanup_workspace(
 
     result += "\n## Session State Cleared\n"
     result += "- Schema cache, ontology, GraphRAG, RDF store\n\n"
-    result += "Call analyze_schema() to start building a new workspace.\n"
+    result += "Call discover_schema() to start building a new workspace.\n"
 
     return result
 

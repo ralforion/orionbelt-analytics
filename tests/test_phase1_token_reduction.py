@@ -141,13 +141,13 @@ class TestPhase1TokenReduction:
         # Should mention chart-related content
         assert "chart" in docstring.lower()
 
-    def test_analyze_schema_docstring_condensed(self):
-        """Verify analyze_schema docstring is condensed."""
-        docstring = _get_tool_docstring('analyze_schema')
-        assert docstring is not None, "analyze_schema has no docstring"
+    def test_discover_schema_docstring_condensed(self):
+        """Verify discover_schema docstring is condensed."""
+        docstring = _get_tool_docstring('discover_schema')
+        assert docstring is not None, "discover_schema has no docstring"
 
         # Original was ~3,775 chars, should be much smaller now
-        assert len(docstring) < 3000, f"analyze_schema docstring not condensed: {len(docstring)} chars"
+        assert len(docstring) < 3000, f"discover_schema docstring not condensed: {len(docstring)} chars"
 
     @pytest.mark.asyncio
     async def test_all_tools_still_registered(self):
@@ -160,7 +160,7 @@ class TestPhase1TokenReduction:
             "connect_database",
             "list_schemas",
             "reset_cache",
-            "analyze_schema",
+            "discover_schema",
             "get_table_details",
             "generate_ontology",
             "suggest_semantic_names",
@@ -223,7 +223,7 @@ class TestFunctionalityPreserved:
         tool_names = [
             "connect_database",
             "list_schemas",
-            "analyze_schema",
+            "discover_schema",
             "generate_ontology",
             "execute_sql_query",
             "generate_chart"
