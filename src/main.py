@@ -790,7 +790,9 @@ async def sample_table_data(
         limit: Maximum number of rows to return (default: 10, max: 100)
     """
     return await _h_schema.sample_table_data(
-        ctx, table_name, schema_name, limit, get_session_db_manager=get_session_db_manager
+        ctx, table_name, schema_name, limit,
+        get_session_data=get_session_data,
+        get_session_db_manager=get_session_db_manager,
     )
 
 

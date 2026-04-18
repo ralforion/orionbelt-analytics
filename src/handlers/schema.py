@@ -516,6 +516,7 @@ async def sample_table_data(
     table_name: str,
     schema_name: Optional[str],
     limit: int,
+    get_session_data,
     get_session_db_manager,
 ) -> List[Dict[str, Any]]:
     """Sample data from a specific table for analysis.
@@ -525,6 +526,7 @@ async def sample_table_data(
         table_name: Name of the table to sample
         schema_name: Schema containing the table
         limit: Maximum number of rows to return
+        get_session_data: Function to get session data
         get_session_db_manager: Function to get session db manager
     """
     if not table_name:
@@ -532,6 +534,10 @@ async def sample_table_data(
 
     if limit <= 0 or limit > 100:
         limit = 10
+
+    if not schema_name:
+        session = get_session_data(ctx)
+        schema_name = session.get_last_analyzed_schema()
 
     db_manager = get_session_db_manager(ctx)
     sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
