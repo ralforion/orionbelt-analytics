@@ -853,8 +853,9 @@ async def generate_chart(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
     output_format: str = "interactive",
-) -> str:
-    """Generate an interactive chart rendered via MCP Apps.
+):
+    """Generate a chart from query results. Returns an inline image (ImageContent)
+    that renders in all MCP clients, plus a ui:// MCP Apps widget for interactive use.
 
     Args:
         data_source: JSON array of objects, e.g. [{"name": "A", "value": 10}, ...] — pass as array, not string
