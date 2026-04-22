@@ -118,7 +118,8 @@ async def generate_chart(
                 ))
                 logger.info(f"Registered chart resource: {chart_uri}")
 
-            # Also export a static PNG for clients that don't render MCP Apps
+            # Also export a static PNG and register as image resource
+            # Claude Desktop renders image/png resources in the right panel
             file_uri = ""
             try:
                 chart_id = str(uuid4())
@@ -130,6 +131,18 @@ async def generate_chart(
                 )
                 if image_file_path:
                     file_uri = f"\nStatic image: file://{image_file_path}"
+                if add_resource and image_bytes:
+                    import base64
+                    from fastmcp.resources import BinaryResource
+                    image_uri = f"resource://orionbelt/chart/{chart_id}.png"
+                    add_resource(BinaryResource(
+                        uri=image_uri,
+                        name=f"Chart Image: {title or chart_type_display}",
+                        data=base64.b64encode(image_bytes),
+                        mime_type="image/png",
+                    ))
+                    logger.info(f"Registered chart image resource: {image_uri}")
+                    file_uri += f"\nImage resource: {image_uri}"
             except Exception as e:
                 logger.debug(f"PNG fallback export failed (kaleido may not be installed): {e}")
 
