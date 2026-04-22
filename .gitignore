@@ -55,3 +55,6 @@ Thumbs.db
 .mcpregistry_github_token
 .mcpregistry_registry_token
 .claude/settings.local.json
+
+# Claude Code project instructions (kept local)
+CLAUDE.md
