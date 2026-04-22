@@ -5,6 +5,7 @@ from typing import Optional, Union, List, Dict, Any
 from uuid import uuid4
 
 from fastmcp import Context
+from fastmcp.utilities.types import Image
 
 from ..chart_utils import save_image_to_tmp
 
@@ -118,7 +119,8 @@ async def generate_chart(
                 ))
                 logger.info(f"Registered chart resource: {chart_uri}")
 
-            # Also export a static PNG for clients that don't render MCP Apps
+            # Export a static PNG: saved to disk and returned inline as ImageContent
+            image_inline = None
             file_uri = ""
             try:
                 chart_id = str(uuid4())
@@ -130,11 +132,15 @@ async def generate_chart(
                 )
                 if image_file_path:
                     file_uri = f"\nStatic image: file://{image_file_path}"
+                image_inline = Image(data=image_bytes, format="png")
             except Exception as e:
-                logger.debug(f"PNG fallback export failed (kaleido may not be installed): {e}")
+                logger.debug(f"PNG export failed: {e}")
 
             await ctx.info(f"Interactive {chart_type_display} chart with {data_points} data points")
-            return f"Chart generated: {chart_uri}{file_uri}"
+            text_result = f"Chart generated: {chart_uri}{file_uri}"
+            if image_inline:
+                return [text_result, image_inline]
+            return text_result
         else:
             await ctx.info("Chart generation failed")
             raise RuntimeError("Chart generation failed: unexpected result format for interactive mode")
@@ -159,7 +165,10 @@ async def generate_chart(
             raise RuntimeError("Failed to save chart image to file")
 
         await ctx.info(f"Chart image saved: {image_file_path}")
-        return f"Chart saved to: {image_file_path}"
+        return [
+            f"Chart saved to: {image_file_path}",
+            Image(data=image_bytes, format="png"),
+        ]
     else:
         await ctx.info("Chart generation failed")
         raise RuntimeError("Chart generation failed: unexpected result format")
