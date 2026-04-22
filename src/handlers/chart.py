@@ -118,8 +118,23 @@ async def generate_chart(
                 ))
                 logger.info(f"Registered chart resource: {chart_uri}")
 
+            # Also export a static PNG for clients that don't render MCP Apps
+            file_uri = ""
+            try:
+                chart_id = str(uuid4())
+                image_bytes = fig.to_image(format="png", width=width, height=height)
+                session = get_session_data(ctx) if get_session_data else None
+                connection_id = session.connection_id if session else None
+                image_file_path = save_image_to_tmp(
+                    image_bytes, chart_id, "png", connection_id=connection_id
+                )
+                if image_file_path:
+                    file_uri = f"\nStatic image: file://{image_file_path}"
+            except Exception as e:
+                logger.debug(f"PNG fallback export failed (kaleido may not be installed): {e}")
+
             await ctx.info(f"Interactive {chart_type_display} chart with {data_points} data points")
-            return f"Chart generated: {chart_uri}"
+            return f"Chart generated: {chart_uri}{file_uri}"
         else:
             await ctx.info("Chart generation failed")
             raise RuntimeError("Chart generation failed: unexpected result format for interactive mode")
