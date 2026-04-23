@@ -854,17 +854,16 @@ async def generate_chart(
     sort_order: Optional[str] = None,
     output_format: str = "interactive",
 ):
-    """Generate a chart from query results. Returns an inline image (ImageContent)
-    that renders in all MCP clients, plus a ui:// MCP Apps widget for interactive use.
+    """Generate a chart from query results. Returns a ui:// MCP Apps widget for interactive use.
 
     Args:
         data_source: JSON array of objects, e.g. [{"name": "A", "value": 10}, ...] — pass as array, not string
         chart_type: 'bar', 'line', 'scatter', or 'heatmap'
         x_column: Column name for X-axis
-        y_column: Column name(s) for Y-axis
+        y_column: Column name(s) for Y-axis. Pass a single string or a list of strings. Multiple y_columns are supported for bar charts (grouped/stacked) and line charts.
         color_column: Optional column for grouping/coloring (heatmap: numeric value column for color intensity)
         title: Chart title
-        chart_style: 'default', 'stacked', or 'grouped'
+        chart_style: 'default', 'stacked', or 'grouped' — applies to bar charts including multi-y
         width: Chart width in pixels
         height: Chart height in pixels
         sort_by: Column to sort by
