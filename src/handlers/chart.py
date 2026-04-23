@@ -8,6 +8,7 @@ from fastmcp import Context
 from fastmcp.utilities.types import Image
 
 from ..chart_utils import save_image_to_tmp
+from ..config import config_manager
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,8 @@ async def generate_chart(
 
             await ctx.info(f"Interactive {chart_type_display} chart with {data_points} data points")
             text_result = f"Chart generated: {chart_uri}{file_uri}"
-            if image_inline:
+            return_binary = config_manager.get_server_config().chart_return_binary
+            if image_inline and return_binary:
                 return [text_result, image_inline]
             return text_result
         else:
@@ -165,10 +167,13 @@ async def generate_chart(
             raise RuntimeError("Failed to save chart image to file")
 
         await ctx.info(f"Chart image saved: {image_file_path}")
-        return [
-            f"Chart saved to: {image_file_path}",
-            Image(data=image_bytes, format="png"),
-        ]
+        return_binary = config_manager.get_server_config().chart_return_binary
+        if return_binary:
+            return [
+                f"Chart saved to: {image_file_path}",
+                Image(data=image_bytes, format="png"),
+            ]
+        return f"Chart saved to: {image_file_path}"
     else:
         await ctx.info("Chart generation failed")
         raise RuntimeError("Chart generation failed: unexpected result format")
