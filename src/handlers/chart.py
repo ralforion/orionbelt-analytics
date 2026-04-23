@@ -107,6 +107,13 @@ async def generate_chart(
 
             # Generate self-contained HTML with Plotly.js from CDN
             html = fig.to_html(include_plotlyjs="cdn", full_html=True)
+            modebar_css = (
+                "<style>"
+                ".modebar { background: #fff !important; padding: 2px 4px !important; }"
+                ".modebar-group { background: #fff !important; }"
+                "</style>"
+            )
+            html = html.replace("</body>", modebar_css + "</body>")
 
             # Register as a FastMCP Apps resource
             chart_uri = f"ui://orionbelt/chart/{uuid4()}"
