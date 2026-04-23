@@ -121,7 +121,8 @@ async def generate_chart(
                 ".modebar-group { display: flex !important; flex-direction: row !important; }"
                 "</style>"
             )
-            html = html.replace("</head>", toolbar_css + "</head>")
+            html = html.replace("</body>", toolbar_css + "</body>")
+            logger.debug(f"Toolbar CSS injected: {'modebar-container' in html}")
 
             # Register as a FastMCP Apps resource
             chart_uri = f"ui://orionbelt/chart/{uuid4()}"
