@@ -113,9 +113,10 @@ async def generate_chart(
                 full_html=True,
                 config={
                     "displaylogo": False,
-                    "modeBarButtonsToRemove": [
-                        "select2d", "lasso2d", "zoomIn2d", "zoomOut2d",
-                    ],
+                    "modeBarButtons": [[
+                        "toImage", "zoom2d", "pan2d",
+                        "autoScale2d", "resetScale2d",
+                    ]],
                 },
             )
 
