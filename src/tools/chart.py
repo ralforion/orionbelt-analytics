@@ -129,9 +129,8 @@ def generate_chart(
         # Validate y_column(s)
         if chart_type in ["bar", "line", "scatter"] and y_column:
             if isinstance(y_column, list):
-                # Multiple measures (only supported for line charts)
-                if chart_type != "line":
-                    return {"error": f"❌ Multiple y_columns only supported for line charts, not {chart_type}"}
+                if chart_type not in ["bar", "line"]:
+                    return {"error": f"❌ Multiple y_columns only supported for bar and line charts, not {chart_type}"}
                 missing_cols = [col for col in y_column if col not in df.columns]
                 if missing_cols:
                     return {"error": f"❌ Y-axis columns {missing_cols} not found in data. Available columns: {list(df.columns)}"}
@@ -143,8 +142,12 @@ def generate_chart(
         # Generate title if not provided
         if not title:
             if chart_type == "bar":
-                y_label = y_column if isinstance(y_column, str) else 'Count'
-                title = f"{y_label} by {x_column}"
+                if isinstance(y_column, list):
+                    y_label = ', '.join(y_column)
+                    title = f"{y_label} by {x_column}"
+                else:
+                    y_label = y_column if isinstance(y_column, str) else 'Count'
+                    title = f"{y_label} by {x_column}"
                 if chart_style == "stacked" and color_column:
                     title += f" (stacked by {color_column})"
             elif chart_type == "line":
