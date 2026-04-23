@@ -511,12 +511,12 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     if show_legend:
         legend_config = dict(
             orientation="v",
-            yanchor="top",
-            y=0.65,
+            yanchor="middle",
+            y=0.5,
             xanchor="left",
             x=1.02
         )
-        margin_config = dict(b=100, t=80, l=60, r=200)
+        margin_config = dict(b=100, t=60, l=60, r=200)
     else:
         legend_config = dict()
         margin_config = dict(b=100, t=60, l=60, r=60)
