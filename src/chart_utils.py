@@ -508,8 +508,8 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     # Determine if we should show legend
     show_legend = bool(color_column or (isinstance(y_column, list) and chart_type in ["bar", "line"]))
 
-    # For charts with multiple measures, use horizontal legend between title and plot
-    if isinstance(y_column, list) and chart_type in ["bar", "line"]:
+    # For line charts with multiple measures, use horizontal legend between title and plot
+    if chart_type == "line" and isinstance(y_column, list):
         legend_config = dict(
             orientation="h",
             yanchor="bottom",
