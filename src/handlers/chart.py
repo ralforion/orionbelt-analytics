@@ -119,6 +119,15 @@ async def generate_chart(
                     ]],
                 },
             )
+            toolbar_css = (
+                "<style>"
+                ".js-plotly-plot .plotly .modebar { "
+                "background: #fff !important; "
+                "border-radius: 4px !important; "
+                "padding: 4px !important; }"
+                "</style>"
+            )
+            html = html.replace("</body>", toolbar_css + "</body>")
 
             # Register as a FastMCP Apps resource
             chart_uri = f"ui://orionbelt/chart/{uuid4()}"
