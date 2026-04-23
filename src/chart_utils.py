@@ -154,7 +154,7 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     """Create Plotly chart based on type.
 
     Args:
-        y_column: Can be a string (single measure) or list of strings (multiple measures for line charts)
+        y_column: Can be a string (single measure) or list of strings (multiple measures for bar/line charts)
         sort_by: Column to sort by. If None, uses automatic sorting based on chart type:
             - Bar/grouped/stacked: sorts by measure (y_column) descending
             - Line: sorts by dimension (x_column) ascending
@@ -200,13 +200,32 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
         if is_chronological:
             effective_sort_by = sort_by if sort_by is not None else x_column
             effective_sort_order = sort_order if sort_order is not None else 'ascending'
+        elif isinstance(y_column, list):
+            effective_sort_by = sort_by if sort_by else x_column
+            effective_sort_order = sort_order if sort_order else 'ascending'
         else:
             effective_sort_by = sort_by if sort_by else y_column
             effective_sort_order = sort_order if sort_order else 'descending'
 
         sort_ascending = (effective_sort_order == 'ascending')
 
-        if chart_style == "stacked" and color_column:
+        if isinstance(y_column, list):
+            agg_df = df.groupby(x_column, as_index=False)[y_column].sum()
+            agg_df = _clean_dataframe_for_plotly(agg_df)
+            quarter_order = get_quarter_sort_order(agg_df[x_column].unique(), ascending=sort_ascending)
+            if quarter_order:
+                category_order = quarter_order
+            else:
+                sorted_df = agg_df.sort_values(by=effective_sort_by, ascending=sort_ascending)
+                category_order = sorted_df[x_column].tolist()
+            barmode = 'stack' if chart_style == 'stacked' else 'group'
+            labels = {x_column: format_measure_name(x_column)}
+            labels.update({col: format_measure_name(col) for col in y_column})
+            fig = px.bar(agg_df, x=x_column, y=y_column, title=title,
+                        barmode=barmode, category_orders={x_column: category_order},
+                        labels=labels)
+            fig.update_layout(bargap=0.15, bargroupgap=0.05)
+        elif chart_style == "stacked" and color_column:
             # Stacked bar chart with two dimensions: x_column (categories) and color_column (stack groups)
             # Aggregate data first to handle duplicates
             agg_df = df.groupby([x_column, color_column], as_index=False)[y_column].sum()
@@ -487,19 +506,9 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     
     # Apply consistent styling
     # Determine if we should show legend
-    show_legend = bool(color_column or (chart_type == "line" and isinstance(y_column, list)))
+    show_legend = bool(color_column or (isinstance(y_column, list) and chart_type in ["bar", "line"]))
 
-    # For line charts with multiple measures, use horizontal legend between title and plot
-    if chart_type == "line" and isinstance(y_column, list):
-        legend_config = dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.0,  # Position at top of plot area (below title)
-            xanchor="center",
-            x=0.5
-        )
-        margin_config = dict(b=100, t=120, l=60, r=60)  # Extra top margin for title and legend space
-    else:
+    if show_legend:
         legend_config = dict(
             orientation="v",
             yanchor="middle",
@@ -507,7 +516,10 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
             xanchor="left",
             x=1.02
         )
-        margin_config = dict(b=100, t=60, l=60, r=200)  # Extra right margin for legend
+        margin_config = dict(b=100, t=60, l=60, r=200)
+    else:
+        legend_config = dict()
+        margin_config = dict(b=100, t=60, l=60, r=60)
 
     fig.update_layout(
         font=dict(size=12),
@@ -516,6 +528,10 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
         margin=margin_config,
         showlegend=show_legend,
         legend=legend_config,
+        modebar=dict(
+            bgcolor='white', color='gray', activecolor='black',
+            orientation='h',
+        ),
         width=width,
         height=height
     )

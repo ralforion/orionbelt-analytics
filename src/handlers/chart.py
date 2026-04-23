@@ -8,6 +8,7 @@ from fastmcp import Context
 from fastmcp.utilities.types import Image
 
 from ..chart_utils import save_image_to_tmp
+from ..config import config_manager
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +106,16 @@ async def generate_chart(
             chart_type_display = metadata.get("chart_type", chart_type)
 
             # Generate self-contained HTML with Plotly.js from CDN
+            # Remove fixed dimensions so the chart is fully responsive in its container
+            fig.update_layout(width=None, height=None, autosize=True)
             html = fig.to_html(include_plotlyjs="cdn", full_html=True)
 
-            # Register as a FastMCP Apps resource
-            chart_uri = f"ui://orionbelt/chart/{uuid4()}"
+            # Register as FastMCP Apps resources:
+            # - HTML for Claude Desktop / MCP Apps clients
+            # - JSON for direct consumption by OB Chat (avoids HTML parsing)
+            chart_id = uuid4()
+            chart_uri = f"ui://orionbelt/chart/{chart_id}"
+            chart_json_uri = f"ui://orionbelt/chart-json/{chart_id}"
             if add_resource:
                 from fastmcp.resources import TextResource
                 add_resource(TextResource(
@@ -117,7 +124,13 @@ async def generate_chart(
                     text=html,
                     mime_type="text/html",
                 ))
-                logger.info(f"Registered chart resource: {chart_uri}")
+                add_resource(TextResource(
+                    uri=chart_json_uri,
+                    name=f"Chart JSON: {title or chart_type_display}",
+                    text=fig.to_json(),
+                    mime_type="application/json",
+                ))
+                logger.info(f"Registered chart resources: {chart_uri}, {chart_json_uri}")
 
             # Export a static PNG: saved to disk and returned inline as ImageContent
             image_inline = None
@@ -137,8 +150,9 @@ async def generate_chart(
                 logger.debug(f"PNG export failed: {e}")
 
             await ctx.info(f"Interactive {chart_type_display} chart with {data_points} data points")
-            text_result = f"Chart generated: {chart_uri}{file_uri}"
-            if image_inline:
+            text_result = f"Chart generated: {chart_uri}{file_uri}\nChart JSON: {chart_json_uri}"
+            return_binary = config_manager.get_server_config().chart_return_binary
+            if image_inline and return_binary:
                 return [text_result, image_inline]
             return text_result
         else:
@@ -165,10 +179,13 @@ async def generate_chart(
             raise RuntimeError("Failed to save chart image to file")
 
         await ctx.info(f"Chart image saved: {image_file_path}")
-        return [
-            f"Chart saved to: {image_file_path}",
-            Image(data=image_bytes, format="png"),
-        ]
+        return_binary = config_manager.get_server_config().chart_return_binary
+        if return_binary:
+            return [
+                f"Chart saved to: {image_file_path}",
+                Image(data=image_bytes, format="png"),
+            ]
+        return f"Chart saved to: {image_file_path}"
     else:
         await ctx.info("Chart generation failed")
         raise RuntimeError("Chart generation failed: unexpected result format")

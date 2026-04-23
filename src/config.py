@@ -29,6 +29,7 @@ class ServerConfig:
     mcp_server_port: int = 9000
     session_idle_timeout: int = DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS
     session_scan_interval: int = DEFAULT_SESSION_SCAN_INTERVAL_SECONDS
+    chart_return_binary: bool = False
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -107,7 +108,8 @@ class ConfigManager:
                 session_scan_interval=int(os.getenv(
                     "SESSION_SCAN_INTERVAL_SECONDS",
                     str(DEFAULT_SESSION_SCAN_INTERVAL_SECONDS),
-                ))
+                )),
+                chart_return_binary=os.getenv("CHART_RETURN_BINARY", "false").lower() == "true",
             )
             logger.info("Server configuration loaded")
         return self._server_config
