@@ -109,7 +109,9 @@ async def generate_chart(
             html = fig.to_html(include_plotlyjs="cdn", full_html=True)
             modebar_css = (
                 "<style>"
-                ".modebar { background: #fff !important; padding: 2px 4px !important; }"
+                ".modebar { background: #fff !important; "
+                "border-radius: 4px !important; padding: 4px !important; "
+                "box-shadow: 0 1px 4px rgba(0,0,0,0.2) !important; }"
                 ".modebar-group { background: #fff !important; }"
                 "</style>"
             )
