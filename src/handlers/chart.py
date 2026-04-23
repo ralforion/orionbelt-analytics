@@ -109,15 +109,6 @@ async def generate_chart(
             # Remove fixed dimensions so the chart is fully responsive in its container
             fig.update_layout(width=None, height=None, autosize=True)
             html = fig.to_html(include_plotlyjs="cdn", full_html=True)
-            modebar_css = (
-                "<style>"
-                ".modebar { background: #fff !important; "
-                "border-radius: 4px !important; padding: 4px !important; "
-                "box-shadow: 0 1px 4px rgba(0,0,0,0.2) !important; }"
-                ".modebar-group { background: #fff !important; }"
-                "</style>"
-            )
-            html = html.replace("</body>", modebar_css + "</body>")
 
             # Register as a FastMCP Apps resource
             chart_uri = f"ui://orionbelt/chart/{uuid4()}"

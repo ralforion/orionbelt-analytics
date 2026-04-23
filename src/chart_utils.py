@@ -508,25 +508,18 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
     # Determine if we should show legend
     show_legend = bool(color_column or (isinstance(y_column, list) and chart_type in ["bar", "line"]))
 
-    # For line charts with multiple measures, use horizontal legend between title and plot
-    if chart_type == "line" and isinstance(y_column, list):
+    if show_legend:
         legend_config = dict(
             orientation="h",
             yanchor="bottom",
-            y=1.0,  # Position at top of plot area (below title)
+            y=1.0,
             xanchor="center",
             x=0.5
         )
-        margin_config = dict(b=100, t=120, l=60, r=60)  # Extra top margin for title and legend space
+        margin_config = dict(b=100, t=120, l=60, r=60)
     else:
-        legend_config = dict(
-            orientation="v",
-            yanchor="middle",
-            y=0.5,
-            xanchor="left",
-            x=1.02
-        )
-        margin_config = dict(b=100, t=60, l=60, r=200)  # Extra right margin for legend
+        legend_config = dict()
+        margin_config = dict(b=100, t=60, l=60, r=60)
 
     fig.update_layout(
         font=dict(size=12),
