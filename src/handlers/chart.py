@@ -106,6 +106,8 @@ async def generate_chart(
             chart_type_display = metadata.get("chart_type", chart_type)
 
             # Generate self-contained HTML with Plotly.js from CDN
+            # Remove fixed dimensions so the chart is fully responsive in its container
+            fig.update_layout(width=None, height=None, autosize=True)
             html = fig.to_html(include_plotlyjs="cdn", full_html=True)
             modebar_css = (
                 "<style>"
