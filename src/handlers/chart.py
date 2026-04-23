@@ -108,26 +108,7 @@ async def generate_chart(
             # Generate self-contained HTML with Plotly.js from CDN
             # Remove fixed dimensions so the chart is fully responsive in its container
             fig.update_layout(width=None, height=None, autosize=True)
-            toolbar_css = (
-                "<style>"
-                ".js-plotly-plot .plotly .modebar { "
-                "background: #fff !important; "
-                "border-radius: 4px !important; "
-                "padding: 4px !important; }"
-                "</style>"
-            )
-            chart_div = fig.to_html(
-                include_plotlyjs="cdn",
-                full_html=False,
-                config={
-                    "displaylogo": False,
-                    "modeBarButtons": [[
-                        "toImage", "zoom2d", "pan2d",
-                        "autoScale2d", "resetScale2d",
-                    ]],
-                },
-            )
-            html = toolbar_css + chart_div
+            html = fig.to_html(include_plotlyjs="cdn", full_html=True)
 
             # Register as a FastMCP Apps resource
             chart_uri = f"ui://orionbelt/chart/{uuid4()}"

@@ -528,7 +528,11 @@ def create_plotly_chart(df, chart_type, x_column, y_column, color_column, title,
         margin=margin_config,
         showlegend=show_legend,
         legend=legend_config,
-        modebar=dict(bgcolor='white', color='gray', activecolor='black'),
+        modebar=dict(
+            bgcolor='white', color='gray', activecolor='black',
+            orientation='h',
+            remove=['select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d'],
+        ),
         width=width,
         height=height
     )
