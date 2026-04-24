@@ -45,10 +45,33 @@ Run Analytics and Semantic Layer side-by-side in Claude Desktop for schema-aware
 - **RDF/OWL ontology generation** with `oba:` namespace SQL annotations and W3C R2RML mappings
 - **GraphRAG** -- graph traversal (up to 12 hops) + ChromaDB vector embeddings for semantic schema discovery
 - **SPARQL 1.1** query interface via persistent Oxigraph RDF store
-- **Fan-trap prevention** -- automatic detection and safe query pattern suggestions
+- **OBQC validation** -- deterministic SQL checks against the ontology (table/column existence, join validity, type mismatches, fan-traps)
 - **Interactive charting** -- Plotly charts with MCP-UI rendering in Claude Desktop
 - **Multi-schema support** -- analyze multiple schemas simultaneously; ontology and GraphRAG state are isolated per schema
 - **Workspace persistence** -- reconnect to the same database and restore your previous session
+
+## OBQC -- Ontology-Based Query Check
+
+A key differentiator of OrionBelt is **OBQC** (Ontology-Based Query Check), a deterministic, rule-based SQL validator that catches errors *before* queries reach the database. Unlike LLM-only approaches that rely on the model "getting it right," OBQC cross-references every generated SQL statement against the loaded RDF/OWL ontology to enforce structural correctness.
+
+**What OBQC validates:**
+
+| Check | What it catches |
+|-------|-----------------|
+| **Table existence** | References to tables that don't exist in the schema |
+| **Column existence** | References to columns not present in their table, ambiguous unqualified columns |
+| **Join validity** | Missing join conditions (Cartesian products), join columns that don't match declared foreign keys |
+| **Type compatibility** | WHERE/ON comparisons between incompatible types (e.g. string vs. integer) |
+| **Aggregation correctness** | SELECT columns missing from GROUP BY when aggregates are used |
+| **Fan-trap detection** | Aggregations across multiple one-to-many joins that silently multiply results |
+
+**How it works:**
+
+1. `generate_ontology` or `load_my_ontology` creates/loads an ontology with `oba:` namespace annotations that map OWL classes and properties to actual database tables, columns, types, and foreign keys.
+2. When `execute_sql_query` is called, OBQC parses the SQL with [sqlglot](https://github.com/tobymao/sqlglot) and validates every table, column, join, and aggregation against the ontology's schema model.
+3. Issues are returned with severity levels (error, warning, info) alongside the query results, so the LLM can self-correct before the user sees wrong data.
+
+OBQC is fully deterministic -- no LLM calls, no probabilistic reasoning. It acts as a safety net that complements the LLM's SQL generation with hard structural guarantees.
 
 ## Quick Start
 
@@ -154,7 +177,7 @@ OrionBelt exposes 32 MCP tools. Here is a summary by category:
 | Tool | Description |
 |------|-------------|
 | `sample_table_data` | Preview table data with row limit and injection protection |
-| `execute_sql_query` | Execute SQL with built-in validation, security checks, and fan-trap detection |
+| `execute_sql_query` | Execute SQL with OBQC validation, security checks, and fan-trap detection |
 | `generate_chart` | Generate Plotly charts (bar, line, scatter, heatmap) with MCP-UI rendering |
 
 ### GraphRAG
