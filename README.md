@@ -71,7 +71,7 @@ A key differentiator of OrionBelt is **OBQC** (Ontology-Based Query Check), a de
 2. When `execute_sql_query` is called, OBQC parses the SQL with [sqlglot](https://github.com/tobymao/sqlglot) and validates every table, column, join, and aggregation against the ontology's schema model.
 3. Issues are returned with severity levels (error, warning, info) alongside the query results, so the LLM can self-correct before the user sees wrong data.
 
-OBQC is fully deterministic -- no LLM calls, no probabilistic reasoning. It acts as a safety net that complements the LLM's SQL generation with hard structural guarantees.
+OBQC is fully deterministic -- no LLM calls, no probabilistic reasoning. It acts as a safety net that complements the LLM's SQL generation with hard structural guarantees. Errors **block query execution**; warnings are attached to the response for the LLM to act on. See [OBQC documentation](docs/obqc.md) for the full rule reference, severity behavior, and annotation requirements.
 
 ## Quick Start
 
@@ -241,6 +241,7 @@ connect_database("postgresql") -> execute_sql_query(...)
 | [Tools Reference](docs/tools-reference.md) | Full parameter docs, return values, and usage examples |
 | [Configuration](docs/configuration.md) | Environment variables, transport setup, troubleshooting |
 | [GraphRAG](docs/graphrag.md) | Graph-based schema intelligence and OBML workflow |
+| [OBQC](docs/obqc.md) | Validation rules, severity levels, blocking behavior, annotation requirements |
 | [Fan-Trap Prevention](docs/fan-trap-prevention.md) | The fan-trap problem, detection, and safe SQL patterns |
 | [Integrations](docs/integrations.md) | LangChain, OpenAI, CrewAI, Google ADK, Vercel, n8n, ChatGPT |
 | [Development](docs/development.md) | Project structure, testing, contributing |
