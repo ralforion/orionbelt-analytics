@@ -14,6 +14,7 @@ from ..database_manager import TableInfo, ColumnInfo
 from ..ontology_generator import OntologyGenerator
 from ..lifecycle.metadata import update_workspace_section, update_workspace_rdf
 from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR, PROJECT_ROOT
+from ..constants import OBA_NAMESPACE
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
 
 logger = logging.getLogger(__name__)
@@ -611,6 +612,110 @@ async def apply_semantic_names(
         return create_error_response(f"Failed to apply semantic names: {str(e)}", "internal_error")
 
 
+def _check_ontology_db_compatibility(graph, ctx, get_session_db_manager, session):
+    """Compare ontology tables/columns against the connected database.
+
+    Returns a compatibility dict or None if no database is connected.
+    """
+    try:
+        from rdflib import Namespace
+        from rdflib.namespace import RDF, OWL
+
+        db_manager = get_session_db_manager(ctx)
+        if not db_manager.has_engine():
+            return None
+
+        oba = Namespace(OBA_NAMESPACE)
+        schema_name = session.current_schema
+
+        # Extract table names from ontology via oba:tableName annotations
+        onto_tables = {}
+        for subject in graph.subjects(RDF.type, OWL.Class):
+            if subject == OWL.Class:
+                continue
+            table_name = None
+            for obj in graph.objects(subject, oba.tableName):
+                table_name = str(obj)
+                break
+            if table_name:
+                onto_tables[table_name.lower()] = table_name
+
+        if not onto_tables:
+            return {
+                "status": "no_oba_annotations",
+                "message": "Ontology has no oba:tableName annotations — cannot verify database fit",
+            }
+
+        # Get actual database tables
+        try:
+            db_tables_list = db_manager.get_tables(schema_name)
+            db_tables = {t.lower(): t for t in db_tables_list}
+        except Exception as e:
+            logger.warning(f"Could not fetch database tables for compatibility check: {e}")
+            return None
+
+        matched = sorted(
+            onto_tables[k] for k in onto_tables if k in db_tables
+        )
+        onto_only = sorted(
+            onto_tables[k] for k in onto_tables if k not in db_tables
+        )
+        db_only = sorted(
+            db_tables[k] for k in db_tables if k not in onto_tables
+        )
+
+        total_onto = len(onto_tables)
+        match_count = len(matched)
+
+        if total_onto == 0:
+            pct = 0
+        else:
+            pct = round(100 * match_count / total_onto)
+
+        if pct == 100:
+            status = "full_match"
+            message = f"All {total_onto} ontology tables found in database"
+        elif pct >= 50:
+            status = "partial_match"
+            message = (
+                f"{match_count}/{total_onto} ontology tables found in database "
+                f"({pct}%); {len(onto_only)} not in database"
+            )
+        elif match_count > 0:
+            status = "low_match"
+            message = (
+                f"Only {match_count}/{total_onto} ontology tables found in database "
+                f"({pct}%) — this ontology may not fit the connected database"
+            )
+        else:
+            status = "no_match"
+            message = (
+                "No ontology tables found in the connected database — "
+                "this ontology does not match the current connection"
+            )
+
+        result = {
+            "status": status,
+            "match_percentage": pct,
+            "message": message,
+            "matched_tables": match_count,
+            "total_ontology_tables": total_onto,
+            "total_database_tables": len(db_tables),
+        }
+
+        if onto_only:
+            result["tables_not_in_database"] = onto_only[:20]
+        if db_only:
+            result["tables_not_in_ontology"] = db_only[:20]
+
+        logger.info(f"Ontology-DB compatibility: {status} ({pct}%)")
+        return result
+
+    except Exception as e:
+        logger.warning(f"Ontology-DB compatibility check failed: {e}")
+        return None
+
+
 async def load_my_ontology(
     ctx: Context,
     import_folder: str,
@@ -618,42 +723,76 @@ async def load_my_ontology(
     graph_uri: Optional[str],
     get_session_data,
     get_oxigraph_store,
+    ontology_content: Optional[str] = None,
+    file_name: Optional[str] = None,
+    get_session_db_manager=None,
 ) -> Dict[str, Any]:
-    """Load the newest .ttl ontology file from the import folder."""
+    """Load an ontology from inline content or the newest .ttl file from the import folder."""
     try:
-        from rdflib import Graph
+        from rdflib import Graph, Namespace
         from rdflib.namespace import RDF, OWL
 
-        # Resolve import folder path
-        if import_folder.startswith("./"):
-            folder_path = PROJECT_ROOT / import_folder[2:]
-        elif not os.path.isabs(import_folder):
-            folder_path = PROJECT_ROOT / import_folder
+        newest_file = None
+        ttl_files = []
+        file_stat = None
+        from_chat = ontology_content is not None
+
+        if ontology_content:
+            # Inline content provided (e.g. file dropped into chat)
+            effective_name = file_name or "ontology_upload.ttl"
+            if not effective_name.endswith(".ttl"):
+                effective_name += ".ttl"
+
+            # Save to import folder for persistence
+            if import_folder.startswith("./"):
+                folder_path = PROJECT_ROOT / import_folder[2:]
+            elif not os.path.isabs(import_folder):
+                folder_path = PROJECT_ROOT / import_folder
+            else:
+                folder_path = Path(import_folder)
+
+            folder_path.mkdir(parents=True, exist_ok=True)
+            saved_path = folder_path / effective_name
+            with open(saved_path, "w", encoding="utf-8") as f:
+                f.write(ontology_content)
+
+            newest_file = saved_path
+            file_stat = saved_path.stat()
+            ttl_files = [saved_path]
+            logger.info(f"Saved inline ontology to: {saved_path}")
         else:
-            folder_path = Path(import_folder)
+            # Read from import folder (existing behavior)
+            if import_folder.startswith("./"):
+                folder_path = PROJECT_ROOT / import_folder[2:]
+            elif not os.path.isabs(import_folder):
+                folder_path = PROJECT_ROOT / import_folder
+            else:
+                folder_path = Path(import_folder)
 
-        if not folder_path.exists():
-            return {
-                "success": False,
-                "error": f"Import folder not found: {folder_path}",
-                "error_type": "folder_not_found",
-                "suggestion": "Create the folder and add .ttl files, or specify a different path",
-            }
+            if not folder_path.exists():
+                return {
+                    "success": False,
+                    "error": f"Import folder not found: {folder_path}",
+                    "error_type": "folder_not_found",
+                    "suggestion": "Create the folder and add .ttl files, or specify a different path",
+                }
 
-        ttl_files = list(folder_path.glob("*.ttl"))
-        if not ttl_files:
-            return {
-                "success": False,
-                "error": f"No .ttl files found in: {folder_path}",
-                "error_type": "no_files_found",
-                "suggestion": "Add .ttl ontology files to the import folder",
-            }
+            ttl_files = list(folder_path.glob("*.ttl"))
+            if not ttl_files:
+                return {
+                    "success": False,
+                    "error": f"No .ttl files found in: {folder_path}",
+                    "error_type": "no_files_found",
+                    "suggestion": "Add .ttl ontology files to the import folder",
+                }
 
-        ttl_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-        newest_file = ttl_files[0]
+            ttl_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            newest_file = ttl_files[0]
 
-        with open(newest_file, "r", encoding="utf-8") as f:
-            ontology_content = f.read()
+            with open(newest_file, "r", encoding="utf-8") as f:
+                ontology_content = f.read()
+
+            file_stat = newest_file.stat()
 
         graph = Graph()
         try:
@@ -671,7 +810,6 @@ async def load_my_ontology(
         datatype_props = len(list(graph.subjects(RDF.type, OWL.DatatypeProperty)))
         object_props = len(list(graph.subjects(RDF.type, OWL.ObjectProperty)))
 
-        file_stat = newest_file.stat()
         modified_time = datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
 
         session = get_session_data(ctx)
@@ -683,6 +821,13 @@ async def load_my_ontology(
         logger.info(
             f"Ontology contains: {classes_count} classes, {datatype_props} data properties, {object_props} object properties"
         )
+
+        # Check compatibility with connected database
+        compatibility = None
+        if get_session_db_manager:
+            compatibility = _check_ontology_db_compatibility(
+                graph, ctx, get_session_db_manager, session
+            )
 
         # Auto-persist to RDF store
         stored_in_rdf = False
@@ -718,6 +863,7 @@ async def load_my_ontology(
 
         response = {
             "success": True,
+            "source": "chat_upload" if from_chat else "import_folder",
             "file_path": str(newest_file),
             "file_name": newest_file.name,
             "file_size": file_stat.st_size,
@@ -761,6 +907,9 @@ async def load_my_ontology(
                 ],
             }
             response["note"] = "This ontology is now active and will be used instead of auto-generated ontologies"
+
+        if compatibility:
+            response["compatibility"] = compatibility
 
         return response
 

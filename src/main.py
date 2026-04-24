@@ -725,21 +725,31 @@ async def load_my_ontology(
     import_folder: str = "./import",
     auto_persist: bool = True,
     graph_uri: Optional[str] = None,
+    ontology_content: Optional[str] = None,
+    file_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Load the newest .ttl ontology file from the import folder.
+    """Load an ontology in Turtle (.ttl) format.
+
+    Accepts either inline content (e.g. when the user drops a .ttl file into the
+    chat) or reads the newest .ttl file from the import folder.
 
     Args:
-        import_folder: Path to the folder containing .ttl files
+        import_folder: Path to the folder containing .ttl files (used when ontology_content is not provided)
         auto_persist: If True (default), store in Oxigraph RDF database
         graph_uri: Optional custom graph URI for RDF storage
+        ontology_content: Optional TTL content passed directly (e.g. from a file dropped into chat)
+        file_name: Optional original file name when providing ontology_content
 
     Returns:
         Dictionary with ontology information and status
     """
     return await _h_ontology.load_my_ontology(
         ctx, import_folder, auto_persist, graph_uri,
+        ontology_content=ontology_content,
+        file_name=file_name,
         get_session_data=get_session_data,
         get_oxigraph_store=get_oxigraph_store,
+        get_session_db_manager=get_session_db_manager,
     )
 
 
