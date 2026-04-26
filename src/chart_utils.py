@@ -567,10 +567,10 @@ def save_image_to_tmp(
             charts_dir = get_charts_dir(connection_id)
             image_file_path = charts_dir / image_filename
         else:
-            # Legacy fallback to global tmp/ directory
-            tmp_dir = OUTPUT_DIR / "tmp"
-            tmp_dir.mkdir(exist_ok=True)
-            image_file_path = tmp_dir / image_filename
+            # Legacy fallback to global charts directory
+            charts_dir = OUTPUT_DIR / "charts"
+            charts_dir.mkdir(exist_ok=True)
+            image_file_path = charts_dir / image_filename
 
         with open(image_file_path, 'wb') as f:
             f.write(image_bytes)
