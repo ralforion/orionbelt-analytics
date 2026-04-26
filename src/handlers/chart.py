@@ -27,7 +27,7 @@ async def generate_chart(
     sort_by: Optional[str],
     sort_order: Optional[str],
     output_format: str,
-    get_session_data=None,
+    get_session_data,
     add_resource=None,
 ) -> str:
     """Generate interactive or static charts from query results.
@@ -138,8 +138,7 @@ async def generate_chart(
             try:
                 chart_id = str(uuid4())
                 image_bytes = fig.to_image(format="png", width=width, height=height)
-                session = get_session_data(ctx) if get_session_data else None
-                connection_id = session.connection_id if session else None
+                connection_id = get_session_data(ctx).connection_id
                 image_file_path = save_image_to_tmp(
                     image_bytes, chart_id, "png", connection_id=connection_id
                 )
@@ -163,15 +162,13 @@ async def generate_chart(
     if isinstance(result, tuple) and len(result) == 2:
         image_bytes, chart_id = result
 
-        # Get connection_id from session for scoped storage
-        session = get_session_data(ctx) if get_session_data else None
-        connection_id = session.connection_id if session else None
+        connection_id = get_session_data(ctx).connection_id
 
         image_file_path = save_image_to_tmp(
             image_bytes,
             chart_id,
             "png",
-            connection_id=connection_id
+            connection_id=connection_id,
         )
 
         if not image_file_path:
