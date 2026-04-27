@@ -543,34 +543,25 @@ def save_image_to_tmp(
     image_bytes: bytes,
     chart_id: str,
     format: str,
-    connection_id: Optional[str] = None
+    connection_id: str,
 ) -> Optional[str]:
-    """Save image bytes to connection-scoped directory and return file path.
+    """Save image bytes to connection-scoped charts directory and return file path.
 
     Args:
         image_bytes: Image data to save
         chart_id: Unique chart identifier
         format: Image format (e.g., 'png', 'jpg')
         connection_id: Database connection fingerprint for scoping.
-                      If None, uses legacy global tmp/ directory (backward compat).
 
     Returns:
         Path to saved image file, or None on error
     """
-    from .paths import get_charts_dir, OUTPUT_DIR
+    from .paths import get_charts_dir
 
     try:
         image_filename = f"{chart_id}.{format}"
-
-        if connection_id:
-            # Use connection-scoped charts directory (preferred)
-            charts_dir = get_charts_dir(connection_id)
-            image_file_path = charts_dir / image_filename
-        else:
-            # Legacy fallback to global tmp/ directory
-            tmp_dir = OUTPUT_DIR / "tmp"
-            tmp_dir.mkdir(exist_ok=True)
-            image_file_path = tmp_dir / image_filename
+        charts_dir = get_charts_dir(connection_id)
+        image_file_path = charts_dir / image_filename
 
         with open(image_file_path, 'wb') as f:
             f.write(image_bytes)

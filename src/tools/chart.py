@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
 
-from ..chart_utils import create_plotly_chart, save_image_to_tmp
+from ..chart_utils import create_plotly_chart
 
 logger = logging.getLogger(__name__)
 
@@ -197,8 +197,6 @@ def generate_chart(
 
         logger.info(f"Created {chart_type} chart image with {len(df)} data points")
 
-        # Also save to tmp directory for backward compatibility
-        save_image_to_tmp(image_bytes, chart_id, 'png')
         return (image_bytes, chart_id)
 
     except Exception as e:

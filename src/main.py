@@ -469,7 +469,7 @@ class ErrorResponse(BaseModel):
 
 def create_error_response(
     error_msg: str, error_type: str = "unknown", details: Optional[str] = None
-) -> str:
+) -> Dict[str, Any]:
     """Create a standardized error response.
 
     DEPRECATED: Use exceptions from src.exceptions instead.
@@ -479,7 +479,7 @@ def create_error_response(
     use the exception hierarchy in src/exceptions.py.
     """
     response = ErrorResponse(error=error_msg, error_type=error_type, details=details)
-    return response.model_dump_json()
+    return response.model_dump()
 
 
 # --- Oxigraph Store Helper ---
@@ -1096,12 +1096,17 @@ async def query_sparql(
     sparql_query: str,
     timeout_seconds: int = 30,
 ) -> Dict[str, Any]:
-    """Execute SPARQL query against stored ontologies. Supports SELECT, ASK,
-    and CONSTRUCT query types (auto-detected from query string).
+    """Execute a SPARQL query against the RDF ontology store. Use this to explore
+    schema relationships, classes, properties, and semantic metadata loaded via
+    generate_ontology or load_my_ontology. Requires an ontology to be loaded first.
+
+    Supports SELECT, ASK, and CONSTRUCT query types (auto-detected from query string).
+    Common prefixes (rdf, rdfs, owl, xsd) are available by default.
 
     Args:
-        sparql_query: SPARQL query string (SELECT, ASK, or CONSTRUCT)
-        timeout_seconds: Query timeout
+        sparql_query: A complete SPARQL query string (SELECT, ASK, or CONSTRUCT).
+            Example: "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10"
+        timeout_seconds: Query timeout in seconds
 
     Returns:
         Query results (bindings for SELECT, boolean for ASK, Turtle string for CONSTRUCT)
