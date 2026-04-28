@@ -665,6 +665,11 @@ async def suggest_semantic_names(
 ) -> Dict[str, Any]:
     """Extract and analyze names from a generated ontology to identify abbreviations and cryptic names.
 
+    When the connected MCP client supports sampling (and ENABLE_SAMPLING=true),
+    the server pre-fills a ``suggestions`` dict via the host LLM so the next
+    call to ``apply_semantic_names`` can pass them through directly. Otherwise
+    the response contains only the cryptic-name lists for manual review.
+
     Args:
         ontology_file: The ontology filename from generate_ontology response
 

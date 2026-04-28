@@ -16,6 +16,7 @@ from ..lifecycle.metadata import update_workspace_section, update_workspace_rdf
 from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR, PROJECT_ROOT
 from ..constants import OBA_NAMESPACE
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..config import config_manager
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +393,90 @@ To improve ontology for business users:
         return _build_minimal_graph_summary(ontology_ttl)
 
 
+async def _maybe_sample_rename_suggestions(
+    ctx: Context,
+    cryptic_classes: list,
+    cryptic_props_by_table: Dict[str, list],
+    cryptic_relationships: list,
+) -> Optional[Dict[str, str]]:
+    """Ask the host LLM (via MCP sampling) to suggest human-readable names.
+
+    Returns a flat ``{old_local_name: suggested_name}`` mapping, or ``None`` if
+    sampling is disabled, the client doesn't support it, or the call fails —
+    in which case the caller should return the legacy review-then-apply payload.
+    """
+    if not config_manager.get_server_config().enable_sampling:
+        logger.info("MCP sampling disabled (ENABLE_SAMPLING=false) — using legacy review path")
+        return None
+
+    if not (cryptic_classes or cryptic_props_by_table or cryptic_relationships):
+        return {}
+
+    items: list[str] = []
+    for c in cryptic_classes:
+        items.append(f"CLASS  {c}")
+    for table, cols in cryptic_props_by_table.items():
+        for col in cols:
+            items.append(f"PROP   {table}.{col}")
+    for r in cryptic_relationships:
+        items.append(f"REL    {r}")
+
+    logger.info(
+        "MCP sampling: requesting rename suggestions for %d items "
+        "(%d classes, %d properties, %d relationships)",
+        len(items),
+        len(cryptic_classes),
+        sum(len(v) for v in cryptic_props_by_table.values()),
+        len(cryptic_relationships),
+    )
+    started = datetime.now()
+
+    prompt = (
+        "You are normalizing cryptic database identifiers into clear, "
+        "business-friendly names suitable for an ontology.\n\n"
+        "For each item below, return the suggested name as the value, "
+        "keyed by the bare identifier (the part after the type prefix and "
+        "any table qualifier — e.g. for `PROP customer.cust_id` the key is "
+        "`cust_id`). Preserve meaning; expand abbreviations; use "
+        "PascalCase for classes and camelCase for properties/relationships. "
+        "Only include items you are confident about.\n\n"
+        "Items:\n" + "\n".join(items)
+    )
+
+    try:
+        result = await ctx.sample(
+            messages=prompt,
+            system_prompt="Expert in data modeling and ontology design.",
+            temperature=0.2,
+            max_tokens=2000,
+            result_type=Dict[str, str],
+        )
+    except Exception as e:
+        logger.warning(
+            "MCP sampling unavailable or failed after %.2fs (%s: %s) — "
+            "falling back to manual review path",
+            (datetime.now() - started).total_seconds(),
+            type(e).__name__,
+            str(e)[:200],
+        )
+        return None
+
+    elapsed = (datetime.now() - started).total_seconds()
+    suggestions = result.result if hasattr(result, "result") else None
+    if not isinstance(suggestions, dict) or not suggestions:
+        logger.info("MCP sampling returned no usable suggestions (%.2fs)", elapsed)
+        return None
+
+    cleaned = {str(k): str(v) for k, v in suggestions.items() if k and v and str(k) != str(v)}
+    logger.info(
+        "MCP sampling: received %d suggestions in %.2fs (model=%s)",
+        len(cleaned),
+        elapsed,
+        getattr(result, "model", "unknown"),
+    )
+    return cleaned
+
+
 async def suggest_semantic_names(
     ctx: Context,
     ontology_file: Optional[str],
@@ -454,6 +539,34 @@ async def suggest_semantic_names(
             + len(cryptic_relationships)
         )
         summary = extraction_result["summary"]
+
+        sampled_suggestions = await _maybe_sample_rename_suggestions(
+            ctx,
+            cryptic_classes=cryptic_classes,
+            cryptic_props_by_table=cryptic_props_by_table,
+            cryptic_relationships=cryptic_relationships,
+        )
+
+        if sampled_suggestions:
+            await ctx.info(
+                f"Found {total_cryptic} cryptic names; "
+                f"server pre-filled {len(sampled_suggestions)} suggestions via MCP sampling — "
+                f"review and call apply_semantic_names"
+            )
+            return {
+                "ontology_file": source_filename,
+                "summary": summary,
+                "cryptic_classes": cryptic_classes,
+                "cryptic_properties_by_table": cryptic_props_by_table,
+                "cryptic_relationships": cryptic_relationships,
+                "suggestions": sampled_suggestions,
+                "suggestions_source": "mcp_sampling",
+                "next_step": (
+                    "Suggestions were pre-generated via MCP sampling. "
+                    "Pass them to apply_semantic_names (edit any you want to change)."
+                ),
+                "next_tool": "apply_semantic_names",
+            }
 
         await ctx.info(
             f"Found {total_cryptic} cryptic names to review; "
