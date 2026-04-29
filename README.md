@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/ralfbecher-orionbelt-analytics-badge.png)](https://mseep.ai/app/ralfbecher-orionbelt-analytics)
+
 <!-- mcp-name: io.github.ralfbecher/orionbelt-analytics -->
 <p align="center">
   <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-analytics/main/assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
