@@ -399,19 +399,29 @@ async def _maybe_sample_rename_suggestions(
     cryptic_classes: list,
     cryptic_props_by_table: Dict[str, list],
     cryptic_relationships: list,
-) -> Optional[Dict[str, str]]:
-    """Ask the host LLM (via MCP sampling) to suggest human-readable names.
+) -> Optional[Dict[str, Any]]:
+    """Ask the host LLM (via MCP sampling) for ontology-shaped rename suggestions.
 
-    Returns a flat ``{old_local_name: suggested_name}`` mapping, or ``None`` if
-    sampling is disabled, the client doesn't support it, or the call fails —
-    in which case the caller should return the legacy review-then-apply payload.
+    Returns the structured payload that ``apply_semantic_names`` consumes
+    natively::
+
+        {
+          "classes":       [{"original_name", "suggested_name", "description"}],
+          "properties":    [{"original_name", "suggested_name", "description",
+                             "table_name"}],
+          "relationships": [{"original_name", "suggested_name", "description"}],
+        }
+
+    Returns ``None`` if sampling is disabled, the client doesn't support it,
+    or the call fails — caller falls back to the legacy review-then-apply
+    payload.
     """
     if not config_manager.get_server_config().enable_sampling:
         logger.info("MCP sampling disabled (ENABLE_SAMPLING=false) — using legacy review path")
         return None
 
     if not (cryptic_classes or cryptic_props_by_table or cryptic_relationships):
-        return {}
+        return {"classes": [], "properties": [], "relationships": []}
 
     items: list[str] = []
     for c in cryptic_classes:
@@ -432,27 +442,18 @@ async def _maybe_sample_rename_suggestions(
     )
     started = datetime.now()
 
-    prompt = (
-        "You are normalizing cryptic database identifiers into clear, "
-        "business-friendly names suitable for an ontology.\n\n"
-        "For each item below, return the suggested name as the value, "
-        "keyed by the bare identifier (the part after the type prefix and "
-        "any table qualifier — e.g. for `PROP customer.cust_id` the key is "
-        "`cust_id`). Preserve meaning; expand abbreviations; use "
-        "PascalCase for classes and camelCase for properties/relationships. "
-        "Only include items you are confident about.\n\n"
-        "Respond with a single JSON object on its own (no prose, no code "
-        "fences) where each key is the original identifier and each value "
-        "is the suggested human-readable name. Do not wrap the JSON.\n\n"
-        "Items:\n" + "\n".join(items)
-    )
+    prompt = _build_rename_prompt(items)
 
     try:
         result = await ctx.sample(
             messages=prompt,
-            system_prompt="Expert in data modeling and ontology design. Respond with JSON only.",
+            system_prompt=(
+                "You are an expert ontology and information-architecture designer. "
+                "Produce concise, business-friendly OWL labels — not literal "
+                "column names. Respond with one JSON object only."
+            ),
             temperature=0.2,
-            max_tokens=4000,
+            max_tokens=8000,
         )
     except Exception as e:
         logger.warning(
@@ -466,8 +467,14 @@ async def _maybe_sample_rename_suggestions(
 
     elapsed = (datetime.now() - started).total_seconds()
     raw_text = getattr(result, "text", None) or ""
-    suggestions = _parse_rename_json(raw_text)
-    if not suggestions:
+    parsed = _parse_rename_json(raw_text)
+    suggestions = _normalize_structured_suggestions(parsed)
+    total = (
+        len(suggestions.get("classes") or [])
+        + len(suggestions.get("properties") or [])
+        + len(suggestions.get("relationships") or [])
+    )
+    if total == 0:
         logger.info(
             "MCP sampling returned no usable suggestions (%.2fs, %d chars text)",
             elapsed,
@@ -475,26 +482,141 @@ async def _maybe_sample_rename_suggestions(
         )
         return None
 
-    cleaned = {
-        str(k): str(v)
-        for k, v in suggestions.items()
-        if k and v and str(k).strip() != str(v).strip()
-    }
     logger.info(
-        "MCP sampling: received %d suggestions in %.2fs (model=%s)",
-        len(cleaned),
+        "MCP sampling: received %d suggestions (%d classes, %d properties, "
+        "%d relationships) in %.2fs (model=%s)",
+        total,
+        len(suggestions.get("classes") or []),
+        len(suggestions.get("properties") or []),
+        len(suggestions.get("relationships") or []),
         elapsed,
         getattr(result, "model", "unknown"),
     )
-    return cleaned
+    return suggestions
 
 
-def _parse_rename_json(text: str) -> Optional[Dict[str, str]]:
+def _build_rename_prompt(items: list[str]) -> str:
+    """Compose the sampling prompt with concrete naming rules and a worked example."""
+    return (
+        "You are renaming cryptic identifiers in a SQL-derived OWL ontology so "
+        "the resulting labels read like domain language, not table columns.\n\n"
+        "Each PROP item is qualified as `table.column`. The table is the OWL "
+        "class the property belongs to — its name is implicit context, so "
+        "REMOVE redundant prefixes from the property name.\n\n"
+        "Naming rules (apply strictly):\n"
+        "1. CLASSES → singular PascalCase. Example: `clientcomplaints` → "
+        "`ClientComplaint`.\n"
+        "2. PROPERTIES → camelCase, no underscores, no table prefix. "
+        "Examples: `purchases.purchaseamount` → `amount`; "
+        "`sales.salesdate` → `date` (or `placedOn`); "
+        "`clients.clientname` → `name`.\n"
+        "3. FOREIGN-KEY columns become object-property names that READ LIKE THE "
+        "RELATED ENTITY — drop the trailing `Id` and the source-table prefix. "
+        "Examples: `sales.salesclient` → `client`; "
+        "`purchases.purchaseproduct` → `product`; "
+        "`purchases.purchasechanid` → `channel`.\n"
+        "4. PRIMARY-KEY identifiers stay short: `clients.clientid` → `id`.\n"
+        "5. Acronyms remain uppercase: `iban` → `IBAN`, `url` → `URL`, "
+        "`vat` → `VAT`. Trailing identifier suffix is `Id` (camelCase), not `ID`.\n"
+        "6. Date/time columns prefer verb-form participles when context suggests "
+        "an event: `purchasedate` → `placedOn`; `returndate` → `returnedOn`; "
+        "`shipmentdate` → `shippedOn`. Plain time fields stay as-is: "
+        "`createdat` → `createdAt`.\n"
+        "7. Add a one-sentence rdfs:comment-style `description` for every item — "
+        "what the concept means in business terms.\n"
+        "8. If you are not confident about an item, OMIT it (do not invent).\n\n"
+        "Output format — a single JSON object, no prose, no code fences, no "
+        "wrapping. Keys are exactly `classes`, `properties`, `relationships`.\n"
+        "- `classes[i]`        : {original_name, suggested_name, description}\n"
+        "- `properties[i]`     : {original_name, suggested_name, description, "
+        "table_name}\n"
+        "- `relationships[i]`  : {original_name, suggested_name, description}\n"
+        "  `original_name` is the bare identifier (part after the table dot for "
+        "PROP items).\n"
+        "  `table_name` is the table for PROP items — REQUIRED to disambiguate "
+        "columns that share a name across tables.\n\n"
+        "Worked example. Input:\n"
+        "  CLASS  clientcomplaints\n"
+        "  PROP   purchases.purchaseamount\n"
+        "  PROP   purchases.purchasechanid\n"
+        "  PROP   sales.salesclient\n"
+        "  PROP   acctbal.iban\n"
+        "Output:\n"
+        '{"classes":[{"original_name":"clientcomplaints",'
+        '"suggested_name":"ClientComplaint",'
+        '"description":"A complaint filed by a client."}],'
+        '"properties":['
+        '{"original_name":"purchaseamount","suggested_name":"amount",'
+        '"description":"Total monetary amount of the purchase.",'
+        '"table_name":"purchases"},'
+        '{"original_name":"purchasechanid","suggested_name":"channel",'
+        '"description":"Sales channel through which the purchase was placed.",'
+        '"table_name":"purchases"},'
+        '{"original_name":"salesclient","suggested_name":"client",'
+        '"description":"The client who placed the sale.",'
+        '"table_name":"sales"},'
+        '{"original_name":"iban","suggested_name":"IBAN",'
+        '"description":"International Bank Account Number for the account.",'
+        '"table_name":"acctbal"}],'
+        '"relationships":[]}\n\n'
+        "Now produce suggestions for the items below. Items:\n"
+        + "\n".join(items)
+    )
+
+
+def _normalize_structured_suggestions(parsed: Optional[Dict[str, Any]]) -> Dict[str, list]:
+    """Validate and clean a structured suggestions payload.
+
+    Drops items missing required fields, strips suggestions that match the
+    original verbatim, and guarantees the three top-level keys exist.
+    """
+    out: Dict[str, list] = {"classes": [], "properties": [], "relationships": []}
+    if not isinstance(parsed, dict):
+        return out
+
+    def _clean_item(item: Any, *, require_table: bool) -> Optional[Dict[str, str]]:
+        if not isinstance(item, dict):
+            return None
+        original = str(item.get("original_name") or "").strip()
+        suggested = str(item.get("suggested_name") or "").strip()
+        if not original or not suggested or original == suggested:
+            return None
+        cleaned: Dict[str, str] = {
+            "original_name": original,
+            "suggested_name": suggested,
+        }
+        description = item.get("description")
+        if description:
+            cleaned["description"] = str(description).strip()
+        table_name = item.get("table_name")
+        if table_name:
+            cleaned["table_name"] = str(table_name).strip()
+        elif require_table:
+            return None
+        return cleaned
+
+    for item in parsed.get("classes") or []:
+        c = _clean_item(item, require_table=False)
+        if c:
+            out["classes"].append(c)
+    for item in parsed.get("properties") or []:
+        p = _clean_item(item, require_table=True)
+        if p:
+            out["properties"].append(p)
+    for item in parsed.get("relationships") or []:
+        r = _clean_item(item, require_table=False)
+        if r:
+            out["relationships"].append(r)
+
+    return out
+
+
+def _parse_rename_json(text: str) -> Optional[Dict[str, Any]]:
     """Best-effort JSON extraction from a sampling text response.
 
     Handles three common shapes: a bare JSON object, a JSON object inside
     ```json fences, and a JSON object embedded in surrounding prose. Returns
-    a flat str→str dict or None if nothing parses.
+    the parsed dict or None if nothing parses.
     """
     if not text:
         return None
@@ -595,11 +717,15 @@ async def suggest_semantic_names(
             cryptic_relationships=cryptic_relationships,
         )
 
-        if sampled_suggestions:
+        if sampled_suggestions and any(sampled_suggestions.get(k) for k in ("classes", "properties", "relationships")):
+            sampled_total = sum(
+                len(sampled_suggestions.get(k) or [])
+                for k in ("classes", "properties", "relationships")
+            )
             await safe_ctx_info(
                 ctx,
                 f"Found {total_cryptic} cryptic names; "
-                f"server pre-filled {len(sampled_suggestions)} suggestions via MCP sampling — "
+                f"server pre-filled {sampled_total} suggestions via MCP sampling — "
                 f"review and call apply_semantic_names",
             )
             return {
@@ -611,8 +737,10 @@ async def suggest_semantic_names(
                 "suggestions": sampled_suggestions,
                 "suggestions_source": "mcp_sampling",
                 "next_step": (
-                    "Suggestions were pre-generated via MCP sampling. "
-                    "Pass them to apply_semantic_names (edit any you want to change)."
+                    "Suggestions are in apply_semantic_names native format "
+                    "({classes, properties, relationships} arrays). Pass the "
+                    "`suggestions` value through to apply_semantic_names "
+                    "verbatim, or edit individual entries first."
                 ),
                 "next_tool": "apply_semantic_names",
             }
