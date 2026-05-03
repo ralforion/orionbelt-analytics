@@ -17,6 +17,7 @@ from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR, PROJECT_R
 from ..constants import OBA_NAMESPACE
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..config import config_manager
+from ..utils import safe_ctx_info, is_client_disconnect
 
 logger = logging.getLogger(__name__)
 
@@ -548,10 +549,11 @@ async def suggest_semantic_names(
         )
 
         if sampled_suggestions:
-            await ctx.info(
+            await safe_ctx_info(
+                ctx,
                 f"Found {total_cryptic} cryptic names; "
                 f"server pre-filled {len(sampled_suggestions)} suggestions via MCP sampling — "
-                f"review and call apply_semantic_names"
+                f"review and call apply_semantic_names",
             )
             return {
                 "ontology_file": source_filename,
@@ -568,9 +570,10 @@ async def suggest_semantic_names(
                 "next_tool": "apply_semantic_names",
             }
 
-        await ctx.info(
+        await safe_ctx_info(
+            ctx,
             f"Found {total_cryptic} cryptic names to review; "
-            f"next call should be apply_semantic_names with your suggestions"
+            f"next call should be apply_semantic_names with your suggestions",
         )
 
         return {
@@ -584,6 +587,12 @@ async def suggest_semantic_names(
         }
 
     except Exception as e:
+        if is_client_disconnect(e):
+            logger.warning(
+                "MCP client closed the session during suggest_semantic_names; "
+                "skipping error response (transport already closed)"
+            )
+            raise
         logger.error(f"Error extracting names for review: {e}")
         return {
             "error": f"Failed to extract names: {str(e)}",

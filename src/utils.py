@@ -6,6 +6,37 @@ from typing import Any
 from urllib.parse import urlparse
 
 
+async def safe_ctx_info(ctx: Any, message: str) -> None:
+    """Send an MCP info notification without ever propagating transport errors.
+
+    A notification failing (e.g. ``anyio.ClosedResourceError`` because the
+    client already closed the session) must not abort the tool call — the
+    real result still has to flow back through the framework's response path.
+    Logs failures at debug level since they are usually benign client
+    disconnects.
+    """
+    try:
+        await ctx.info(message)
+    except Exception as exc:
+        logging.getLogger(__name__).debug(
+            "ctx.info send failed (%s); continuing", type(exc).__name__
+        )
+
+
+def is_client_disconnect(exc: BaseException) -> bool:
+    """Return True if *exc* indicates the MCP client closed the session.
+
+    Used to short-circuit error-response writes that would themselves fail
+    against a closed transport stream and turn a benign disconnect into a
+    crashed task group.
+    """
+    try:
+        from anyio import ClosedResourceError, BrokenResourceError, EndOfStream
+    except ImportError:
+        return False
+    return isinstance(exc, (ClosedResourceError, BrokenResourceError, EndOfStream))
+
+
 def setup_logging(log_level: str = "INFO", structured: bool = False) -> logging.Logger:
     """
     Setup logging configuration for the application.
