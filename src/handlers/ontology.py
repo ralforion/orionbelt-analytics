@@ -498,32 +498,39 @@ async def _maybe_sample_rename_suggestions(
 def _build_rename_prompt(items: list[str]) -> str:
     """Compose the sampling prompt with concrete naming rules and a worked example."""
     return (
-        "You are renaming cryptic identifiers in a SQL-derived OWL ontology so "
-        "the resulting labels read like domain language, not table columns.\n\n"
+        "You are producing human-readable rdfs:label values for an OWL ontology "
+        "derived from a SQL schema. The URI of each resource is unchanged — "
+        "you are only writing the *display label* a domain user will see in "
+        "Protégé, GraphDB, and OBQC error messages. Labels should read like "
+        "natural language, NOT like code identifiers.\n\n"
         "Each PROP item is qualified as `table.column`. The table is the OWL "
         "class the property belongs to — its name is implicit context, so "
         "REMOVE redundant prefixes from the property name.\n\n"
-        "Naming rules (apply strictly):\n"
-        "1. CLASSES → singular PascalCase. Example: `clientcomplaints` → "
-        "`ClientComplaint`.\n"
-        "2. PROPERTIES → camelCase, no underscores, no table prefix. "
+        "Naming rules (apply strictly and consistently):\n"
+        "1. CLASS labels → Title Case With Spaces, singular noun phrase. "
+        "Examples: `clientcomplaints` → `Client Complaint`; "
+        "`acctbal` → `Account Balance`; `customers` → `Customer`.\n"
+        "2. PROPERTY labels → lowercase with spaces between words. No "
+        "camelCase, no underscores, no table prefix. "
         "Examples: `purchases.purchaseamount` → `amount`; "
-        "`sales.salesdate` → `date` (or `placedOn`); "
-        "`clients.clientname` → `name`.\n"
-        "3. FOREIGN-KEY columns become object-property names that READ LIKE THE "
-        "RELATED ENTITY — drop the trailing `Id` and the source-table prefix. "
-        "Examples: `sales.salesclient` → `client`; "
+        "`products.unitsinstock` → `units in stock`; "
+        "`calendar.publicholiday` → `is public holiday`; "
+        "`sales.salespaymenttype` → `payment type`.\n"
+        "3. FOREIGN-KEY columns become object-property labels naming the "
+        "RELATED ENTITY in lowercase — drop the trailing `id` and any source-"
+        "table prefix. Examples: `sales.salesclient` → `client`; "
         "`purchases.purchaseproduct` → `product`; "
         "`purchases.purchasechanid` → `channel`.\n"
-        "4. PRIMARY-KEY identifiers stay short: `clients.clientid` → `id`.\n"
-        "5. Acronyms remain uppercase: `iban` → `IBAN`, `url` → `URL`, "
-        "`vat` → `VAT`. Trailing identifier suffix is `Id` (camelCase), not `ID`.\n"
-        "6. Date/time columns prefer verb-form participles when context suggests "
-        "an event: `purchasedate` → `placedOn`; `returndate` → `returnedOn`; "
-        "`shipmentdate` → `shippedOn`. Plain time fields stay as-is: "
-        "`createdat` → `createdAt`.\n"
-        "7. Add a one-sentence rdfs:comment-style `description` for every item — "
-        "what the concept means in business terms.\n"
+        "4. PRIMARY-KEY identifiers collapse to `id`: "
+        "`clients.clientid` → `id`.\n"
+        "5. Acronyms stay UPPERCASE inside the label: `iban` → `IBAN`, "
+        "`url` → `URL`, `vat` → `VAT`, `eu_id` → `EU id`.\n"
+        "6. Date/time columns prefer participle phrases when context suggests "
+        "an event: `purchasedate` → `placed on`; `returndate` → `returned on`; "
+        "`shipmentdate` → `shipped on`. Plain timestamps stay descriptive: "
+        "`createdat` → `created at`.\n"
+        "7. Add a one-sentence `description` (intended for `rdfs:comment`) for "
+        "every item — what the concept means in business terms.\n"
         "8. If you are not confident about an item, OMIT it (do not invent).\n\n"
         "Output format — a single JSON object, no prose, no code fences, no "
         "wrapping. Keys are exactly `classes`, `properties`, `relationships`.\n"
@@ -537,14 +544,21 @@ def _build_rename_prompt(items: list[str]) -> str:
         "columns that share a name across tables.\n\n"
         "Worked example. Input:\n"
         "  CLASS  clientcomplaints\n"
+        "  CLASS  acctbal\n"
         "  PROP   purchases.purchaseamount\n"
         "  PROP   purchases.purchasechanid\n"
+        "  PROP   purchases.purchasedate\n"
         "  PROP   sales.salesclient\n"
+        "  PROP   sales.salespaymenttype\n"
+        "  PROP   products.unitsinstock\n"
+        "  PROP   calendar.publicholiday\n"
         "  PROP   acctbal.iban\n"
         "Output:\n"
-        '{"classes":[{"original_name":"clientcomplaints",'
-        '"suggested_name":"ClientComplaint",'
-        '"description":"A complaint filed by a client."}],'
+        '{"classes":['
+        '{"original_name":"clientcomplaints","suggested_name":"Client Complaint",'
+        '"description":"A complaint filed by a client."},'
+        '{"original_name":"acctbal","suggested_name":"Account Balance",'
+        '"description":"A record of the financial balance for an account."}],'
         '"properties":['
         '{"original_name":"purchaseamount","suggested_name":"amount",'
         '"description":"Total monetary amount of the purchase.",'
@@ -552,9 +566,21 @@ def _build_rename_prompt(items: list[str]) -> str:
         '{"original_name":"purchasechanid","suggested_name":"channel",'
         '"description":"Sales channel through which the purchase was placed.",'
         '"table_name":"purchases"},'
+        '{"original_name":"purchasedate","suggested_name":"placed on",'
+        '"description":"Date the purchase was placed.",'
+        '"table_name":"purchases"},'
         '{"original_name":"salesclient","suggested_name":"client",'
         '"description":"The client who placed the sale.",'
         '"table_name":"sales"},'
+        '{"original_name":"salespaymenttype","suggested_name":"payment type",'
+        '"description":"Method of payment used for the sale.",'
+        '"table_name":"sales"},'
+        '{"original_name":"unitsinstock","suggested_name":"units in stock",'
+        '"description":"Number of units currently held in inventory.",'
+        '"table_name":"products"},'
+        '{"original_name":"publicholiday","suggested_name":"is public holiday",'
+        '"description":"Whether the calendar date falls on a public holiday.",'
+        '"table_name":"calendar"},'
         '{"original_name":"iban","suggested_name":"IBAN",'
         '"description":"International Bank Account Number for the account.",'
         '"table_name":"acctbal"}],'
