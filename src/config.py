@@ -30,6 +30,7 @@ class ServerConfig:
     session_idle_timeout: int = DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS
     session_scan_interval: int = DEFAULT_SESSION_SCAN_INTERVAL_SECONDS
     chart_return_binary: bool = False
+    enable_sampling: bool = True
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -110,6 +111,7 @@ class ConfigManager:
                     str(DEFAULT_SESSION_SCAN_INTERVAL_SECONDS),
                 )),
                 chart_return_binary=os.getenv("CHART_RETURN_BINARY", "false").lower() == "true",
+                enable_sampling=os.getenv("ENABLE_SAMPLING", "true").lower() == "true",
             )
             logger.info("Server configuration loaded")
         return self._server_config

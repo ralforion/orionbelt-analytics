@@ -49,6 +49,7 @@ Run Analytics and Semantic Layer side-by-side in Claude Desktop for schema-aware
 - **Interactive charting** -- Plotly charts with MCP-UI rendering in Claude Desktop
 - **Multi-schema support** -- analyze multiple schemas simultaneously; ontology and GraphRAG state are isolated per schema
 - **Workspace persistence** -- reconnect to the same database and restore your previous session
+- **MCP sampling** -- when the connected client supports sampling (e.g. [OrionBelt Chat](https://github.com/ralfbecher/orionbelt-chat)), `suggest_semantic_names` asks the host LLM to pre-fill rename suggestions for cryptic identifiers via `sampling/createMessage`, collapsing the previous review-then-apply flow into a single tool call. Clients without sampling support (e.g. Claude Desktop) silently fall back to the manual review path
 
 ## OBQC -- Ontology-Based Query Check
 
