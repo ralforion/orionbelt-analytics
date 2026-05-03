@@ -22,6 +22,20 @@ resource, and prompt without manual registration.
 
 Complete, runnable examples with READMEs live in the [`integrations/`](../integrations/) folder.
 
+### MCP Sampling
+
+A subset of clients support [MCP sampling](https://modelcontextprotocol.io/specification/server/utilities/sampling) -- the server-initiated `sampling/createMessage` flow that lets a tool call back through the host LLM mid-execution. OrionBelt Analytics uses this in `suggest_semantic_names` to pre-fill rename suggestions for cryptic identifiers, collapsing the previous review-then-apply workflow into a single tool call.
+
+| Client | Sampling | Notes |
+|---|---|---|
+| **OrionBelt Chat** | Yes | Advertises `sampling.tools`; routes sampling requests to the env-configured default model |
+| Claude Desktop | No | Falls back silently to the manual-review response shape |
+| Claude Code | No | Same fallback |
+| Pydantic-AI agents | If wired | Call `agent.set_mcp_sampling_model()` (or pass `sampling_model=` to each MCP server) to expose the agent's LLM to sampling callbacks |
+| Other frameworks | Depends | Sampling is opt-in per host; check the framework's MCP client docs |
+
+Set `ENABLE_SAMPLING=false` in OrionBelt Analytics' `.env` to disable the sampling path globally regardless of client support. See [Configuration](./configuration.md#mcp-sampling) for details.
+
 ## Quick Start Examples
 
 ### LangChain / LangGraph

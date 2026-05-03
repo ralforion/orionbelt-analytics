@@ -5,6 +5,18 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **MCP sampling for `suggest_semantic_names`** -- when the connected client advertises the sampling capability, the server now calls back through the host LLM via `ctx.sample()` to pre-fill rename suggestions for cryptic identifiers, returning a `suggestions` dict alongside the cryptic-name lists in a single tool call.
+  - Gated on a new `ENABLE_SAMPLING` env flag (default `true`). Set to `false` to force the legacy manual-review path everywhere.
+  - Clients without sampling support (e.g. Claude Desktop) silently fall back to the legacy response shape — no breaking change.
+  - Sampling requests, results, and failures are logged with elapsed time and item counts for observability.
+
+### Fixed
+- **MCP session crash on client disconnect during `suggest_semantic_names`** -- a notification (`ctx.info`) write that hit `anyio.ClosedResourceError` because the client had already closed the streamable-HTTP session was caught by the handler's outer `except` and triggered a second doomed write, bringing down the entire FastMCP TaskGroup. Notifications are now sent through `safe_ctx_info` (failures swallowed at debug level), and `ClosedResourceError`-class disconnects re-raise cleanly so the framework tears the session down instead of writing into a dead transport.
+- **Sampling response parsing** -- replaced pydantic-ai's `result_type=Dict[str, str]` (which forces the model to call an injected `final_response` tool, fragile on large responses) with explicit JSON parsing that accepts bare JSON, ```json fences, and prose-embedded JSON.
+
 ## [1.2.0] - 2026-04-05
 
 ### Changed

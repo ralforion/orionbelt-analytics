@@ -53,6 +53,15 @@ ONTOLOGY_MAX_AGE_DAYS=60          # Delete versions older than 60 days
 # Options: false (default), true (retention-based), all (remove everything)
 AUTO_CLEANUP_ON_STARTUP=false
 
+# MCP Sampling
+# ------------
+# Allow the server to call back through the client's LLM (MCP sampling) for
+# tasks like generating semantic-rename suggestions inside suggest_semantic_names.
+# Requires a sampling-capable client (e.g. OrionBelt Chat). Clients without
+# sampling support (e.g. Claude Desktop) silently fall back to the legacy
+# manual-review path. Set to false to force the legacy path everywhere.
+ENABLE_SAMPLING=true
+
 # MCP Transport Configuration
 # Options: http, sse (Server-Sent Events)
 # - http: Standard HTTP transport (streamable, default)
@@ -217,6 +226,29 @@ DATABRICKS_SCHEMA=default
 - **Version control**: Never commit `.env` -- add it to `.gitignore`.
 - **Production**: Consider using environment variables directly, or a secrets management service (AWS Secrets Manager, Azure Key Vault, HashiCorp Vault).
 - **Credential rotation**: Implement rotation policies for database passwords and API tokens.
+
+---
+
+## MCP Sampling
+
+`ENABLE_SAMPLING` (default `true`) controls whether the server is allowed to call back through the client's LLM via the MCP `sampling/createMessage` capability.
+
+**Where it is used:** `suggest_semantic_names`. When sampling is available, the server asks the host LLM to produce rename suggestions for cryptic identifiers and returns them as a `suggestions: {old_name: new_name}` map alongside the existing cryptic-name lists. Without sampling, the response shape is unchanged: the host LLM is expected to inspect the cryptic lists and call `apply_semantic_names` with its own suggestions.
+
+**Capability detection is implicit.** The server attempts `ctx.sample(...)` and falls back to the legacy path on any failure — including the case where the client never advertised the capability. There is no separate handshake to configure.
+
+**Client compatibility:**
+
+| Client | Sampling support | Behaviour |
+|---|---|---|
+| OrionBelt Chat | Yes (with `sampling.tools`) | `suggestions` field is populated; one tool call instead of two |
+| Claude Desktop | No | Falls back silently to manual review path |
+| Claude Code | No | Falls back silently to manual review path |
+| Generic pydantic-ai clients | Depends on agent wiring | Works when `agent.set_mcp_sampling_model()` (or equivalent) is called |
+
+**Disabling:** set `ENABLE_SAMPLING=false` to force the legacy path even when the client supports sampling. Useful for cost control, deterministic regression testing, or when a particular host LLM produces poor rename suggestions.
+
+**Logging:** sampling activity is logged at INFO/WARNING with elapsed time and item counts -- look for lines starting with `MCP sampling:` in the server log to verify the path the request took.
 
 ---
 
