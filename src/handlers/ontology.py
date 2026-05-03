@@ -441,16 +441,18 @@ async def _maybe_sample_rename_suggestions(
         "`cust_id`). Preserve meaning; expand abbreviations; use "
         "PascalCase for classes and camelCase for properties/relationships. "
         "Only include items you are confident about.\n\n"
+        "Respond with a single JSON object on its own (no prose, no code "
+        "fences) where each key is the original identifier and each value "
+        "is the suggested human-readable name. Do not wrap the JSON.\n\n"
         "Items:\n" + "\n".join(items)
     )
 
     try:
         result = await ctx.sample(
             messages=prompt,
-            system_prompt="Expert in data modeling and ontology design.",
+            system_prompt="Expert in data modeling and ontology design. Respond with JSON only.",
             temperature=0.2,
-            max_tokens=2000,
-            result_type=Dict[str, str],
+            max_tokens=4000,
         )
     except Exception as e:
         logger.warning(
@@ -463,12 +465,21 @@ async def _maybe_sample_rename_suggestions(
         return None
 
     elapsed = (datetime.now() - started).total_seconds()
-    suggestions = result.result if hasattr(result, "result") else None
-    if not isinstance(suggestions, dict) or not suggestions:
-        logger.info("MCP sampling returned no usable suggestions (%.2fs)", elapsed)
+    raw_text = getattr(result, "text", None) or ""
+    suggestions = _parse_rename_json(raw_text)
+    if not suggestions:
+        logger.info(
+            "MCP sampling returned no usable suggestions (%.2fs, %d chars text)",
+            elapsed,
+            len(raw_text),
+        )
         return None
 
-    cleaned = {str(k): str(v) for k, v in suggestions.items() if k and v and str(k) != str(v)}
+    cleaned = {
+        str(k): str(v)
+        for k, v in suggestions.items()
+        if k and v and str(k).strip() != str(v).strip()
+    }
     logger.info(
         "MCP sampling: received %d suggestions in %.2fs (model=%s)",
         len(cleaned),
@@ -476,6 +487,42 @@ async def _maybe_sample_rename_suggestions(
         getattr(result, "model", "unknown"),
     )
     return cleaned
+
+
+def _parse_rename_json(text: str) -> Optional[Dict[str, str]]:
+    """Best-effort JSON extraction from a sampling text response.
+
+    Handles three common shapes: a bare JSON object, a JSON object inside
+    ```json fences, and a JSON object embedded in surrounding prose. Returns
+    a flat str→str dict or None if nothing parses.
+    """
+    if not text:
+        return None
+
+    candidates: list[str] = []
+
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        candidates.append(stripped)
+
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        candidates.append(fence_match.group(1))
+
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        candidates.append(text[first_brace : last_brace + 1])
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+
+    return None
 
 
 async def suggest_semantic_names(
