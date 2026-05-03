@@ -5,7 +5,7 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.5.0] - 2026-05-03
 
 ### Added
 - **MCP sampling for `suggest_semantic_names`** -- when the connected client advertises the sampling capability, the server now calls back through the host LLM via `ctx.sample()` to pre-fill rename suggestions for cryptic identifiers, returning a `suggestions` dict alongside the cryptic-name lists in a single tool call.
