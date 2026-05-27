@@ -46,13 +46,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Runtime libs:
 # - libpq5: psycopg2-binary runtime
 # - chromium + fonts: required by kaleido>=1.0 for Plotly static image export
-# - curl: container healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         chromium \
         fonts-liberation \
         fonts-dejavu-core \
-        curl \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -75,8 +73,8 @@ VOLUME ["/data"]
 EXPOSE 9000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${MCP_SERVER_PORT}/mcp" -o /dev/null \
-        || curl -fsS "http://127.0.0.1:${MCP_SERVER_PORT}/sse" -o /dev/null \
+    CMD python -c "import os,socket,sys; s=socket.socket(); s.settimeout(3); \
+s.connect(('127.0.0.1', int(os.environ.get('MCP_SERVER_PORT','9000')))); s.close()" \
         || exit 1
 
 CMD ["python", "server.py"]
