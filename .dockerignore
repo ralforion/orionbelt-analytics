@@ -1,0 +1,54 @@
+# Git / VCS
+.git
+.gitignore
+.gitattributes
+
+# Local secrets / env (mount these at runtime instead)
+.env
+.env.local
+*.pem
+*.key
+
+# Python build / cache artifacts
+__pycache__
+*.py[oc]
+*.egg-info
+build/
+dist/
+wheels/
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+.tox
+
+# Virtual environments
+.venv
+venv
+env
+
+# IDE / editor
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Local project state that shouldn't be baked in
+tmp/
+import/
+blog/
+design/
+review*
+CLAUDE.md
+.claude/
+.mcpregistry_github_token
+.mcpregistry_registry_token
+
+# Tests & docs not needed at runtime
+tests/
+docs/
+
+# Docker meta
+Dockerfile
+.dockerignore
