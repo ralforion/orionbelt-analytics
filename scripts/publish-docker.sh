@@ -2,8 +2,8 @@
 # Build and push the OrionBelt Analytics Docker image to Docker Hub.
 #
 # Prerequisites:
-#   1. Log in once:           docker login -u ralforion
-#   2. A multi-arch builder:  docker buildx create --use --name oba-builder  (first time only)
+#   1. Export a Docker Hub PAT: export DOCKERHUB_RALFORION_PAT=...
+#   2. A multi-arch builder:    docker buildx create --use --name oba-builder  (first time only)
 #
 # Usage:
 #   ./scripts/publish-docker.sh              # tags :<version> and :latest
@@ -15,9 +15,17 @@ set -euo pipefail
 
 IMAGE="${IMAGE:-ralforion/orionbelt-analytics}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
+DOCKERHUB_USER="${DOCKERHUB_USER:-ralforion}"
+
+if [[ -z "${DOCKERHUB_RALFORION_PAT:-}" ]]; then
+    echo "error: DOCKERHUB_RALFORION_PAT is not set" >&2
+    exit 1
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${REPO_ROOT}"
+
+echo "${DOCKERHUB_RALFORION_PAT}" | docker login -u "${DOCKERHUB_USER}" --password-stdin
 
 VERSION="$(grep -E '^__version__' src/__init__.py | sed -E 's/.*"([^"]+)".*/\1/')"
 if [[ -z "${VERSION}" ]]; then
