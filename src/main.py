@@ -60,6 +60,7 @@ ensure_output_dir()
 
 mcp = FastMCP(
     name=SERVER_NAME,
+    version=__version__,
     instructions="""
 # OrionBelt Analytics - AI-Powered Database Intelligence
 
