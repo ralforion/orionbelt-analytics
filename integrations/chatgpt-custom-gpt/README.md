@@ -91,7 +91,6 @@ If using Option 1 (bridge):
 | `graphrag_search` | Vector search across schema elements |
 | `graphrag_find_join_path` | Find join paths between tables |
 | `query_sparql` | Run SPARQL queries on the RDF store |
-| `get_server_info` | Server version and capabilities |
 
 ## Notes
 

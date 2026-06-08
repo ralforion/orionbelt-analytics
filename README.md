@@ -7,7 +7,7 @@
 
 <p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
 
-[![Version 1.5.1](https://img.shields.io/badge/version-1.5.1-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
+[![Version 1.5.2](https://img.shields.io/badge/version-1.5.2-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
 [![FastMCP](https://img.shields.io/badge/FastMCP-3.3.1+-blue)](https://github.com/jlowin/fastmcp)
@@ -204,12 +204,6 @@ OrionBelt exposes 32 MCP tools. Here is a summary by category:
 | `save_semantic_model` | Save a semantic model (e.g., OBML YAML) to the workspace |
 | `get_semantic_model` | Retrieve a stored semantic model by name |
 | `list_semantic_models` | List all stored semantic models for the current connection |
-
-### System
-
-| Tool | Description |
-|------|-------------|
-| `get_server_info` | Server version, features, and configuration |
 
 For full parameter details, return values, and examples, see [docs/tools-reference.md](docs/tools-reference.md).
 

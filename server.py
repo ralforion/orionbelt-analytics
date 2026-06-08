@@ -87,9 +87,6 @@ def print_startup_info():
             "get_semantic_model - Retrieve a stored semantic model",
             "list_semantic_models - List all stored semantic models",
         ],
-        "System": [
-            "get_server_info - Server version, features, and config",
-        ],
     }
     for group, tools in tool_groups.items():
         logger.info(f"  [{group}]")

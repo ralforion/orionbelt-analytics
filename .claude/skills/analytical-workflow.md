@@ -722,7 +722,6 @@ Ontology state is isolated per schema — switching schemas does not destroy the
 |------|---------|
 | `validate_sql_syntax()` | Validate before execution |
 | `diagnose_connection_issue()` | Troubleshoot connections |
-| `get_server_info()` | Server status and config |
 
 ---
 

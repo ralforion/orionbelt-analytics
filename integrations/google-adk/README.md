@@ -93,7 +93,6 @@ All MCP tools are automatically available. Key tools include:
 | `graphrag_search` | Vector search across schema elements |
 | `graphrag_find_join_path` | Find join paths between tables |
 | `query_sparql` | Run SPARQL queries on the RDF store |
-| `get_server_info` | Server version and capabilities |
 
 ## Stdio Transport
 

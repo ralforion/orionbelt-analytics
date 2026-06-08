@@ -64,62 +64,36 @@ mcp = FastMCP(
     instructions="""
 # OrionBelt Analytics - AI-Powered Database Intelligence
 
-Semantic database analysis with ontology-enhanced Text-to-SQL generation.
+Semantic database analysis with ontology-enhanced Text-to-SQL over 8 databases:
+PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks.
 
-## Core Capabilities
+## Capabilities
 
-- **Database Connectivity:** PostgreSQL, Snowflake, Dremio, ClickHouse, BigQuery, DuckDB, Databricks, MySQL
-- **Schema Intelligence:** Table/column analysis with relationship mapping
-- **Ontology Generation:** RDF/OWL with oba: namespace linking to SQL tables
-- **Safe SQL Execution:** Fan-trap detection, injection prevention, query validation
-- **Data Visualization:** Interactive charts (Matplotlib, Plotly)
+- **Schema Intelligence** - table/column analysis with relationship mapping
+- **Ontology Generation** - RDF/OWL with the `oba:` namespace linking classes to SQL tables; auto JOIN conditions from relationships; load custom ontologies and emit R2RML
+- **GraphRAG** - semantic schema discovery and join-path traversal
+- **Persistent RDF Store** - Oxigraph-backed SPARQL 1.1 over generated ontologies
+- **Safe SQL** - read-only enforcement, injection prevention, fan-trap detection, timeouts, max 5,000 rows
+- **Visualization** - interactive Plotly/Matplotlib charts
 
 ## Recommended Workflow
 
-1. `connect_database()` -> Establish secure connection
-2. `list_schemas()` -> Discover available schemas
-3. `discover_schema()` -> Get schema structure with relationships
-4. `generate_ontology()` -> Create semantic ontology with oba: annotations
-5. `execute_sql_query()` -> Run validated SQL with fan-trap protection
-6. `generate_chart()` -> Visualize results
+`connect_database()` -> `list_schemas()` -> `discover_schema()` ->
+`generate_ontology()` -> `execute_sql_query()` -> `generate_chart()`
 
 ## Critical Guides (Claude Skills)
 
-- **Fan-trap prevention:** `/fan-trap-prevention` - Prevent data multiplication in multi-table queries
-- **SQL best practices:** `/sql-best-practices` - Identifier qualification and safe patterns
-- **Chart examples:** `/chart-examples` - Visualization guide for all chart types
-
-## Key Features
-
-**Ontology-Enhanced SQL:**
-- oba: namespace annotations link ontology classes to SQL tables
-- Automatic JOIN condition generation from relationships
-- Business-friendly semantic layer over technical schemas
-
-**Security:**
-- SQL injection prevention
-- Read-only enforcement
-- Query timeout protection
-- Result size limits (max 5,000 rows)
-
-**Performance:**
-- Connection pooling
-- Parallel schema analysis
-- Cached ontology and schema data
+- `/fan-trap-prevention` - prevent data multiplication in multi-table queries
+- `/sql-best-practices` - identifier qualification and safe patterns
+- `/chart-examples` - visualization guide for all chart types
 
 ## Important Notes
 
 - Always fully qualify identifiers: `schema.table.column`
-- Review foreign_keys from discover_schema() before complex JOINs
-- execute_sql_query() includes built-in syntax, security, and OBQC validation
-- For multi-fact aggregation, use UNION ALL pattern (see /fan-trap-prevention)
-
-Version: {__version__}
-Supported Databases: PostgreSQL, Snowflake, Dremio, ClickHouse, BigQuery, DuckDB, Databricks, MySQL
-Primary Use Case: Semantic database analysis with ontology-enhanced Text-to-SQL
-""".format(
-        __version__=__version__
-    ),
+- Review `foreign_keys` from `discover_schema()` before complex JOINs
+- `execute_sql_query()` runs built-in syntax, security, and OBQC validation
+- For multi-fact aggregation, use the UNION ALL pattern (see `/fan-trap-prevention`)
+""",
 )
 
 
@@ -521,7 +495,6 @@ from .handlers import chart as _h_chart
 from .handlers import rdf as _h_rdf
 from .handlers import graphrag as _h_graphrag
 from .handlers import workspace as _h_workspace
-from .handlers import info as _h_info
 
 
 # ============================================================
@@ -864,8 +837,6 @@ async def generate_chart(
     color_column: Optional[str] = None,
     title: Optional[str] = None,
     chart_style: str = "grouped",
-    width: int = 800,
-    height: int = 600,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
     output_format: str = "interactive",
@@ -876,19 +847,17 @@ async def generate_chart(
         data_source: JSON array of objects, e.g. [{"name": "A", "value": 10}, ...] — pass as array, not string
         chart_type: 'bar', 'line', 'scatter', or 'heatmap'
         x_column: Column name for X-axis
-        y_column: Column name(s) for Y-axis. Pass a single string or a list of strings. Multiple y_columns are supported for bar charts (grouped/stacked) and line charts.
+        y_column: Column name(s) for Y-axis — a string, or a list for multi-series bar/line charts
         color_column: Optional column for grouping/coloring (heatmap: numeric value column for color intensity)
-        title: Chart title
-        chart_style: 'default', 'stacked', or 'grouped' — applies to bar charts including multi-y
-        width: Chart width in pixels
-        height: Chart height in pixels
-        sort_by: Column to sort by
+        title: Chart title (auto-generated if omitted)
+        chart_style: 'grouped' or 'stacked' — bar charts only
+        sort_by: Column to sort by (auto-sorted per chart type if omitted)
         sort_order: 'ascending' or 'descending'
-        output_format: "interactive" (default, renders via MCP Apps) or "image" (saves PNG file)
+        output_format: "interactive" (default, responsive MCP Apps widget) or "image" (saves PNG file)
     """
     return await _h_chart.generate_chart(
         ctx, data_source, chart_type, x_column, y_column,
-        color_column, title, chart_style, width, height,
+        color_column, title, chart_style,
         sort_by, sort_order, output_format,
         get_session_data=get_session_data,
         add_resource=mcp.add_resource,
@@ -971,16 +940,6 @@ async def list_semantic_models(ctx: Context) -> Dict[str, Any]:
         get_session_data=get_session_data,
         create_error_response=create_error_response,
     )
-
-
-@mcp.tool()
-async def get_server_info(ctx: Context) -> Dict[str, Any]:
-    """Get information about the MCP server and its capabilities.
-
-    Returns:
-        Dictionary containing server information
-    """
-    return await _h_info.get_server_info(ctx)
 
 
 # --- GraphRAG Tools ---
