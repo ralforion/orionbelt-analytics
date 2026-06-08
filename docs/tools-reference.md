@@ -381,10 +381,8 @@ Generate interactive Plotly charts rendered via MCP Apps, or export as static PN
 | `y_column` | string or array | No | None | Column name(s) for the Y-axis. Pass an array for multi-series charts. |
 | `color_column` | string | No | None | Column for grouping/coloring. For heatmaps: the numeric value column for color intensity. |
 | `title` | string | No | None | Chart title |
-| `chart_style` | string | No | `"grouped"` | Layout style: `default`, `stacked`, or `grouped` |
-| `width` | integer | No | `800` | Chart width in pixels |
-| `height` | integer | No | `600` | Chart height in pixels |
-| `sort_by` | string | No | None | Column to sort by |
+| `chart_style` | string | No | `"grouped"` | Layout style for bar charts: `stacked` or `grouped` |
+| `sort_by` | string | No | None | Column to sort by (auto-sorted per chart type if omitted) |
 | `sort_order` | string | No | None | Sort direction: `ascending` or `descending` |
 | `output_format` | string | No | `"interactive"` | `"interactive"` (renders via MCP Apps) or `"image"` (saves PNG file) |
 
@@ -393,8 +391,8 @@ Generate interactive Plotly charts rendered via MCP Apps, or export as static PN
 - Image mode: `"Chart saved to: <file_path>"` -- path to the saved PNG file
 
 **Key Features:**
-- Interactive charts are rendered via FastMCP Apps as self-contained HTML with Plotly.js
-- PNG export uses Kaleido for server-side rendering
+- Interactive charts are rendered via FastMCP Apps as self-contained HTML with Plotly.js; they are responsive and size to their container (no width/height parameters)
+- PNG export uses Kaleido for server-side rendering at a fixed 800x600
 - Supports multi-series Y-axis by passing an array of column names
 - Heatmap charts use `x_column` for X-axis, `y_column` for Y-axis, and `color_column` for cell values
 - Heatmap axes are sorted by ordinal order for weekdays and time-of-day categories
@@ -466,26 +464,9 @@ List all stored semantic models for the current database connection.
 
 **Returns:** Dictionary with `models` array (each entry has `model_name`, `schema_name`, `saved_at`) and `count`.
 
----
-
-### 18. get_server_info
-
-Retrieve server metadata, capabilities, and the full list of available tools.
-
-**Parameters:** None
-
-**Returns:** Dictionary containing:
-- `name` -- server name
-- `version` -- server version
-- `description` -- server description
-- `supported_databases` -- array of supported database types
-- `features` -- array of feature descriptions
-- `tools` -- array of all registered tool names
-- `next_tool` -- suggests `connect_database` as the starting point
-
-**Key Features:**
-- Good starting point for clients to discover server capabilities
-- Lists all supported databases and tools in a single response
+> **Note:** Server metadata (name, version, supported databases, capabilities) is provided
+> automatically via the MCP `initialize` handshake and the server `instructions`, and the live
+> tool list via `tools/list` -- so no dedicated `get_server_info` tool is needed.
 
 ---
 

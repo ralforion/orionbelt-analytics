@@ -12,6 +12,11 @@ from ..config import config_manager
 
 logger = logging.getLogger(__name__)
 
+# Static PNG export dimensions. Interactive charts are responsive (autosize) and
+# ignore these; they only size the PNG fallback/export.
+PNG_WIDTH = 800
+PNG_HEIGHT = 600
+
 
 async def generate_chart(
     ctx: Context,
@@ -22,8 +27,6 @@ async def generate_chart(
     color_column: Optional[str],
     title: Optional[str],
     chart_style: str,
-    width: int,
-    height: int,
     sort_by: Optional[str],
     sort_order: Optional[str],
     output_format: str,
@@ -82,8 +85,8 @@ async def generate_chart(
         color_column,
         title,
         chart_style,
-        width,
-        height,
+        PNG_WIDTH,
+        PNG_HEIGHT,
         sort_by,
         sort_order,
         output_format=output_format,
@@ -137,7 +140,7 @@ async def generate_chart(
             file_uri = ""
             try:
                 chart_id = str(uuid4())
-                image_bytes = fig.to_image(format="png", width=width, height=height)
+                image_bytes = fig.to_image(format="png", width=PNG_WIDTH, height=PNG_HEIGHT)
                 connection_id = get_session_data(ctx).connection_id
                 image_file_path = save_image_to_tmp(
                     image_bytes, chart_id, "png", connection_id=connection_id

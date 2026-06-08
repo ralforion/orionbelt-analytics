@@ -168,8 +168,7 @@ class TestPhase1TokenReduction:
             "load_my_ontology",
             "sample_table_data",
             "execute_sql_query",
-            "generate_chart",
-            "get_server_info"
+            "generate_chart"
         ]
 
         for tool in expected_tools:

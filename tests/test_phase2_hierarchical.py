@@ -143,8 +143,7 @@ class TestPhase2FunctionalityPreserved:
             "sample_table_data",
             "execute_sql_query",
             "generate_chart",
-            "cleanup_workspace",
-            "get_server_info"
+            "cleanup_workspace"
         ]
 
         for tool in expected_tools:

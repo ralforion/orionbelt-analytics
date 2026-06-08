@@ -205,12 +205,6 @@ OrionBelt exposes 32 MCP tools. Here is a summary by category:
 | `get_semantic_model` | Retrieve a stored semantic model by name |
 | `list_semantic_models` | List all stored semantic models for the current connection |
 
-### System
-
-| Tool | Description |
-|------|-------------|
-| `get_server_info` | Server version, features, and configuration |
-
 For full parameter details, return values, and examples, see [docs/tools-reference.md](docs/tools-reference.md).
 
 ## Typical Workflows
