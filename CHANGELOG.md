@@ -5,6 +5,15 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-06-08
+
+### Removed
+- **`get_server_info` MCP tool** -- removed as redundant. Server metadata (name, version, supported databases, capabilities) is already provided via the MCP `initialize` handshake and the server `instructions`, and the live tool list via `tools/list`. The genuinely-unique capability descriptions were folded into the server instructions.
+
+### Changed
+- **Condensed server `instructions`** (~58 -> ~30 lines) -- dropped the duplicated database list and `Version:` footer (already supplied via `FastMCP(version=...)`), merged overlapping capability sections.
+- **Slimmed `generate_chart`** from 13 to 11 parameters -- removed `width`/`height`. Interactive charts are responsive and size to their container; static PNG export now uses fixed 800x600 constants. Docstring condensed.
+
 ## [1.5.1] - 2026-06-06
 
 ### Fixed
