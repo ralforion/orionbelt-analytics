@@ -1,20 +1,14 @@
 """Tests for OBQC (Ontology-Based Query Check) validator."""
 
-import pytest
 import unittest
 from rdflib import Graph, Namespace, Literal
 from rdflib.namespace import RDF, RDFS, OWL, XSD
 
 from src.obqc_validator import (
     OBQCValidator,
-    OBQCResult,
     OBQCIssue,
     OBQCIssueType,
     OBQCSeverity,
-    OntologySchema,
-    TableSchema,
-    ColumnSchema,
-    RelationshipInfo,
 )
 
 

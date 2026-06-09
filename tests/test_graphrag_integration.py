@@ -6,7 +6,6 @@ Tests all components: embedder, vector store, retriever, community detector, and
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
 from pathlib import Path
 import sys
 import numpy as np
@@ -15,11 +14,11 @@ import numpy as np
 src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
-from graphrag.embedder import SchemaEmbedder, SchemaElement
-from graphrag.vector_store import VectorStore, StoredElement
-from graphrag.retriever import GraphRetriever
-from graphrag.community_detector import CommunityDetector
-from graphrag.manager import GraphRAGManager
+from graphrag.embedder import SchemaEmbedder  # noqa: E402
+from graphrag.vector_store import VectorStore  # noqa: E402
+from graphrag.retriever import GraphRetriever  # noqa: E402
+from graphrag.community_detector import CommunityDetector  # noqa: E402
+from graphrag.manager import GraphRAGManager  # noqa: E402
 
 
 # --- Fixtures ---

@@ -4,13 +4,14 @@ import json
 import logging
 import shutil
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastmcp import Context
 
 from ..database_manager import TableInfo
 from ..graphrag import GraphRAGManager
-from ..lifecycle.metadata import VersionMetadataManager, update_workspace_section
+from ..lifecycle.metadata import VersionMetadataManager
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..paths import OUTPUT_DIR, get_connection_dir, get_models_dir, ensure_output_dir
 
@@ -382,9 +383,15 @@ async def save_semantic_model(
     connection_id = session.connection_id
     effective_schema = schema_name or session.get_last_analyzed_schema() or "default"
 
-    # Save model file
+    # Save model file. Reduce model_name to a bare filename component so it can
+    # never escape models_dir (defense-in-depth; the tool boundary also rejects
+    # names containing path separators).
     models_dir = get_models_dir(connection_id)
-    safe_name = model_name.replace(" ", "_").replace("/", "_")
+    safe_name = Path(model_name.replace(" ", "_")).name
+    if not safe_name or safe_name in {".", ".."}:
+        return create_error_response(
+            f"Invalid model_name: {model_name!r}", "validation_error"
+        )
     model_filename = f"{safe_name}.yaml"
     model_path = models_dir / model_filename
 

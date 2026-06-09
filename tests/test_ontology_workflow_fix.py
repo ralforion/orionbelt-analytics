@@ -8,7 +8,6 @@ TableInfo objects, causing generate_ontology() to fail or re-query the database.
 
 import pytest
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
-from pathlib import Path
 
 import src.main as main_module
 from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
@@ -254,7 +253,7 @@ async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tm
         # Step 2: Call generate_ontology WITHOUT schema_info parameter
         # Use .fn accessor to handle both FunctionTool (under coverage) and plain function
         generate_fn = getattr(main_module.generate_ontology, 'fn', main_module.generate_ontology)
-        result = await generate_fn(mock_context)
+        await generate_fn(mock_context)
 
         # Verify it used the cached data
         mock_generator.generate_from_schema.assert_called_once()
@@ -342,7 +341,7 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
         assert len(cached_data["public"]) == 3
 
         # Step 2: generate_ontology() - should use cache
-        ontology_result = await generate_fn(mock_context, schema_name="public")
+        await generate_fn(mock_context, schema_name="public")
 
         # Verify ontology was generated
         mock_generator.generate_from_schema.assert_called_once()

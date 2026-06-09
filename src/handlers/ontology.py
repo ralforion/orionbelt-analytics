@@ -378,11 +378,11 @@ To improve ontology for business users:
         result += _build_minimal_graph_summary(ontology_ttl)
 
         if cryptic_count > 0:
-            result += f"\n\nSEMANTIC NAME RESOLUTION RECOMMENDED"
+            result += "\n\nSEMANTIC NAME RESOLUTION RECOMMENDED"
             result += f"\nFound {cryptic_count} names that may be abbreviations or cryptic identifiers."
-            result += f"\n1. Call suggest_semantic_names() - NO parameters needed, ontology is CACHED"
-            result += f"\n2. Review the suggestions and provide business-friendly alternatives"
-            result += f"\n3. Call apply_semantic_names() with your suggestions"
+            result += "\n1. Call suggest_semantic_names() - NO parameters needed, ontology is CACHED"
+            result += "\n2. Review the suggestions and provide business-friendly alternatives"
+            result += "\n3. Call apply_semantic_names() with your suggestions"
 
         return result
 
@@ -1026,7 +1026,7 @@ async def load_my_ontology(
 ) -> Dict[str, Any]:
     """Load an ontology from inline content or the newest .ttl file from the import folder."""
     try:
-        from rdflib import Graph, Namespace
+        from rdflib import Graph
         from rdflib.namespace import RDF, OWL
 
         newest_file = None

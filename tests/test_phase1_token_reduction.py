@@ -9,7 +9,6 @@ Verifies that:
 """
 
 import pytest
-import os
 from pathlib import Path
 
 import src.main as main_module

@@ -12,8 +12,7 @@ import pytest
 import tempfile
 import shutil
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from datetime import datetime
+from unittest.mock import Mock, AsyncMock, patch
 
 from src.oxigraph_store import OxigraphStoreManager, OXIGRAPH_AVAILABLE
 from src.database_manager import TableInfo, ColumnInfo

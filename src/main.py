@@ -10,10 +10,10 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Union
+from typing import Annotated, Optional, List, Dict, Any, Literal, Union
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastmcp import FastMCP, Context
 
 from .database_manager import DatabaseManager
@@ -137,7 +137,7 @@ def analytical_workflow_skill() -> str:
 
 # --- Session State Management (Task 5: W2 - Decomposed SessionData) ---
 
-from .session import SessionData
+from .session import SessionData  # noqa: E402
 
 
 def get_session_id(ctx: Context) -> str:
@@ -486,15 +486,17 @@ def get_oxigraph_store(ctx: Context) -> Optional[OxigraphStoreManager]:
 
 
 # --- Handler imports (Task 7: C1/S2) ---
+# Imported here (after the tool registrations above) to keep the handler layer
+# decoupled from server setup; intentional late imports.
 
-from .handlers import connection as _h_connection
-from .handlers import schema as _h_schema
-from .handlers import ontology as _h_ontology
-from .handlers import query as _h_query
-from .handlers import chart as _h_chart
-from .handlers import rdf as _h_rdf
-from .handlers import graphrag as _h_graphrag
-from .handlers import workspace as _h_workspace
+from .handlers import connection as _h_connection  # noqa: E402
+from .handlers import schema as _h_schema  # noqa: E402
+from .handlers import ontology as _h_ontology  # noqa: E402
+from .handlers import query as _h_query  # noqa: E402
+from .handlers import chart as _h_chart  # noqa: E402
+from .handlers import rdf as _h_rdf  # noqa: E402
+from .handlers import graphrag as _h_graphrag  # noqa: E402
+from .handlers import workspace as _h_workspace  # noqa: E402
 
 
 # ============================================================
@@ -504,9 +506,36 @@ from .handlers import workspace as _h_workspace
 # decorators MUST stay here for FastMCP registration.
 # ============================================================
 
+# ------------------------------------------------------------
+# Constrained parameter types — bound input size and shape at the MCP boundary
+# so invalid/oversized arguments are rejected before reaching a handler. These
+# are defense-in-depth and a published-schema hint for hosts; handlers keep
+# their own runtime validation. (Surfaced by an mcp-security-audit run.)
+# ------------------------------------------------------------
+_DbType = Literal[
+    "postgresql", "snowflake", "dremio", "clickhouse",
+    "bigquery", "duckdb", "databricks", "mysql",
+]
+# Database/schema/table/column identifiers.
+_Identifier = Annotated[str, Field(max_length=255)]
+# Short natural-language text (titles, query intents).
+_ShortText = Annotated[str, Field(max_length=1000)]
+# Natural-language search queries.
+_QueryText = Annotated[str, Field(max_length=4000)]
+# Filenames / model names — no path separators (prevents traversal).
+_SafeName = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[^/\\]+$")]
+# A filesystem folder path.
+_FolderPath = Annotated[str, Field(max_length=1024)]
+# Raw SQL / SPARQL query bodies.
+_QueryBody = Annotated[str, Field(max_length=100_000)]
+# Large document payloads (YAML / TTL / JSON).
+_DocBody = Annotated[str, Field(max_length=5_000_000)]
+# URIs.
+_Uri = Annotated[str, Field(max_length=2048)]
+
 
 @mcp.tool()
-async def connect_database(ctx: Context, db_type: str) -> str:
+async def connect_database(ctx: Context, db_type: _DbType) -> str:
     """Connect to a database using credentials from environment variables.
 
     If a previous workspace exists for this connection, it is automatically
@@ -540,7 +569,10 @@ async def list_schemas(ctx: Context) -> List[str]:
 
 
 @mcp.tool()
-async def reset_cache(ctx: Context, cache_type: Optional[str] = None) -> Dict[str, Any]:
+async def reset_cache(
+    ctx: Context,
+    cache_type: Optional[Literal["schema", "ontology", "all"]] = None,
+) -> Dict[str, Any]:
     """Reset cached schema and/or ontology data to force re-analysis.
 
     Args:
@@ -555,7 +587,7 @@ async def reset_cache(ctx: Context, cache_type: Optional[str] = None) -> Dict[st
 @mcp.tool()
 async def discover_schema(
     ctx: Context,
-    schema_name: Optional[str] = None,
+    schema_name: Optional[_Identifier] = None,
     lightweight: bool = True,
 ) -> Dict[str, Any]:
     """Analyze database schema and return table metadata with relationships.
@@ -579,8 +611,8 @@ async def discover_schema(
 @mcp.tool()
 async def get_table_details(
     ctx: Context,
-    table_name: str,
-    schema_name: Optional[str] = None,
+    table_name: _Identifier,
+    schema_name: Optional[_Identifier] = None,
 ) -> Dict[str, Any]:
     """Get detailed metadata for a single table. Only use when you need to
     inspect a specific table that the user asked about — do NOT call this for
@@ -603,11 +635,11 @@ async def get_table_details(
 @mcp.tool()
 async def generate_ontology(
     ctx: Context,
-    schema_info: Optional[str] = None,
-    schema_name: Optional[str] = None,
-    base_uri: str = "http://example.com/ontology/",
+    schema_info: Optional[_DocBody] = None,
+    schema_name: Optional[_Identifier] = None,
+    base_uri: _Uri = "http://example.com/ontology/",
     auto_persist: bool = True,
-    graph_uri: Optional[str] = None,
+    graph_uri: Optional[_Uri] = None,
 ) -> str:
     """Generate an RDF ontology from database schema. AUTO-ANALYZES schema if needed!
 
@@ -635,7 +667,7 @@ async def generate_ontology(
 @mcp.tool()
 async def suggest_semantic_names(
     ctx: Context,
-    ontology_file: Optional[str] = None,
+    ontology_file: Optional[_SafeName] = None,
 ) -> Dict[str, Any]:
     """Extract and analyze names from a generated ontology to identify abbreviations and cryptic names.
 
@@ -660,8 +692,8 @@ async def suggest_semantic_names(
 @mcp.tool()
 async def apply_semantic_names(
     ctx: Context,
-    suggestions: Union[str, Dict[str, Any]],
-    ontology_file: Optional[str] = None,
+    suggestions: Union[Annotated[str, Field(max_length=2_000_000)], Dict[str, Any]],
+    ontology_file: Optional[_SafeName] = None,
     save_to_file: bool = True,
 ) -> str:
     """Apply semantic name suggestions to an existing ontology.
@@ -701,11 +733,11 @@ async def apply_semantic_names(
 @mcp.tool()
 async def load_my_ontology(
     ctx: Context,
-    import_folder: str = "./import",
+    import_folder: _FolderPath = "./import",
     auto_persist: bool = True,
-    graph_uri: Optional[str] = None,
-    ontology_content: Optional[str] = None,
-    file_name: Optional[str] = None,
+    graph_uri: Optional[_Uri] = None,
+    ontology_content: Optional[_DocBody] = None,
+    file_name: Optional[_SafeName] = None,
 ) -> Dict[str, Any]:
     """Load an ontology in Turtle (.ttl) format.
 
@@ -735,9 +767,9 @@ async def load_my_ontology(
 @mcp.tool()
 async def download_artifact(
     ctx: Context,
-    artifact_type: str,
-    schema_name: Optional[str] = None,
-    source: str = "rdf",
+    artifact_type: Literal["ontology", "r2rml"],
+    schema_name: Optional[_Identifier] = None,
+    source: Literal["rdf", "file"] = "rdf",
 ) -> Dict[str, Any]:
     """Download a generated artifact as TTL file.
 
@@ -770,8 +802,8 @@ async def download_artifact(
 @mcp.tool()
 async def sample_table_data(
     ctx: Context,
-    table_name: str,
-    schema_name: Optional[str] = None,
+    table_name: _Identifier,
+    schema_name: Optional[_Identifier] = None,
     limit: int = 10,
 ) -> List[Dict[str, Any]]:
     """Sample data from a specific table for analysis.
@@ -793,10 +825,10 @@ async def sample_table_data(
 @mcp.tool()
 async def execute_sql_query(
     ctx: Context,
-    sql_query: str,
+    sql_query: _QueryBody,
     limit: int = 1000,
     checklist_completed: bool = False,
-    query_intent: Optional[str] = None,
+    query_intent: Optional[_ShortText] = None,
 ) -> Dict[str, Any]:
     """Execute SQL query with built-in syntax validation, security checks, OBQC
     validation, and fan-trap protection.
@@ -830,16 +862,16 @@ async def execute_sql_query(
 @mcp.tool()
 async def generate_chart(
     ctx: Context,
-    data_source: Union[List[Dict[str, Any]], str],
-    chart_type: str,
-    x_column: str,
-    y_column: Optional[Union[str, List[str]]] = None,
-    color_column: Optional[str] = None,
-    title: Optional[str] = None,
-    chart_style: str = "grouped",
-    sort_by: Optional[str] = None,
-    sort_order: Optional[str] = None,
-    output_format: str = "interactive",
+    data_source: Union[List[Dict[str, Any]], Annotated[str, Field(max_length=5_000_000)]],
+    chart_type: Literal["bar", "line", "scatter", "heatmap"],
+    x_column: _Identifier,
+    y_column: Optional[Union[_Identifier, List[_Identifier]]] = None,
+    color_column: Optional[_Identifier] = None,
+    title: Optional[_ShortText] = None,
+    chart_style: Literal["grouped", "stacked"] = "grouped",
+    sort_by: Optional[_Identifier] = None,
+    sort_order: Optional[Literal["ascending", "descending"]] = None,
+    output_format: Literal["interactive", "image"] = "interactive",
 ):
     """Generate a chart from query results. Returns a ui:// MCP Apps widget for interactive use.
 
@@ -887,9 +919,9 @@ async def cleanup_workspace(ctx: Context) -> str:
 @mcp.tool()
 async def save_semantic_model(
     ctx: Context,
-    model_yaml: str,
-    model_name: str,
-    schema_name: Optional[str] = None,
+    model_yaml: _DocBody,
+    model_name: _SafeName,
+    schema_name: Optional[_Identifier] = None,
 ) -> Dict[str, Any]:
     """Save a semantic model (e.g., OBML YAML) to the workspace for reuse across sessions.
 
@@ -911,7 +943,7 @@ async def save_semantic_model(
 @mcp.tool()
 async def get_semantic_model(
     ctx: Context,
-    model_name: str,
+    model_name: _SafeName,
 ) -> Dict[str, Any]:
     """Retrieve a stored semantic model YAML by name.
 
@@ -947,9 +979,9 @@ async def list_semantic_models(ctx: Context) -> Dict[str, Any]:
 @mcp.tool()
 async def graphrag_search(
     ctx: Context,
-    query: Optional[str] = None,
+    query: Optional[_QueryText] = None,
     top_k: int = 5,
-    element_type: Optional[str] = None,
+    element_type: Optional[Literal["table", "column", "relationship"]] = None,
     overview: bool = False,
 ) -> Dict[str, Any]:
     """Search schema using natural language via GraphRAG, or get a schema overview.
@@ -985,7 +1017,7 @@ async def graphrag_search(
 @mcp.tool()
 async def graphrag_query_context(
     ctx: Context,
-    query: str,
+    query: _QueryText,
     max_tables: int = 5,
     max_columns: int = 20,
 ) -> Dict[str, Any]:
@@ -1009,8 +1041,8 @@ async def graphrag_query_context(
 @mcp.tool()
 async def graphrag_find_join_path(
     ctx: Context,
-    from_table: str,
-    to_table: str,
+    from_table: _Identifier,
+    to_table: _Identifier,
     max_hops: int = 3,
 ) -> Dict[str, Any]:
     """Find join path between two tables using GraphRAG graph traversal.
@@ -1035,8 +1067,8 @@ async def graphrag_find_join_path(
 @mcp.tool()
 async def store_ontology_in_rdf(
     ctx: Context,
-    schema_name: Optional[str] = None,
-    graph_uri: Optional[str] = None,
+    schema_name: Optional[_Identifier] = None,
+    graph_uri: Optional[_Uri] = None,
 ) -> str:
     """Store current session ontology in persistent RDF store with SPARQL access.
 
@@ -1058,7 +1090,7 @@ async def store_ontology_in_rdf(
 @mcp.tool()
 async def query_sparql(
     ctx: Context,
-    sparql_query: str,
+    sparql_query: _QueryBody,
     timeout_seconds: int = 30,
 ) -> Dict[str, Any]:
     """Execute a SPARQL query against the RDF ontology store. Use this to explore
@@ -1086,9 +1118,9 @@ async def query_sparql(
 @mcp.tool()
 async def add_rdf_knowledge(
     ctx: Context,
-    subject: str,
-    predicate: str,
-    object: str,
+    subject: _Uri,
+    predicate: _Uri,
+    object: Annotated[str, Field(max_length=8192)],
     metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Add custom knowledge/metadata to the RDF store.

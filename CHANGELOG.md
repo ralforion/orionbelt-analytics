@@ -5,6 +5,17 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] - 2026-06-09
+
+### Changed
+- **Constrained MCP tool string parameters at the input boundary.** Enumerated parameters now use `Literal` types (`db_type`, `cache_type`, `artifact_type`, `source`, `chart_type`, `chart_style`, `sort_order`, `output_format`, `element_type`), free-text and identifier parameters carry `max_length` bounds, and filename/model-name parameters reject path separators — so invalid, oversized, or path-traversing arguments are rejected before reaching a handler, and the constraints are published in each tool's JSON schema. Handlers keep their existing runtime validation as defense-in-depth. `save_semantic_model` additionally reduces `model_name` to a bare filename component so it can never escape the models directory.
+
+### Fixed
+- **Resolved all pre-existing lint findings** (ruff: unused imports, f-strings without placeholders, unused locals, redundant imports; intentional late imports annotated with `# noqa: E402`). `ruff check .` is now clean.
+
+### Notes
+- Surfaced during a security audit (`mcp-security-audit`): hygiene improved from 94/100 to **99/100 (Grade A)** with zero findings across all 23 tools.
+
 ## [1.5.2] - 2026-06-08
 
 ### Removed
