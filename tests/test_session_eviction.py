@@ -57,7 +57,7 @@ class TestServerStateEviction:
 
     def test_evict_idle_sessions_removes_stale(self):
         state = self._make_state()
-        active = state.get_session("active")
+        state.get_session("active")
         stale = state.get_session("stale")
         # Backdate the stale session
         stale.last_activity = datetime.now() - timedelta(minutes=45)

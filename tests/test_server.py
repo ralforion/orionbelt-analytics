@@ -3,14 +3,12 @@
 import json
 import pytest
 import unittest
-from unittest.mock import patch, MagicMock, Mock, PropertyMock, AsyncMock
-from concurrent.futures import Future
+from unittest.mock import patch, MagicMock, Mock, AsyncMock
 
 import src.main as main_module
-from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
+from src.database_manager import TableInfo, ColumnInfo
 from src.ontology_generator import OntologyGenerator
 from src.config import ConfigManager
-from src.constants import SUPPORTED_DB_TYPES
 
 
 def create_mock_context(session_id: str = "test-session-123"):
@@ -543,7 +541,6 @@ class TestOntologyGenerator(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        from src.ontology_generator import OntologyGenerator
         self.generator = OntologyGenerator()
 
         self.sample_table = TableInfo(
@@ -661,7 +658,7 @@ class TestOntologyGenerator(unittest.TestCase):
     def test_apply_enrichment(self):
         """Test application of enrichment suggestions."""
         # Generate base ontology
-        ontology_ttl = self.generator.generate_from_schema([self.sample_table])
+        self.generator.generate_from_schema([self.sample_table])
 
         # Define enrichment suggestions
         enrichment_suggestions = {
@@ -697,7 +694,6 @@ class TestConfigManager(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        from src.config import ConfigManager
         self.config_manager = ConfigManager()
 
     def test_validate_db_config_postgresql(self):

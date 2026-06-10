@@ -11,13 +11,9 @@ Verifies that:
 
 import inspect
 import pytest
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-from typing import List
 
 import src.main as main_module
 from src.main import mcp
-from src.database_manager import TableInfo, ColumnInfo
 
 
 def _get_tool_fn(name):

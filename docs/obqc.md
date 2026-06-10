@@ -10,7 +10,6 @@ OBQC activates automatically when an ontology is available in the session:
 
 | Tool | OBQC behavior |
 |------|---------------|
-| `validate_sql_syntax` | Runs OBQC and returns all issues as part of the validation result. Does not execute the query. |
 | `execute_sql_query` | Runs OBQC first. **Blocks execution** if any ERROR-level issue is found. Attaches warnings to the response if the query passes. |
 
 OBQC is skipped (with an informational message) when:
@@ -22,11 +21,11 @@ OBQC is skipped (with an informational message) when:
 
 Each issue has a severity that determines whether the query is blocked or allowed to proceed:
 
-| Severity | Effect in `execute_sql_query` | Effect in `validate_sql_syntax` |
-|----------|-------------------------------|----------------------------------|
-| **ERROR** | Query is **blocked** -- not sent to the database. Returns `"success": false` with issue details. | Validation returns `"is_valid": false` with issue details. |
-| **WARNING** | Query **executes normally**. Warnings are attached to the response so the LLM can inform the user or self-correct. | Validation returns `"is_valid": true` with warnings attached. |
-| **INFO** | Informational note, no effect on execution. | Informational note, no effect on validation result. |
+| Severity | Effect in `execute_sql_query` |
+|----------|-------------------------------|
+| **ERROR** | Query is **blocked** -- not sent to the database. Returns `"success": false` with issue details. |
+| **WARNING** | Query **executes normally**. Warnings are attached to the response so the LLM can inform the user or self-correct. |
+| **INFO** | Informational note, no effect on execution. |
 
 The overall `is_valid` flag is determined by: **any ERROR-level issue makes the result invalid**.
 

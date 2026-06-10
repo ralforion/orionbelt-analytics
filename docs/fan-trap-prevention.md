@@ -69,9 +69,9 @@ if len(table_info.foreign_keys) > 1:
 
 These warnings appear in the `discover_schema()` output so the LLM (or user) is aware of risky join paths before writing any SQL.
 
-### Layer 2: OBQC Query Validation (`validate_sql_syntax`)
+### Layer 2: OBQC Query Validation (built into `execute_sql_query`)
 
-The Ontology Basic Quality Criteria (OBQC) validator parses SQL queries using sqlglot and checks them against the ontology's relationship metadata. It counts how many one-to-many joins a query traverses. If two or more one-to-many joins co-occur with aggregation functions, the validator flags the query:
+The Ontology Basic Quality Criteria (OBQC) validator runs automatically inside `execute_sql_query` before the query is run. It parses SQL queries using sqlglot and checks them against the ontology's relationship metadata. It counts how many one-to-many joins a query traverses. If two or more one-to-many joins co-occur with aggregation functions, the validator flags the query:
 
 ```python
 # From src/obqc_validator.py
@@ -322,7 +322,7 @@ Even with automatic detection, verify your results:
 
 2. **Check row counts.** If `orders` has 1,000 rows but your join produces 50,000, something is being multiplied.
 
-3. **Use `validate_sql_syntax()` before execution.** It runs OBQC checks and will flag fan-trap risks in the response.
+3. **Rely on `execute_sql_query`'s built-in checks.** It runs OBQC validation before executing and will flag fan-trap risks (or reject the query) in the response.
 
 4. **Review the `fan_trap_warnings` from `discover_schema()`.** They list which tables have multiple foreign keys and are therefore fan-trap candidates.
 
@@ -350,8 +350,7 @@ Even with automatic detection, verify your results:
 1. connect_database()
 2. discover_schema()        --> fan_trap_warnings in output
 3. generate_ontology()     --> oba:relationshipType annotations stored
-4. validate_sql_syntax()   --> OBQC checks for fan-trap patterns
-5. execute_sql_query()     --> runs with fan-trap protection active
+4. execute_sql_query()     --> OBQC fan-trap checks run automatically, then query executes
 ```
 
 When in doubt, use UNION ALL or separate aggregation CTEs. Fan-traps cause silent data corruption -- queries succeed but return wrong numbers.

@@ -113,7 +113,7 @@ async def discover_schema(
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
 
         # Debug logging to diagnose auto-init issues
-        logger.debug(f"GraphRAG auto-init check (CACHED path):")
+        logger.debug("GraphRAG auto-init check (CACHED path):")
         logger.debug(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
         logger.debug(f"  cached_tables exists: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")
         logger.info(f"  session.graphrag_initialized: {session.graphrag_initialized}")
@@ -226,7 +226,7 @@ async def discover_schema(
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
 
         # Debug logging to diagnose auto-init issues
-        logger.debug(f"GraphRAG auto-init check (NON-CACHED path):")
+        logger.debug("GraphRAG auto-init check (NON-CACHED path):")
         logger.debug(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
         logger.debug(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
         logger.debug(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")
@@ -404,7 +404,7 @@ async def discover_schema(
     auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
 
     # Debug logging to diagnose auto-init issues
-    logger.debug(f"GraphRAG auto-init check (FULL MODE path):")
+    logger.debug("GraphRAG auto-init check (FULL MODE path):")
     logger.debug(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
     logger.debug(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
     logger.debug(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")

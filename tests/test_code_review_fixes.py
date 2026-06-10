@@ -8,7 +8,7 @@ Covers:
 """
 
 import unittest
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
+from unittest.mock import Mock, patch, AsyncMock
 import os
 
 from src.session import SessionData
@@ -178,7 +178,7 @@ class TestDremioPATHandler(unittest.IsolatedAsyncioTestCase):
             "DREMIO_PAT": "my-secret-pat",
         }
         with patch.dict(os.environ, env, clear=False):
-            result = await connect_database(
+            await connect_database(
                 ctx=mock_ctx,
                 db_type="dremio",
                 get_session_db_manager=mock_get_db_manager,
@@ -222,7 +222,7 @@ class TestDremioPATHandler(unittest.IsolatedAsyncioTestCase):
                    if k not in ("DREMIO_URI", "DREMIO_PAT")}
         cleaned.update(env)
         with patch.dict(os.environ, cleaned, clear=True):
-            result = await connect_database(
+            await connect_database(
                 ctx=mock_ctx,
                 db_type="dremio",
                 get_session_db_manager=mock_get_db_manager,

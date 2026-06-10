@@ -1,12 +1,10 @@
 """Tests for the DatabaseManager class with enhanced coverage."""
 
-import pytest
 import unittest
 from unittest.mock import Mock, patch, MagicMock, AsyncMock
-from sqlalchemy.exc import SQLAlchemyError, OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
-from src.constants import POSTGRES_SYSTEM_SCHEMAS, SNOWFLAKE_SYSTEM_SCHEMAS, CLICKHOUSE_SYSTEM_SCHEMAS
 
 
 class TestDatabaseManager(unittest.TestCase):

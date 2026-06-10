@@ -1,8 +1,8 @@
 """Tests for ontology quality improvements."""
 
 import unittest
-from rdflib import Graph, Literal, URIRef
-from rdflib.namespace import RDF, RDFS, OWL, XSD
+from rdflib import Literal
+from rdflib.namespace import RDF, OWL, XSD
 
 from src.ontology_generator import (
     OntologyGenerator,
@@ -632,7 +632,6 @@ class TestTPCDSPatterns(unittest.TestCase):
 
         self.generator.generate_from_schema(tables, include_inferred_relationships=True)
 
-        oba_ns = self.generator.oba_ns
         base = self.generator.base_uri
 
         # Check STORE_SALES -> CUSTOMER relationship

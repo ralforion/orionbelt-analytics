@@ -4,6 +4,7 @@ __pycache__/
 design/
 scripts/*
 !scripts/publish-docker.sh
+!scripts/bump-version.sh
 build/
 dist/
 wheels/

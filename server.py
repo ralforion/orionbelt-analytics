@@ -13,12 +13,12 @@ from datetime import datetime, timedelta
 src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
 
-import atexit
+import atexit  # noqa: E402
 
-from src.main import mcp, cleanup_server
-from src.config import config_manager
-from src.utils import setup_logging
-from src import __version__, __name__ as SERVER_NAME
+from src.main import mcp, cleanup_server  # noqa: E402
+from src.config import config_manager  # noqa: E402
+from src.utils import setup_logging  # noqa: E402
+from src import __version__, __name__ as SERVER_NAME  # noqa: E402
 
 # Setup logging
 config = config_manager.get_server_config()
@@ -50,7 +50,7 @@ def print_startup_info():
     logger.info("MCP server for database ad hoc analysis with ontology support and interactive charting")
     logger.info("="*60)
     
-    logger.info("🔧 Available MCP Tools (22):")
+    logger.info("🔧 Available MCP Tools (23):")
     tool_groups = {
         "Connection & Schema": [
             "connect_database - Connect to any supported database",
@@ -100,7 +100,7 @@ def print_startup_info():
     logger.info("⚡ Performance: Connection pooling and parallel processing")
     logger.info("📊 Observability: Structured logging and comprehensive error handling")
     logger.info("")
-    logger.info(f"📋 Configuration:")
+    logger.info("📋 Configuration:")
     logger.info(f"  • Log Level: {config.log_level}")
     logger.info(f"  • Base URI: {config.ontology_base_uri}")
     logger.info(f"  • Transport: {config.mcp_transport}")

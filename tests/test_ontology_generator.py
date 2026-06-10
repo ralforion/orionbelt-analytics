@@ -1,9 +1,7 @@
 """Tests for the OntologyGenerator class with comprehensive coverage."""
 
-import pytest
 import unittest
-from unittest.mock import Mock, patch
-from rdflib.namespace import XSD, RDF, RDFS, OWL
+from rdflib.namespace import XSD, RDFS
 
 from src.ontology_generator import OntologyGenerator
 from src.database_manager import TableInfo, ColumnInfo
@@ -571,7 +569,6 @@ class TestApplySemanticNamesDuplicateLabels(unittest.TestCase):
         self.assertIn("Notes (sales)", result)
         self.assertIn("Notes (purchases)", result)
         # Plain "Notes" without qualifier should NOT be a standalone label
-        from rdflib import Literal
         notes_labels = [
             str(o) for s, p, o in self.generator.graph.triples((None, RDFS.label, None))
             if str(o) == "Notes"
