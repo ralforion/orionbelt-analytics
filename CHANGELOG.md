@@ -5,16 +5,18 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.3] - 2026-06-09
+## [1.5.3] - 2026-06-10
 
 ### Changed
 - **Constrained MCP tool string parameters at the input boundary.** Enumerated parameters now use `Literal` types (`db_type`, `cache_type`, `artifact_type`, `source`, `chart_type`, `chart_style`, `sort_order`, `output_format`, `element_type`), free-text and identifier parameters carry `max_length` bounds, and filename/model-name parameters reject path separators — so invalid, oversized, or path-traversing arguments are rejected before reaching a handler, and the constraints are published in each tool's JSON schema. Handlers keep their existing runtime validation as defense-in-depth. `save_semantic_model` additionally reduces `model_name` to a bare filename component so it can never escape the models directory.
 
 ### Fixed
+- **Aligned all documentation with the registered tool set.** Removed references to four tools that were advertised but never registered (`validate_sql_syntax`, `download_ontology`, `list_tables_sparql`, `diagnose_connection_issue`) across the README, `docs/`, Claude skills, and all 8 integration guides, replacing them with registered equivalents (`execute_sql_query`'s built-in validation, `download_artifact`, `query_sparql`). Completed `docs/tools-reference.md` to cover all 23 tools (was 16). Corrected stale tool counts (README 32, startup banner 22 → 23).
 - **Resolved all pre-existing lint findings** (ruff: unused imports, f-strings without placeholders, unused locals, redundant imports; intentional late imports annotated with `# noqa: E402`). `ruff check .` is now clean.
 
-### Notes
-- Surfaced during a security audit (`mcp-security-audit`): hygiene improved from 94/100 to **99/100 (Grade A)** with zero findings across all 23 tools.
+### Added
+- `scripts/bump-version.sh` — bumps the version across all files, inserts a CHANGELOG stub, and runs `uv lock` in one step.
+- `scripts/publish-docker.sh` accepts a generic `DOCKERHUB_PAT` (legacy `DOCKERHUB_RALFORION_PAT` still works).
 
 ## [1.5.2] - 2026-06-08
 
