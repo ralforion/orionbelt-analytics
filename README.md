@@ -26,12 +26,12 @@ OrionBelt Analytics is an MCP server that analyzes relational database schemas a
 
 ## The OrionBelt Ecosystem
 
-| Project | Purpose |
-|---------|---------|
-| **OrionBelt Analytics** (this) | Schema analysis, ontology generation, GraphRAG, Text-to-SQL |
-| [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer) | Declarative YAML models compiled into dialect-specific, fan-trap-free SQL |
+| Project                                                                                    | Purpose                                                                                                           |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| **OrionBelt Analytics** (this)                                                             | Schema analysis, ontology generation, GraphRAG, Text-to-SQL                                                       |
+| [**OrionBelt Semantic Layer**](https://github.com/ralfbecher/orionbelt-semantic-layer)     | Declarative YAML models compiled into dialect-specific, fan-trap-free SQL                                         |
 | [**OrionBelt Ontology Builder**](https://github.com/ralfbecher/orionbelt-ontology-builder) | Visual OWL ontology editor with reasoning and graph visualization ([live demo](https://orionbelt.streamlit.app/)) |
-| [**OrionBelt Chat**](https://github.com/ralfbecher/orionbelt-chat) | AI chat UI for Analytics + Semantic Layer (Chainlit, multiple LLM providers) |
+| [**OrionBelt Chat**](https://github.com/ralfbecher/orionbelt-chat)                         | AI chat UI for Analytics + Semantic Layer (Chainlit, multiple LLM providers)                                      |
 
 Run Analytics and Semantic Layer side-by-side in Claude Desktop for schema-aware ontology generation **and** guaranteed-correct SQL compilation.
 
@@ -53,18 +53,18 @@ Run Analytics and Semantic Layer side-by-side in Claude Desktop for schema-aware
 
 ## OBQC -- Ontology-Based Query Check
 
-A key differentiator of OrionBelt is **OBQC** (Ontology-Based Query Check), a deterministic, rule-based SQL validator that catches errors *before* queries reach the database. Unlike LLM-only approaches that rely on the model "getting it right," OBQC cross-references every generated SQL statement against the loaded RDF/OWL ontology to enforce structural correctness.
+A key differentiator of OrionBelt is **OBQC** (Ontology-Based Query Check), a deterministic, rule-based SQL validator that catches errors _before_ queries reach the database. Unlike LLM-only approaches that rely on the model "getting it right," OBQC cross-references every generated SQL statement against the loaded RDF/OWL ontology to enforce structural correctness.
 
 **What OBQC validates:**
 
-| Check | What it catches |
-|-------|-----------------|
-| **Table existence** | References to tables that don't exist in the schema |
-| **Column existence** | References to columns not present in their table, ambiguous unqualified columns |
-| **Join validity** | Missing join conditions (Cartesian products), join columns that don't match declared foreign keys |
-| **Type compatibility** | WHERE/ON comparisons between incompatible types (e.g. string vs. integer) |
-| **Aggregation correctness** | SELECT columns missing from GROUP BY when aggregates are used |
-| **Fan-trap detection** | Aggregations across multiple one-to-many joins that silently multiply results |
+| Check                       | What it catches                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Table existence**         | References to tables that don't exist in the schema                                               |
+| **Column existence**        | References to columns not present in their table, ambiguous unqualified columns                   |
+| **Join validity**           | Missing join conditions (Cartesian products), join columns that don't match declared foreign keys |
+| **Type compatibility**      | WHERE/ON comparisons between incompatible types (e.g. string vs. integer)                         |
+| **Aggregation correctness** | SELECT columns missing from GROUP BY when aggregates are used                                     |
+| **Fan-trap detection**      | Aggregations across multiple one-to-many joins that silently multiply results                     |
 
 **How it works:**
 
@@ -154,55 +154,55 @@ OrionBelt exposes 23 MCP tools. Here is a summary by category:
 
 ### Connection & Schema
 
-| Tool | Description |
-|------|-------------|
-| `connect_database` | Connect to any supported database using `.env` credentials |
-| `list_schemas` | List available schemas in the connected database |
-| `reset_cache` | Clear cached schema and ontology data for the current session |
-| `discover_schema` | Analyze schema structure with automatic GraphRAG + ontology generation |
-| `get_table_details` | Get detailed column, key, and constraint info for a specific table |
-| `cleanup_workspace` | Delete all workspace files for the current connection and start fresh |
+| Tool                | Description                                                            |
+| ------------------- | ---------------------------------------------------------------------- |
+| `connect_database`  | Connect to any supported database using `.env` credentials             |
+| `list_schemas`      | List available schemas in the connected database                       |
+| `reset_cache`       | Clear cached schema and ontology data for the current session          |
+| `discover_schema`   | Analyze schema structure with automatic GraphRAG + ontology generation |
+| `get_table_details` | Get detailed column, key, and constraint info for a specific table     |
+| `cleanup_workspace` | Delete all workspace files for the current connection and start fresh  |
 
 ### Ontology & Semantic
 
-| Tool | Description |
-|------|-------------|
-| `generate_ontology` | Generate RDF/OWL ontology from schema with SQL mapping annotations |
+| Tool                     | Description                                                           |
+| ------------------------ | --------------------------------------------------------------------- |
+| `generate_ontology`      | Generate RDF/OWL ontology from schema with SQL mapping annotations    |
 | `suggest_semantic_names` | Detect abbreviations and cryptic names for business-friendly renaming |
-| `apply_semantic_names` | Apply LLM-suggested semantic names and descriptions to ontology |
-| `load_my_ontology` | Load a custom `.ttl` ontology file from an import folder |
-| `download_artifact` | Download ontology or R2RML mapping as a Turtle file |
+| `apply_semantic_names`   | Apply LLM-suggested semantic names and descriptions to ontology       |
+| `load_my_ontology`       | Load a custom `.ttl` ontology file from an import folder              |
+| `download_artifact`      | Download ontology or R2RML mapping as a Turtle file                   |
 
 ### Query & Visualization
 
-| Tool | Description |
-|------|-------------|
-| `sample_table_data` | Preview table data with row limit and injection protection |
-| `execute_sql_query` | Execute SQL with OBQC validation, security checks, and fan-trap detection |
-| `generate_chart` | Generate Plotly charts (bar, line, scatter, heatmap) with MCP-UI rendering |
+| Tool                | Description                                                                |
+| ------------------- | -------------------------------------------------------------------------- |
+| `sample_table_data` | Preview table data with row limit and injection protection                 |
+| `execute_sql_query` | Execute SQL with OBQC validation, security checks, and fan-trap detection  |
+| `generate_chart`    | Generate Plotly charts (bar, line, scatter, heatmap) with MCP-UI rendering |
 
 ### GraphRAG
 
-| Tool | Description |
-|------|-------------|
-| `graphrag_search` | Semantic search + schema overview (auto-initialized by `discover_schema`) |
-| `graphrag_query_context` | Get optimized context for SQL generation (85-95% token reduction) |
-| `graphrag_find_join_path` | Discover join paths between tables via graph traversal |
+| Tool                      | Description                                                               |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `graphrag_search`         | Semantic search + schema overview (auto-initialized by `discover_schema`) |
+| `graphrag_query_context`  | Get optimized context for SQL generation (85-95% token reduction)         |
+| `graphrag_find_join_path` | Discover join paths between tables via graph traversal                    |
 
 ### SPARQL & RDF
 
-| Tool | Description |
-|------|-------------|
-| `store_ontology_in_rdf` | Persist ontology in Oxigraph for SPARQL access |
-| `query_sparql` | Execute SPARQL queries (SELECT, ASK, CONSTRUCT — auto-detected) |
-| `add_rdf_knowledge` | Add custom metadata triples to the RDF store |
+| Tool                    | Description                                                     |
+| ----------------------- | --------------------------------------------------------------- |
+| `store_ontology_in_rdf` | Persist ontology in Oxigraph for SPARQL access                  |
+| `query_sparql`          | Execute SPARQL queries (SELECT, ASK, CONSTRUCT — auto-detected) |
+| `add_rdf_knowledge`     | Add custom metadata triples to the RDF store                    |
 
 ### Semantic Models
 
-| Tool | Description |
-|------|-------------|
-| `save_semantic_model` | Save a semantic model (e.g., OBML YAML) to the workspace |
-| `get_semantic_model` | Retrieve a stored semantic model by name |
+| Tool                   | Description                                                |
+| ---------------------- | ---------------------------------------------------------- |
+| `save_semantic_model`  | Save a semantic model (e.g., OBML YAML) to the workspace   |
+| `get_semantic_model`   | Retrieve a stored semantic model by name                   |
 | `list_semantic_models` | List all stored semantic models for the current connection |
 
 For full parameter details, return values, and examples, see [docs/tools-reference.md](docs/tools-reference.md).
@@ -210,45 +210,50 @@ For full parameter details, return values, and examples, see [docs/tools-referen
 ## Typical Workflows
 
 **Full analysis session:**
+
 ```
 connect_database("postgresql") -> discover_schema("public") -> generate_ontology() -> execute_sql_query(...)
 ```
 
 **Quick data exploration:**
+
 ```
 connect_database("duckdb") -> list_schemas() -> sample_table_data("events")
 ```
 
 **Query with visualization:**
+
 ```
 execute_sql_query(query) -> generate_chart(data, "bar", ...)
 ```
+
 `execute_sql_query` runs OBQC validation, security checks, and fan-trap detection before executing — no separate validation step is needed.
 
 **Resume a previous session (auto-restores workspace):**
+
 ```
 connect_database("postgresql") -> execute_sql_query(...)
 ```
 
 ## Documentation
 
-| Document | Contents |
-|----------|----------|
-| [Tools Reference](docs/tools-reference.md) | Full parameter docs, return values, and usage examples |
-| [Configuration](docs/configuration.md) | Environment variables, transport setup, troubleshooting |
-| [GraphRAG](docs/graphrag.md) | Graph-based schema intelligence and OBML workflow |
-| [OBQC](docs/obqc.md) | Validation rules, severity levels, blocking behavior, annotation requirements |
-| [Fan-Trap Prevention](docs/fan-trap-prevention.md) | The fan-trap problem, detection, and safe SQL patterns |
-| [Integrations](docs/integrations.md) | LangChain, OpenAI, CrewAI, Google ADK, Vercel, n8n, ChatGPT |
-| [Development](docs/development.md) | Project structure, testing, contributing |
+| Document                                           | Contents                                                                      |
+| -------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [Tools Reference](docs/tools-reference.md)         | Full parameter docs, return values, and usage examples                        |
+| [Configuration](docs/configuration.md)             | Environment variables, transport setup, troubleshooting                       |
+| [GraphRAG](docs/graphrag.md)                       | Graph-based schema intelligence and OBML workflow                             |
+| [OBQC](docs/obqc.md)                               | Validation rules, severity levels, blocking behavior, annotation requirements |
+| [Fan-Trap Prevention](docs/fan-trap-prevention.md) | The fan-trap problem, detection, and safe SQL patterns                        |
+| [Integrations](docs/integrations.md)               | LangChain, OpenAI, CrewAI, Google ADK, Vercel, n8n, ChatGPT                   |
+| [Development](docs/development.md)                 | Project structure, testing, contributing                                      |
 
 ## License
 
 Copyright 2025-2026 [RALFORION d.o.o.](https://ralforion.com)
 
-Licensed under the Business Source License 1.1. See [LICENSE](LICENSE) for details.
+Licensed under the [Business Source License 1.1](LICENSE). The Licensed Work will convert to Apache License 2.0 on 2030-03-16.
 
-**Change Date:** 2030-03-16 | **Change License:** Apache License, Version 2.0
+By contributing to this project, you agree to the [Contributor License Agreement](CLA.md).
 
 For commercial licensing inquiries, contact: licensing@ralforion.com
 
