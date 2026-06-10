@@ -31,6 +31,23 @@ Complete reference for all OrionBelt Analytics MCP tools. These tools are invoke
 3. **sample_table_data** -- preview actual data
 4. **execute_sql_query** -- run queries
 
+### GraphRAG-Assisted Analysis (large schemas)
+
+1. **connect_database** -- connect
+2. **discover_schema** -- auto-initializes GraphRAG in the background
+3. **graphrag_query_context** -- narrow the schema to just the tables/columns relevant to the question (85-95% fewer tokens than the full schema)
+4. *(optional)* **graphrag_find_join_path** -- resolve how two specific tables join, or **graphrag_search** to explore the schema by keyword
+5. **execute_sql_query** -- run SQL informed by the focused context
+6. **generate_chart** -- visualize results
+
+### Semantic Exploration & Export (SPARQL / RDF)
+
+1. **connect_database** -- connect
+2. **discover_schema** -> **generate_ontology** -- generating the ontology auto-persists it to the Oxigraph RDF store (use **store_ontology_in_rdf** only if `auto_persist` was disabled)
+3. **query_sparql** -- explore classes, properties, and relationships semantically
+4. *(optional)* **add_rdf_knowledge** -- layer custom metadata triples onto the ontology
+5. **download_artifact** -- export the ontology or R2RML mapping as a Turtle file for external tools (Protégé, Ontop, D2RQ)
+
 ---
 
 ## Tool Reference
