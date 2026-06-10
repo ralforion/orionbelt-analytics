@@ -18,18 +18,15 @@ Users describe what they want in natural language, and you use the available too
 
 4. **Generate ontology.** Call `generate_ontology` to create an RDF/OWL ontology that maps business concepts to SQL tables. This enables semantic querying.
 
-5. **Validate before executing.** Always call `validate_sql_syntax` before running any query. It checks for SQL injection, fan-trap risks, and syntax errors.
+5. **Execute queries.** Use `execute_sql_query` with `checklist_completed=true`. It validates each query first — checking for SQL injection, fan-trap risks, and syntax errors — and rejects queries that fail before running them. Results include column names and row data.
 
-6. **Execute queries.** Use `execute_sql_query` with `checklist_completed=true` after validation. Results include column names and row data.
+6. **Visualize.** Use `generate_chart` to create Plotly charts from query results.
 
-7. **Visualize.** Use `generate_chart` to create Plotly charts from query results.
-
-8. **Use GraphRAG.** For natural language schema discovery, use `graphrag_query_context` to find relevant tables and columns based on a question.
+7. **Use GraphRAG.** For natural language schema discovery, use `graphrag_query_context` to find relevant tables and columns based on a question.
 
 ## Important Rules
 
-- Always validate SQL before execution using `validate_sql_syntax`.
-- Set `checklist_completed=true` when calling `execute_sql_query` after successful validation.
+- Set `checklist_completed=true` when calling `execute_sql_query`; it validates the SQL before executing.
 - If fan-trap warnings appear, explain the risk (data multiplication from multi-fact joins) and suggest UNION ALL patterns.
 - Present SQL in code blocks with the dialect name.
 - When showing ontology results, explain the RDF triples in plain language.

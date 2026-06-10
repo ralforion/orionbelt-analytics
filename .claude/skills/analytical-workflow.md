@@ -236,7 +236,7 @@ Triples stored: 1,234
 
 💾 Ontology is now persistent in Oxigraph RDF database.
 📊 Use query_sparql() to explore the schema graph.
-📥 Use download_ontology(schema_name="public") to get the TTL file.
+📥 Use download_artifact(artifact_type="ontology", schema_name="public") to get the TTL file.
 
 Token savings: ~23,456 tokens saved by auto-persisting to RDF store!
 ```
@@ -249,7 +249,7 @@ Token savings: ~23,456 tokens saved by auto-persisting to RDF store!
 
 #### 4.2 Download Ontology (Optional)
 
-**Tool:** `download_ontology()`
+**Tool:** `download_artifact()`
 
 **Purpose:** Retrieve full ontology in Turtle format when needed
 
@@ -258,7 +258,8 @@ Token savings: ~23,456 tokens saved by auto-persisting to RDF store!
 User: "Download the ontology"
 
 Claude calls:
-download_ontology(
+download_artifact(
+  artifact_type="ontology",
   schema_name="public",
   source="rdf"  // from RDF store (recommended)
 )
@@ -285,7 +286,7 @@ download_ontology(
 
 #### 4.3 SPARQL Queries (Advanced)
 
-**Tool:** `query_sparql()` or `list_tables_sparql()`
+**Tool:** `query_sparql()`
 
 **Purpose:** Semantic queries over the ontology
 
@@ -294,7 +295,12 @@ download_ontology(
 User: "List all tables using SPARQL"
 
 Claude calls:
-list_tables_sparql()
+query_sparql(
+  sparql_query="""
+    PREFIX oba: <https://ralforion.com/ns/oba#>
+    SELECT ?table WHERE { ?table a oba:Table }
+  """
+)
 ```
 
 **Custom SPARQL:**
@@ -362,44 +368,11 @@ sample_table_data(
 
 ### Phase 6: Query Execution
 
-#### 6.1 Validate SQL (Recommended)
-
-**Tool:** `validate_sql_syntax()`
-
-**Purpose:** Validate SQL before execution (prevents errors)
-
-**Example:**
-```
-User: "Validate this query: SELECT * FROM customers WHERE id = 1"
-
-Claude calls:
-validate_sql_syntax(
-  sql_query="SELECT * FROM customers WHERE id = 1"
-)
-```
-
-**Output:**
-```json
-{
-  "is_valid": true,
-  "query_type": "SELECT",
-  "tables_referenced": ["customers"],
-  "is_read_only": true
-}
-```
-
-**Benefits:**
-- Syntax checking
-- Security validation (no DROP, DELETE, etc.)
-- Fan-trap detection
-
----
-
-#### 6.2 Execute SQL Query
+#### 6.1 Execute SQL Query
 
 **Tool:** `execute_sql_query()`
 
-**Purpose:** Safe SQL execution with automatic protections
+**Purpose:** Safe SQL execution with automatic protections. There is no separate validation tool — `execute_sql_query` validates syntax, security (no DROP, DELETE, etc.), and fan-trap risks before running, and rejects queries that fail.
 
 **Example:**
 ```
@@ -535,9 +508,8 @@ generate_chart(
 3. discover_schema()
 4. generate_ontology()  // auto-persist enabled
 5. Ask: "Find join path between X and Y"
-6. validate_sql_syntax()
-7. execute_sql_query()
-8. generate_chart()
+6. execute_sql_query()  // validates (OBQC + fan-trap) automatically, then runs
+7. generate_chart()
 ```
 
 **Time:** 2-5 minutes
@@ -551,7 +523,7 @@ generate_chart(
 1. connect_database()
 2. discover_schema()
 3. generate_ontology()
-4. download_ontology()  // for external tools
+4. download_artifact(artifact_type="ontology")  // for external tools
 5. query_sparql()  // semantic queries
 6. execute_sql_query()
 ```
@@ -571,7 +543,7 @@ generate_chart(
 1. Check database host/port
 2. Verify credentials
 3. Check firewall rules
-4. Use `diagnose_connection_issue()` tool
+4. Re-run `connect_database()` — its response reports the failure reason and which settings to check
 
 ---
 
@@ -703,9 +675,8 @@ Ontology state is isolated per schema — switching schemas does not destroy the
 
 | Tool | Purpose |
 |------|---------|
-| `download_ontology()` | Get full TTL file |
-| `query_sparql()` | Semantic queries |
-| `list_tables_sparql()` | List tables via SPARQL |
+| `download_artifact(artifact_type="ontology")` | Get full TTL file |
+| `query_sparql()` | Semantic queries (incl. listing tables) |
 
 ### Workspace & Model Tools
 
@@ -715,13 +686,6 @@ Ontology state is isolated per schema — switching schemas does not destroy the
 | `save_semantic_model()` | Save semantic model YAML (e.g., OBML) for cross-session reuse |
 | `get_semantic_model()` | Retrieve stored model YAML by name |
 | `list_semantic_models()` | List all stored models for current connection |
-
-### Utility Tools
-
-| Tool | Purpose |
-|------|---------|
-| `validate_sql_syntax()` | Validate before execution |
-| `diagnose_connection_issue()` | Troubleshoot connections |
 
 ---
 
@@ -945,8 +909,8 @@ Never skip connection - all tools require active database connection.
 ### 2. Use Auto-Init Features
 Let GraphRAG and ontology auto-initialize - don't call them manually.
 
-### 3. Validate Before Execute
-Use `validate_sql_syntax()` before `execute_sql_query()` to catch errors early.
+### 3. Validation Is Automatic
+`execute_sql_query()` validates syntax, security, and fan-trap risks before running — no separate validation step is needed.
 
 ### 4. Leverage GraphRAG
 Ask about table relationships - GraphRAG is much faster than manual discovery.
@@ -995,10 +959,9 @@ When available, prefer Semantic Layer MCP for business-friendly queries and metr
 3. discover_schema()
 4. generate_ontology()
 5. query_sparql()  // semantic discovery
-6. validate_sql_syntax()
-7. execute_sql_query()
-8. generate_chart()
-9. save_semantic_model()  // persist model for future sessions
+6. execute_sql_query()  // validates (OBQC + fan-trap) automatically, then runs
+7. generate_chart()
+8. save_semantic_model()  // persist model for future sessions
 ```
 
 **Key Points:**

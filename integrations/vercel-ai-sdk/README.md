@@ -81,8 +81,7 @@ All MCP tools are automatically available. Key tools include:
 | `discover_schema` | Analyze schema structure with relationships |
 | `get_table_details` | Deep-dive into a specific table |
 | `generate_ontology` | Generate RDF/OWL ontology with SQL mappings |
-| `validate_sql_syntax` | Validate SQL syntax, security, and fan-trap risks |
-| `execute_sql_query` | Execute validated SQL with fan-trap protection |
+| `execute_sql_query` | Execute SQL with built-in validation, security, and fan-trap protection |
 | `sample_table_data` | Sample rows from a table |
 | `generate_chart` | Create Plotly charts from query results |
 | `graphrag_query_context` | Natural language schema discovery via GraphRAG |

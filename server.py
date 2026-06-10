@@ -50,7 +50,7 @@ def print_startup_info():
     logger.info("MCP server for database ad hoc analysis with ontology support and interactive charting")
     logger.info("="*60)
     
-    logger.info("🔧 Available MCP Tools (22):")
+    logger.info("🔧 Available MCP Tools (23):")
     tool_groups = {
         "Connection & Schema": [
             "connect_database - Connect to any supported database",

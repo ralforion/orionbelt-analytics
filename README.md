@@ -150,7 +150,7 @@ OrionBelt works with LangChain, OpenAI Agents SDK, CrewAI, Google ADK, Vercel AI
 
 ## Tools
 
-OrionBelt exposes 32 MCP tools. Here is a summary by category:
+OrionBelt exposes 23 MCP tools. Here is a summary by category:
 
 ### Connection & Schema
 
@@ -221,8 +221,9 @@ connect_database("duckdb") -> list_schemas() -> sample_table_data("events")
 
 **Query with visualization:**
 ```
-validate_sql_syntax(query) -> execute_sql_query(query) -> generate_chart(data, "bar", ...)
+execute_sql_query(query) -> generate_chart(data, "bar", ...)
 ```
+`execute_sql_query` runs OBQC validation, security checks, and fan-trap detection before executing — no separate validation step is needed.
 
 **Resume a previous session (auto-restores workspace):**
 ```

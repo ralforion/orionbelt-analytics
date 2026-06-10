@@ -35,7 +35,7 @@ Before writing multi-table queries with aggregation:
    - Safe: 1:1 relationships (customers → customer_profiles)
    - Requires care: 1:many (customers → orders)
    - High risk: Multiple 1:many from same parent (fan-trap potential)
-3. **Use `validate_sql_syntax()`** before execution
+3. **Let `execute_sql_query()` validate** — it runs OBQC fan-trap checks automatically before executing
 4. **Validate results** against source tables
 
 ---
@@ -210,7 +210,7 @@ For queries with 2+ tables and aggregation:
 - [ ] Schema analyzed with `discover_schema()`
 - [ ] Relationships reviewed (check foreign_keys)
 - [ ] Fan-trap patterns identified
-- [ ] Syntax validated with `validate_sql_syntax()`
+- [ ] Query run through `execute_sql_query()` (OBQC validation runs automatically)
 - [ ] Safe aggregation pattern selected
 - [ ] Results validated against business expectations
 
