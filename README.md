@@ -7,7 +7,7 @@
 
 <p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
 
-[![Version 1.5.3](https://img.shields.io/badge/version-1.5.3-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
+[![Version 1.6.0](https://img.shields.io/badge/version-1.6.0-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
 [![FastMCP](https://img.shields.io/badge/FastMCP-3.3.1+-blue)](https://github.com/jlowin/fastmcp)
@@ -150,7 +150,7 @@ OrionBelt works with LangChain, OpenAI Agents SDK, CrewAI, Google ADK, Vercel AI
 
 ## Tools
 
-OrionBelt exposes 23 MCP tools. Here is a summary by category:
+OrionBelt exposes 26 MCP tools. Here is a summary by category:
 
 ### Connection & Schema
 
@@ -188,6 +188,9 @@ OrionBelt exposes 23 MCP tools. Here is a summary by category:
 | `graphrag_search`         | Semantic search + schema overview (auto-initialized by `discover_schema`) |
 | `graphrag_query_context`  | Get optimized context for SQL generation (85-95% token reduction)         |
 | `graphrag_find_join_path` | Discover join paths between tables via graph traversal                    |
+| `reachable_from`          | Dimension-capable tables for an anchor grain (many-to-one closure)        |
+| `measurable_from`         | Measure-capable tables for an anchor grain (one-to-many closure)          |
+| `plan_composite_query`    | Advise a fan-trap-safe Composite Fact Layer (UNION ALL) decomposition     |
 
 ### SPARQL & RDF
 

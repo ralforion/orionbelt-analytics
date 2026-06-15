@@ -376,6 +376,11 @@ class OntologyGenerator:
         # Add relationship type annotation
         self.graph.add((prop_uri, self.oba_ns.relationshipType, Literal("many_to_one")))
 
+        # Shared traversable join edge (finer grain -> coarser grain) so a single
+        # SPARQL property path `oba:joinsTo+` answers directed reachability across
+        # all FKs without per-property paths. Many-to-one direction only.
+        self.graph.add((table_uri, self.oba_ns.joinsTo, referenced_table_uri))
+
         # Add inverse relationship
         inverse_rel_name = f"{self._clean_name(referenced_table)}_referenced_by_{self._clean_name(table_name)}"
         inverse_prop_uri = self.base_uri[inverse_rel_name]
@@ -760,6 +765,10 @@ class OntologyGenerator:
         self.graph.add((prop_uri, self.oba_ns.inferenceConfidence, Literal(inferred_rel.confidence)))
         self.graph.add((prop_uri, self.oba_ns.inferencePattern, Literal(inferred_rel.pattern_matched)))
         self.graph.add((prop_uri, self.oba_ns.relationshipType, Literal("many_to_one")))
+
+        # Shared traversable join edge (finer grain -> coarser grain); see
+        # _add_relationship_to_ontology. Many-to-one direction only.
+        self.graph.add((source_table_uri, self.oba_ns.joinsTo, target_table_uri))
 
         # Add inverse relationship
         inverse_rel_name = (

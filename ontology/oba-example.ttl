@@ -244,6 +244,9 @@ ns:customers_referenced_by_orders a owl:ObjectProperty ;
     rdfs:range ns:orders ;
     owl:inverseOf ns:orders_has_customers .
 
+# Shared traversable join edge (many-to-one / finer->coarser grain).
+ns:orders oba:joinsTo ns:customers .
+
 # =============================================================================
 # RELATIONSHIP: returns -> customers (declared FK)
 # =============================================================================
@@ -266,6 +269,9 @@ ns:customers_referenced_by_returns a owl:ObjectProperty ;
     rdfs:domain ns:customers ;
     rdfs:range ns:returns ;
     owl:inverseOf ns:returns_has_customers .
+
+# Shared traversable join edge (many-to-one / finer->coarser grain).
+ns:returns oba:joinsTo ns:customers .
 
 # =============================================================================
 # AXIOM: owl:disjointWith --- orders and returns are distinct populations

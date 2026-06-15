@@ -289,6 +289,70 @@ class GraphRetriever:
 
         return dict(related)
 
+    def _directed_closure(
+        self,
+        table_name: str,
+        max_hops: Optional[int],
+        neighbor_fn,
+    ) -> Dict[str, Any]:
+        """Cycle-safe directed transitive closure from a table.
+
+        Edges in the FK DiGraph point finer grain -> coarser grain (a table to
+        the table it references). Following ``successors`` walks the many-to-one
+        (dimension) direction; following ``predecessors`` walks the one-to-many
+        (measure) direction.
+
+        Args:
+            table_name: Anchor table
+            max_hops: Maximum hops (None = unbounded full closure)
+            neighbor_fn: ``self.graph.successors`` or ``self.graph.predecessors``
+
+        Returns:
+            Dict with ``exists``, ordered ``tables`` list, and ``by_hop`` mapping.
+        """
+        if table_name not in self.graph:
+            return {"exists": False, "tables": [], "by_hop": {}}
+
+        visited = {table_name}
+        order: List[str] = []
+        by_hop: Dict[int, List[str]] = {}
+        queue = deque([(table_name, 0)])
+
+        while queue:
+            current, dist = queue.popleft()
+            if max_hops is not None and dist >= max_hops:
+                continue
+            for neighbor in neighbor_fn(current):
+                if neighbor not in visited:
+                    visited.add(neighbor)  # cycle-safe: each node enqueued once
+                    order.append(neighbor)
+                    by_hop.setdefault(dist + 1, []).append(neighbor)
+                    queue.append((neighbor, dist + 1))
+
+        return {"exists": True, "tables": order, "by_hop": by_hop}
+
+    def reachable_from(
+        self, table_name: str, max_hops: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Dimension-capable tables for a query anchored on ``table_name``.
+
+        Directed many-to-one closure (``successors``): coarser-grain tables that
+        can be joined from the anchor without row multiplication (every hop is
+        functional), so their columns are safe to GROUP BY / filter on.
+        """
+        return self._directed_closure(table_name, max_hops, self.graph.successors)
+
+    def measurable_from(
+        self, table_name: str, max_hops: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Measure-capable tables for a query anchored on ``table_name``.
+
+        Directed one-to-many closure (``predecessors``): finer-grain tables that
+        fan out the anchor, so their values can only be aggregated into measures
+        (SUM/COUNT/...), never used as dimensions at this grain.
+        """
+        return self._directed_closure(table_name, max_hops, self.graph.predecessors)
+
     def detect_fan_traps(self, tables: List[str]) -> List[Dict[str, Any]]:
         """
         Detect potential fan-trap scenarios in a set of tables.

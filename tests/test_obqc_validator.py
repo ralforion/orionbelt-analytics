@@ -410,6 +410,80 @@ class TestOBQCFanTrapDetection(unittest.TestCase):
         self.assertFalse(result.fan_trap_risk)
 
 
+class TestOBQCAxiomDrivenFanTrap(unittest.TestCase):
+    """Phase 2: fan-trap detection grounded in owl:disjointWith axioms."""
+
+    def setUp(self):
+        from src.ontology_generator import OntologyGenerator
+        from src.database_manager import TableInfo, ColumnInfo
+
+        def fact(name, fk_to):
+            return TableInfo(
+                name=name, schema="public",
+                columns=[
+                    ColumnInfo(name="id", data_type="INTEGER", is_nullable=False,
+                               is_primary_key=True, is_foreign_key=False),
+                    ColumnInfo(name="customer_id", data_type="INTEGER", is_nullable=False,
+                               is_primary_key=False, is_foreign_key=True,
+                               foreign_key_table=fk_to, foreign_key_column="id"),
+                    ColumnInfo(name="amount", data_type="DECIMAL(12,2)", is_nullable=False,
+                               is_primary_key=False, is_foreign_key=False),
+                ],
+                primary_keys=["id"],
+                foreign_keys=[{"column": "customer_id", "referenced_table": fk_to, "referenced_column": "id"}],
+                row_count=1000,
+            )
+
+        customers = TableInfo(
+            name="customers", schema="public",
+            columns=[
+                ColumnInfo(name="id", data_type="INTEGER", is_nullable=False,
+                           is_primary_key=True, is_foreign_key=False),
+                ColumnInfo(name="name", data_type="VARCHAR(200)", is_nullable=False,
+                           is_primary_key=False, is_foreign_key=False),
+            ],
+            primary_keys=["id"], foreign_keys=[], row_count=500,
+        )
+
+        base_uri = "http://test.com/ontology/"
+        gen = OntologyGenerator(base_uri)
+        ttl = gen.generate_from_schema(
+            [customers, fact("orders", "customers"), fact("returns", "customers")],
+            include_inferred_relationships=False,
+        )
+        graph = Graph()
+        graph.parse(data=ttl, format="turtle")
+
+        self.validator = OBQCValidator()
+        self.validator.load_ontology(graph, base_uri)
+
+    def test_disjoint_pairs_extracted(self):
+        self.assertIn(frozenset({"orders", "returns"}), self.validator._disjoint_pairs)
+
+    def test_cross_fact_aggregation_flagged_via_axiom(self):
+        result = self.validator.validate(
+            "SELECT customers.name, SUM(orders.amount), SUM(returns.amount) "
+            "FROM customers "
+            "JOIN orders ON customers.id = orders.customer_id "
+            "JOIN returns ON customers.id = returns.customer_id "
+            "GROUP BY customers.name"
+        )
+        self.assertTrue(result.fan_trap_risk)
+        fan = [i for i in result.issues if i.issue_type == OBQCIssueType.FAN_TRAP_DETECTED]
+        self.assertEqual(len(fan), 1)
+        # cites the actual disjoint pair and recommends a composite (UNION ALL)
+        self.assertEqual(set(fan[0].related_entities), {"orders", "returns"})
+        self.assertIn("UNION ALL", fan[0].suggestion)
+
+    def test_single_fact_not_flagged(self):
+        result = self.validator.validate(
+            "SELECT customers.name, SUM(orders.amount) "
+            "FROM customers JOIN orders ON customers.id = orders.customer_id "
+            "GROUP BY customers.name"
+        )
+        self.assertFalse(result.fan_trap_risk)
+
+
 class TestOBQCIssue(unittest.TestCase):
     """Test suite for OBQCIssue data class."""
 
