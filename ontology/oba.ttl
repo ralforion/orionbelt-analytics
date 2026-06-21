@@ -20,8 +20,8 @@
 # =============================================================================
 
 <https://ralforion.com/ns/oba> a owl:Ontology ;
-    owl:versionIRI <https://ralforion.com/ns/oba/0.1> ;
-    owl:versionInfo "0.1" ;
+    owl:versionIRI <https://ralforion.com/ns/oba/0.2> ;
+    owl:versionInfo "0.2" ;
     rdfs:label "OrionBelt Analytics Ontology" ;
     rdfs:comment "Annotation vocabulary for physical database schema metadata.  Complements OBSL (OrionBelt Semantic Layer) which describes business-level concepts." ;
     dcterms:creator "Ralf Becher" ;
@@ -99,6 +99,12 @@ oba:isNullable a owl:AnnotationProperty ;
 # =============================================================================
 # 3. RELATIONSHIP PROPERTIES (used on owl:ObjectProperty)
 # =============================================================================
+
+oba:joinsTo a owl:ObjectProperty ;
+    rdfs:label "joins to" ;
+    rdfs:comment "Directed, transitive-capable join edge between two table classes in the many-to-one (finer grain -> coarser grain) direction.  Emitted once per declared or inferred foreign-key relationship so that a single SPARQL property path `?from oba:joinsTo+ ?to` answers directed reachability (the dimension-capable closure for a query anchored on ?from) without enumerating each per-FK object property.  The one-to-many (measure-capable) direction is the inverse path `^oba:joinsTo`." ;
+    rdfs:domain owl:Class ;
+    rdfs:range owl:Class .
 
 oba:foreignKeyColumn a owl:AnnotationProperty ;
     rdfs:label "foreign key column" ;

@@ -1,11 +1,14 @@
 """Tests for OWL axiom generation: FunctionalProperty, disjointWith, propertyChainAxiom."""
 
 import unittest
-from rdflib import URIRef
+from rdflib import URIRef, Namespace
 from rdflib.namespace import RDF, RDFS, OWL
 
 from src.ontology_generator import OntologyGenerator
 from src.database_manager import TableInfo, ColumnInfo
+from src.constants import OBA_NAMESPACE
+
+OBA = Namespace(OBA_NAMESPACE)
 
 
 class TestOwlAxioms(unittest.TestCase):
@@ -381,6 +384,47 @@ class TestOwlAxioms(unittest.TestCase):
         g = self.generator.graph
         chain_triples = list(g.triples((None, OWL.propertyChainAxiom, None)))
         self.assertEqual(len(chain_triples), 0)
+
+
+    # -------------------------------------------------------------------------
+    # oba:joinsTo shared traversable join predicate tests (Phase 1)
+    # -------------------------------------------------------------------------
+
+    def test_joins_to_emitted_for_declared_fk(self):
+        """A declared many-to-one FK emits a directed oba:joinsTo class edge."""
+        self.generator.generate_from_schema(
+            [self.customers, self.orders],
+            include_inferred_relationships=False,
+        )
+        g = self.generator.graph
+        self.assertIn(
+            (URIRef(self.ns + "orders"), OBA.joinsTo, URIRef(self.ns + "customers")),
+            g,
+        )
+
+    def test_joins_to_is_directed_not_reverse(self):
+        """oba:joinsTo is many-to-one only — never the one-to-many reverse."""
+        self.generator.generate_from_schema(
+            [self.customers, self.orders],
+            include_inferred_relationships=False,
+        )
+        g = self.generator.graph
+        self.assertNotIn(
+            (URIRef(self.ns + "customers"), OBA.joinsTo, URIRef(self.ns + "orders")),
+            g,
+        )
+
+    def test_joins_to_one_edge_per_fk(self):
+        """One oba:joinsTo edge per many-to-one FK (orders, returns -> customers)."""
+        self.generator.generate_from_schema(
+            [self.customers, self.orders, self.returns],
+            include_inferred_relationships=False,
+        )
+        g = self.generator.graph
+        edges = list(g.triples((None, OBA.joinsTo, None)))
+        self.assertEqual(len(edges), 2)
+        targets = {str(o) for _, _, o in edges}
+        self.assertEqual(targets, {self.ns + "customers"})
 
 
 if __name__ == "__main__":

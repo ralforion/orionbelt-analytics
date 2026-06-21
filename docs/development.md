@@ -24,7 +24,7 @@ Optional but recommended:
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/ralfbecher/orionbelt-analytics
+git clone https://github.com/ralforion/orionbelt-analytics
 cd orionbelt-analytics
 uv sync
 ```

@@ -242,6 +242,27 @@ async def generate_ontology(
     generator = _server_state.get_ontology_generator(base_uri=base_uri)
     ontology_ttl = generator.generate_from_schema(tables_info)
 
+    # Optional SHACL conformance check (Phase 4). Default on, gated by setting;
+    # never hard-fails generation — surfaces violations as a warning only.
+    if os.getenv("OBA_SHACL_VALIDATE", "true").lower() == "true":
+        try:
+            from ..shacl_validator import validate_ontology
+
+            shacl = validate_ontology(ontology_ttl)
+            if shacl["available"] and not shacl["conforms"]:
+                logger.warning(
+                    "SHACL: generated ontology has %d violation(s):\n%s",
+                    shacl["violations"], shacl["report"],
+                )
+                await ctx.info(
+                    f"SHACL validation: {shacl['violations']} violation(s) in the "
+                    "generated ontology (non-blocking; see server logs for detail)."
+                )
+            elif shacl["available"]:
+                logger.info("SHACL: generated ontology conforms to oba-shacl shapes.")
+        except Exception as e:
+            logger.warning(f"SHACL validation step skipped: {e}")
+
     # Save ontology to connection-scoped output folder
     ontology_filename = None
     try:

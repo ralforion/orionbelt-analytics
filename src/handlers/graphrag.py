@@ -451,6 +451,218 @@ async def graphrag_find_join_path(
         )
 
 
+async def reachable_from(
+    ctx: Context,
+    table: str,
+    max_hops: Optional[int],
+    get_session_data,
+    create_error_response,
+) -> Dict[str, Any]:
+    """Dimension-capable tables for a query anchored on ``table`` (many-to-one closure)."""
+    session = get_session_data(ctx)
+
+    if not session.graphrag_initialized or session.graphrag_manager is None:
+        return create_error_response(
+            "GraphRAG not initialized. Please call discover_schema() first.",
+            "graphrag_not_initialized",
+        )
+
+    try:
+        result = session.graphrag_manager.graph_retriever.reachable_from(
+            table, max_hops=max_hops
+        )
+        if not result["exists"]:
+            return create_error_response(
+                f"Table '{table}' not found in the schema graph.", "data_error"
+            )
+
+        await ctx.info(
+            f"{len(result['tables'])} dimension-capable tables reachable from '{table}'"
+        )
+        return {
+            "success": True,
+            "table": table,
+            "direction": "many_to_one",
+            "capability": "dimension",
+            "reachable_tables": result["tables"],
+            "by_hop": result["by_hop"],
+            "guidance": (
+                f"These coarser-grain tables can be joined from '{table}' without "
+                "row multiplication (each join is many-to-one / functional), so their "
+                "columns are safe to use as dimensions (GROUP BY / filter)."
+            ),
+        }
+
+    except Exception as e:
+        logger.error(f"reachable_from failed: {e}", exc_info=True)
+        return create_error_response(f"reachable_from failed: {str(e)}", "graphrag_error")
+
+
+async def measurable_from(
+    ctx: Context,
+    table: str,
+    max_hops: Optional[int],
+    get_session_data,
+    create_error_response,
+) -> Dict[str, Any]:
+    """Measure-capable tables for a query anchored on ``table`` (one-to-many closure)."""
+    session = get_session_data(ctx)
+
+    if not session.graphrag_initialized or session.graphrag_manager is None:
+        return create_error_response(
+            "GraphRAG not initialized. Please call discover_schema() first.",
+            "graphrag_not_initialized",
+        )
+
+    try:
+        result = session.graphrag_manager.graph_retriever.measurable_from(
+            table, max_hops=max_hops
+        )
+        if not result["exists"]:
+            return create_error_response(
+                f"Table '{table}' not found in the schema graph.", "data_error"
+            )
+
+        await ctx.info(
+            f"{len(result['tables'])} measure-capable tables for anchor '{table}'"
+        )
+        return {
+            "success": True,
+            "table": table,
+            "direction": "one_to_many",
+            "capability": "measure",
+            "measurable_tables": result["tables"],
+            "by_hop": result["by_hop"],
+            "guidance": (
+                f"These finer-grain tables fan out '{table}' (one-to-many), so their "
+                "values must be aggregated into measures (SUM/COUNT/...) and must NOT "
+                f"be used as dimensions at the grain of '{table}' — doing so is a fan-trap."
+            ),
+        }
+
+    except Exception as e:
+        logger.error(f"measurable_from failed: {e}", exc_info=True)
+        return create_error_response(f"measurable_from failed: {str(e)}", "graphrag_error")
+
+
+async def plan_composite_query(
+    ctx: Context,
+    facts: List[str],
+    dimensions: Optional[List[str]],
+    get_session_data,
+    create_error_response,
+) -> Dict[str, Any]:
+    """Advise a Composite Fact Layer (CFL) decomposition for a multi-fact query.
+
+    Detects whether the requested facts are independent grains (disjoint
+    siblings) that require a UNION ALL composite, and computes the leg
+    structure: per-leg dimensions, conformed (shared) GROUP BY keys, and the
+    NULL-pad set for each leg. Advisory only — OBA does not compile SQL; OBSL
+    owns CFL compilation.
+    """
+    session = get_session_data(ctx)
+
+    if not session.graphrag_initialized or session.graphrag_manager is None:
+        return create_error_response(
+            "GraphRAG not initialized. Please call discover_schema() first.",
+            "graphrag_not_initialized",
+        )
+
+    if not facts:
+        return create_error_response(
+            "Provide at least one fact (measure-source) table.", "parameter_error"
+        )
+
+    retriever = session.graphrag_manager.graph_retriever
+
+    missing = [f for f in facts if f not in retriever.graph]
+    if missing:
+        return create_error_response(
+            f"Tables not found in schema graph: {', '.join(missing)}", "data_error"
+        )
+
+    # Validate explicit dimensions too — an unknown dimension would otherwise be
+    # silently null-padded into every leg and mislead downstream SQL planning.
+    if dimensions:
+        missing_dims = [d for d in dimensions if d not in retriever.graph]
+        if missing_dims:
+            return create_error_response(
+                f"Dimensions not found in schema graph: {', '.join(missing_dims)}",
+                "data_error",
+            )
+
+    facts = list(dict.fromkeys(facts))  # de-dupe, preserve order
+
+    # Dimension-capable set reachable from each fact (many-to-one closure).
+    reach = {f: set(retriever.reachable_from(f)["tables"]) for f in facts}
+
+    # Leg-root facts = facts that are NOT reachable from another fact. A fact
+    # reachable from another sits on that fact's grain chain (a coarser table),
+    # so it is a dimension of it, not an independent leg.
+    leg_roots = [
+        f for f in facts if not any(f in reach[g] for g in facts if g != f)
+    ]
+    leg_roots = list(dict.fromkeys(leg_roots))
+
+    cfl_required = len(leg_roots) >= 2
+
+    # Requested dimensions: explicit list, else the union of all reachable dims.
+    if dimensions:
+        requested = list(dict.fromkeys(dimensions))
+    else:
+        requested = sorted(set().union(*reach.values()) if reach else set())
+
+    # Conformed dims = reachable from every leg root → safe GROUP BY keys.
+    if leg_roots:
+        conformed_set = set.intersection(*[reach[f] for f in leg_roots])
+    else:
+        conformed_set = set()
+    conformed = [d for d in requested if d in conformed_set]
+
+    legs = []
+    for root in leg_roots:
+        leg_dims = [d for d in requested if d in reach[root]]
+        null_pad = [d for d in requested if d not in reach[root]]
+        legs.append(
+            {
+                "root": root,
+                "dimensions": leg_dims,
+                "null_pad": null_pad,
+            }
+        )
+
+    if cfl_required:
+        guidance = (
+            "These facts are independent grains (disjoint siblings). Emit one "
+            "UNION ALL leg per leg root, aggregating its own measures; project the "
+            "conformed dimensions in every leg as GROUP BY keys and CAST(NULL AS "
+            "<type>) for each leg's null_pad dimensions. OBA advises only — when "
+            "OrionBelt Semantic Layer is connected, defer the actual CFL compilation "
+            "to it."
+        )
+    elif leg_roots:
+        guidance = (
+            f"Single grain '{leg_roots[0]}' — a normal star join suffices, no "
+            "Composite Fact Layer needed. The other facts sit on this grain's "
+            "chain and act as dimensions."
+        )
+    else:
+        guidance = "Could not determine a leg root."
+
+    await ctx.info(
+        f"CFL decomposition: cfl_required={cfl_required}, {len(legs)} leg(s)"
+    )
+    return {
+        "success": True,
+        "cfl_required": cfl_required,
+        "facts": facts,
+        "leg_roots": leg_roots,
+        "conformed_dimensions": conformed,
+        "legs": legs,
+        "guidance": guidance,
+    }
+
+
 async def graphrag_overview(
     ctx: Context,
     get_session_data,

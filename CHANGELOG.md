@@ -5,6 +5,19 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-06-15
+
+### Added
+- **Graph reasoning surface over the generated ontology** (`design/PLAN_graph_reasoning.md`):
+  - **`oba:joinsTo` shared join predicate.** Every declared or inferred many-to-one foreign key now also emits a single directed `oba:joinsTo` edge between the table classes (finer grain → coarser grain). A single SPARQL property path `?from oba:joinsTo+ ?to` answers directed reachability across all FKs without enumerating each per-FK object property. Declared in `ontology/oba.ttl` (vocabulary bumped 0.1 → 0.2).
+  - **`reachable_from` MCP tool** — the dimension-capable tables for a query anchored on a table (many-to-one closure): coarser-grain tables joinable without row multiplication, safe to GROUP BY / filter on.
+  - **`measurable_from` MCP tool** — the measure-capable tables (one-to-many closure, the inverse): finer-grain tables that fan out the anchor and must only be aggregated, never used as dimensions at this grain. Both closures are cycle-safe.
+  - **`plan_composite_query` MCP tool** — advisory Composite Fact Layer (CFL) decomposition: detects whether the requested facts are independent grains (disjoint siblings) requiring a `UNION ALL` composite, and returns the leg roots, conformed (shared) GROUP BY dimensions, and per-leg NULL-pad sets. Advisory only — OBA does not compile SQL; defer compilation to OrionBelt Semantic Layer when connected.
+  - **Optional in-process SHACL validation.** When `pyshacl` is installed, `generate_ontology` validates the generated ontology against `ontology/oba-shacl.ttl` and surfaces violations as a non-blocking warning (gated by `OBA_SHACL_VALIDATE`, default on). Gracefully no-ops when the dependency or shapes file is absent.
+
+### Changed
+- **OBQC fan-trap detection is now grounded in the ontology's own `owl:disjointWith` axioms** (sibling facts sharing a dimension) instead of only re-deriving the risk from the relationship heuristic. When disjoint facts appear together in an aggregating query, OBQC cites the actual disjoint tables and recommends a Composite Fact Layer (UNION ALL). The relationship heuristic is retained as a fallback when no disjointness axioms are present.
+
 ## [1.5.3] - 2026-06-10
 
 ### Changed
@@ -200,6 +213,6 @@ OrionBelt Analytics v1.0.0 now supports:
 - Ontology generation
 - Schema analysis tools
 
-[1.0.0]: https://github.com/ralfbecher/orionbelt-analytics/releases/tag/v1.0.0
-[0.7.0]: https://github.com/ralfbecher/orionbelt-analytics/releases/tag/v0.7.0
-[0.6.0]: https://github.com/ralfbecher/orionbelt-analytics/releases/tag/v0.6.0
+[1.0.0]: https://github.com/ralforion/orionbelt-analytics/releases/tag/v1.0.0
+[0.7.0]: https://github.com/ralforion/orionbelt-analytics/releases/tag/v0.7.0
+[0.6.0]: https://github.com/ralforion/orionbelt-analytics/releases/tag/v0.6.0

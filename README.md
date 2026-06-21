@@ -1,15 +1,15 @@
-<!-- mcp-name: io.github.ralfbecher/orionbelt-analytics -->
+<!-- mcp-name: io.github.ralforion/orionbelt-analytics -->
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-analytics/main/assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
+  <img src="https://raw.githubusercontent.com/ralforion/orionbelt-analytics/main/assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
 </p>
 
 <h1 align="center">OrionBelt Analytics</h1>
 
 <p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
 
-[![Version 1.5.3](https://img.shields.io/badge/version-1.5.3-purple.svg)](https://github.com/ralfbecher/orionbelt-analytics/releases)
+[![Version 1.6.0](https://img.shields.io/badge/version-1.6.0-purple.svg)](https://github.com/ralforion/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
-[![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralfbecher/orionbelt-analytics/blob/main/LICENSE)
+[![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](https://github.com/ralforion/orionbelt-analytics/blob/main/LICENSE)
 [![FastMCP](https://img.shields.io/badge/FastMCP-3.3.1+-blue)](https://github.com/jlowin/fastmcp)
 [![RDF/OWL](https://img.shields.io/badge/RDF%2FOWL-Ontology-orange)](https://www.w3.org/OWL/)
 
@@ -38,7 +38,7 @@ Run Analytics and Semantic Layer side-by-side in Claude Desktop for schema-aware
 ## Architecture
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-analytics/main/assets/architecture.png" alt="OrionBelt Analytics Architecture" width="900">
+  <img src="https://raw.githubusercontent.com/ralforion/orionbelt-analytics/main/assets/architecture.png" alt="OrionBelt Analytics Architecture" width="900">
 </p>
 
 - **8 database connectors** -- PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, Databricks SQL
@@ -79,7 +79,7 @@ OBQC is fully deterministic -- no LLM calls, no probabilistic reasoning. It acts
 ### 1. Install
 
 ```bash
-git clone https://github.com/ralfbecher/orionbelt-analytics
+git clone https://github.com/ralforion/orionbelt-analytics
 cd orionbelt-analytics
 uv sync
 ```
@@ -150,7 +150,7 @@ OrionBelt works with LangChain, OpenAI Agents SDK, CrewAI, Google ADK, Vercel AI
 
 ## Tools
 
-OrionBelt exposes 23 MCP tools. Here is a summary by category:
+OrionBelt exposes 26 MCP tools. Here is a summary by category:
 
 ### Connection & Schema
 
@@ -188,6 +188,9 @@ OrionBelt exposes 23 MCP tools. Here is a summary by category:
 | `graphrag_search`         | Semantic search + schema overview (auto-initialized by `discover_schema`) |
 | `graphrag_query_context`  | Get optimized context for SQL generation (85-95% token reduction)         |
 | `graphrag_find_join_path` | Discover join paths between tables via graph traversal                    |
+| `reachable_from`          | Dimension-capable tables for an anchor grain (many-to-one closure)        |
+| `measurable_from`         | Measure-capable tables for an anchor grain (one-to-many closure)          |
+| `plan_composite_query`    | Advise a fan-trap-safe Composite Fact Layer (UNION ALL) decomposition     |
 
 ### SPARQL & RDF
 
@@ -261,6 +264,6 @@ For commercial licensing inquiries, contact: licensing@ralforion.com
 
 <p align="center">
   <a href="https://ralforion.com">
-    <img src="https://raw.githubusercontent.com/ralfbecher/orionbelt-analytics/main/assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
+    <img src="https://raw.githubusercontent.com/ralforion/orionbelt-analytics/main/assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
   </a>
 </p>

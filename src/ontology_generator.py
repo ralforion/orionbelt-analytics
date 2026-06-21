@@ -376,6 +376,11 @@ class OntologyGenerator:
         # Add relationship type annotation
         self.graph.add((prop_uri, self.oba_ns.relationshipType, Literal("many_to_one")))
 
+        # Shared traversable join edge (finer grain -> coarser grain) so a single
+        # SPARQL property path `oba:joinsTo+` answers directed reachability across
+        # all FKs without per-property paths. Many-to-one direction only.
+        self.graph.add((table_uri, self.oba_ns.joinsTo, referenced_table_uri))
+
         # Add inverse relationship
         inverse_rel_name = f"{self._clean_name(referenced_table)}_referenced_by_{self._clean_name(table_name)}"
         inverse_prop_uri = self.base_uri[inverse_rel_name]
@@ -761,6 +766,10 @@ class OntologyGenerator:
         self.graph.add((prop_uri, self.oba_ns.inferencePattern, Literal(inferred_rel.pattern_matched)))
         self.graph.add((prop_uri, self.oba_ns.relationshipType, Literal("many_to_one")))
 
+        # Shared traversable join edge (finer grain -> coarser grain); see
+        # _add_relationship_to_ontology. Many-to-one direction only.
+        self.graph.add((source_table_uri, self.oba_ns.joinsTo, target_table_uri))
+
         # Add inverse relationship
         inverse_rel_name = (
             f"{self._clean_name(inferred_rel.target_table)}_referenced_by_"
@@ -837,7 +846,12 @@ class OntologyGenerator:
                         str(ref_table), set()
                     ).add(str(source_name))
 
-        # Build set of tables that have a direct FK relationship between them
+        # Build set of tables that have a direct FK relationship between them.
+        # Must mirror dimension_to_sources, which includes inferred relationships:
+        # if a sibling pair is connected by an *inferred* FK, declaring them
+        # disjoint would contradict the relationship and feed OBQC bad input.
+        # So derive the exclusion set from both declared FKs and the inferred
+        # many-to-one relationships already materialized in the graph.
         fk_pairs: Set[Tuple[str, str]] = set()
         for table in tables_info:
             for fk in table.foreign_keys:
@@ -845,6 +859,18 @@ class OntologyGenerator:
                 if ref:
                     fk_pairs.add((table.name, ref))
                     fk_pairs.add((ref, table.name))
+
+        for subj in self.graph.subjects(RDF.type, OWL.ObjectProperty):
+            rel_type = self.graph.value(subj, self.oba_ns.relationshipType)
+            if str(rel_type) != "many_to_one":
+                continue
+            ref_table = self.graph.value(subj, self.oba_ns.referencedTable)
+            domain = self.graph.value(subj, RDFS.domain)
+            if ref_table and domain:
+                source_name = self.graph.value(domain, self.oba_ns.tableName)
+                if source_name:
+                    fk_pairs.add((str(source_name), str(ref_table)))
+                    fk_pairs.add((str(ref_table), str(source_name)))
 
         # Declare disjoint pairs: siblings sharing a dimension, no FK between them
         declared: Set[Tuple[str, str]] = set()

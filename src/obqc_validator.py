@@ -169,6 +169,10 @@ class OBQCValidator:
         self._base_uri: Optional[Namespace] = None
         self._oba_ns: Optional[Namespace] = None
         self._is_compatible: bool = False  # Whether ontology has oba: annotations
+        # Fan-trap topology read straight from the ontology axioms (Phase 2):
+        # pairs of lower-cased table names declared owl:disjointWith each other
+        # (sibling facts sharing a dimension — the canonical fan-trap shape).
+        self._disjoint_pairs: Set[frozenset] = set()
 
     def load_ontology(self, ontology_graph: Graph, base_uri: str) -> None:
         """Load and cache schema from ontology graph.
@@ -181,6 +185,7 @@ class OBQCValidator:
         self._base_uri = Namespace(base_uri)
         self._oba_ns = Namespace(OBA_NAMESPACE)
         self._schema_cache = self._extract_schema_from_ontology()
+        self._disjoint_pairs = self._extract_disjoint_pairs()
 
         # Check if ontology has required oba: annotations for OBQC
         self._is_compatible = self._check_ontology_compatibility()
@@ -312,6 +317,26 @@ class OBQCValidator:
                         col.fk_referenced_column = ref_column
 
         return schema
+
+    def _extract_disjoint_pairs(self) -> Set[frozenset]:
+        """Read owl:disjointWith axioms as pairs of lower-cased table names.
+
+        The generator emits owl:disjointWith between sibling fact tables that
+        share a dimension but have no FK between them — exactly the fan-trap
+        topology. Reading it here lets OBQC ground fan-trap detection in the
+        ontology instead of re-deriving it from the relationship heuristic.
+        """
+        pairs: Set[frozenset] = set()
+        if self._graph is None or self._oba_ns is None:
+            return pairs
+
+        for a_uri, b_uri in self._graph.subject_objects(OWL.disjointWith):
+            a_name = self._get_literal(a_uri, self._oba_ns.tableName)
+            b_name = self._get_literal(b_uri, self._oba_ns.tableName)
+            if a_name and b_name and a_name.lower() != b_name.lower():
+                pairs.add(frozenset((a_name.lower(), b_name.lower())))
+
+        return pairs
 
     def _get_literal(self, subject: URIRef, predicate: URIRef) -> Optional[str]:
         """Get string value of a literal predicate."""
@@ -790,7 +815,13 @@ class OBQCValidator:
         return False
 
     def _detect_fan_trap(self, result: OBQCResult) -> None:
-        """Rule: Detect potential fan-trap patterns."""
+        """Rule: Detect potential fan-trap patterns.
+
+        Prefers the ontology's own ``owl:disjointWith`` axioms (sibling facts
+        sharing a dimension — the canonical fan-trap shape) so OBQC and the
+        ontology agree by construction. Falls back to the relationship heuristic
+        when no disjointness axioms are present (e.g. minimal imports).
+        """
         if not result.has_aggregation:
             return
 
@@ -800,7 +831,35 @@ class OBQCValidator:
         if self._schema_cache is None:
             return
 
-        # Count one-to-many relationships in the join graph
+        # --- Axiom-grounded path: disjoint sibling facts in the same query ----
+        queried = {t.lower() for t in result.parsed_tables}
+        disjoint_hits: Set[frozenset] = {
+            pair for pair in self._disjoint_pairs if pair <= queried
+        }
+        if disjoint_hits:
+            result.fan_trap_risk = True
+            involved = sorted({t for pair in disjoint_hits for t in pair})
+            result.issues.append(
+                OBQCIssue(
+                    issue_type=OBQCIssueType.FAN_TRAP_DETECTED,
+                    severity=OBQCSeverity.WARNING,
+                    message=(
+                        "Potential fan-trap: query aggregates across tables the ontology "
+                        f"declares disjoint (sibling facts sharing a dimension): "
+                        f"{', '.join(involved)}"
+                    ),
+                    location="Query structure",
+                    suggestion=(
+                        "These facts are at different grains sharing a common dimension. "
+                        "Aggregate each fact separately and combine with UNION ALL "
+                        "(Composite Fact Layer), or pre-aggregate in CTEs before joining."
+                    ),
+                    related_entities=involved,
+                )
+            )
+            return
+
+        # --- Heuristic fallback: count one-to-many joins (no disjointness axioms)
         one_to_many_count = 0
         involved_tables: List[str] = []
 

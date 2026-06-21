@@ -1062,6 +1062,95 @@ async def graphrag_find_join_path(
     )
 
 
+@mcp.tool()
+async def reachable_from(
+    ctx: Context,
+    table: _Identifier,
+    max_hops: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List the dimension-capable tables for a query anchored on a table.
+
+    Follows foreign keys in the many-to-one (finer grain -> coarser grain)
+    direction: the returned tables can be joined from `table` without row
+    multiplication (each join is functional), so their columns are safe to use
+    as dimensions (GROUP BY / filter). This is the directed reachability the
+    bidirectional `graphrag_find_join_path` cannot express. Pair with
+    `measurable_from` for the measure side.
+
+    Args:
+        table: Anchor table name (the query grain)
+        max_hops: Maximum FK hops to follow (None = full closure)
+
+    Returns:
+        Dictionary with reachable (dimension-capable) tables and per-hop breakdown
+    """
+    return await _h_graphrag.reachable_from(
+        ctx, table, max_hops,
+        get_session_data=get_session_data,
+        create_error_response=create_error_response,
+    )
+
+
+@mcp.tool()
+async def measurable_from(
+    ctx: Context,
+    table: _Identifier,
+    max_hops: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List the measure-capable tables for a query anchored on a table.
+
+    Follows foreign keys in the one-to-many (toward finer grain) direction: the
+    returned tables fan out `table`, so their values can only be aggregated into
+    measures (SUM/COUNT/...) and must NOT be used as dimensions at this grain
+    (doing so is a fan-trap). The inverse of `reachable_from`.
+
+    Args:
+        table: Anchor table name (the query grain)
+        max_hops: Maximum FK hops to follow (None = full closure)
+
+    Returns:
+        Dictionary with measure-capable tables and per-hop breakdown
+    """
+    return await _h_graphrag.measurable_from(
+        ctx, table, max_hops,
+        get_session_data=get_session_data,
+        create_error_response=create_error_response,
+    )
+
+
+@mcp.tool()
+async def plan_composite_query(
+    ctx: Context,
+    facts: List[_Identifier],
+    dimensions: Optional[List[_Identifier]] = None,
+) -> Dict[str, Any]:
+    """Advise a Composite Fact Layer (CFL) decomposition for a multi-fact query.
+
+    Given the fact (measure-source) tables a query needs, determines whether
+    they are independent grains (disjoint siblings) requiring a UNION ALL
+    composite, and returns the leg structure: per-leg dimensions, the conformed
+    (shared) dimensions that become GROUP BY keys in every leg, and each leg's
+    NULL-pad set. Use this before writing cross-fact SQL to avoid fan-traps.
+
+    Advisory only: OBA does not compile SQL. When OrionBelt Semantic Layer is
+    connected, defer the actual CFL compilation to it.
+
+    Args:
+        facts: The fact (measure-source) tables the query aggregates
+        dimensions: Optional explicit dimension tables to project (default: all
+            tables reachable from the facts)
+
+    Returns:
+        Dictionary with cfl_required flag, leg roots, conformed dimensions, and
+        per-leg dimension/NULL-pad decomposition
+    """
+    return await _h_graphrag.plan_composite_query(
+        ctx, facts, dimensions,
+        get_session_data=get_session_data,
+        create_error_response=create_error_response,
+    )
+
+
 # --- Oxigraph RDF Store & SPARQL Tools ---
 
 @mcp.tool()

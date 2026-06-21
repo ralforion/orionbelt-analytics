@@ -6,7 +6,7 @@
 @prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 
 # =============================================================================
-# OBA SHACL Shapes 0.1
+# OBA SHACL Shapes 0.2
 #
 # Validation shapes for ontologies annotated with the OBA vocabulary.
 # These shapes target OWL entities (owl:Class, owl:DatatypeProperty,
@@ -235,7 +235,11 @@ oba:ColumnShape a sh:NodeShape ;
     ] .
 
 # -----------------------------------------------------------------------------
-# Relationship Shape (base) --- validates ALL owl:ObjectProperty instances
+# Relationship Shape (base) --- validates generated relationship properties
+#
+# Targets subjects of oba:relationshipType (every generated forward/inverse
+# relationship), not owl:ObjectProperty at large, so meta-level vocabulary
+# object properties (e.g. oba:joinsTo) are not treated as focus nodes.
 #
 # Both forward (FK-holding) and inverse relationships carry these properties.
 # FK-specific annotations (foreignKeyColumn, referencedTable, etc.) are only
@@ -243,9 +247,9 @@ oba:ColumnShape a sh:NodeShape ;
 # -----------------------------------------------------------------------------
 
 oba:RelationshipShape a sh:NodeShape ;
-    sh:targetClass owl:ObjectProperty ;
+    sh:targetSubjectsOf oba:relationshipType ;
     rdfs:label "OBA Relationship Shape" ;
-    rdfs:comment "Base shape for all OWL object properties (forward and inverse).  Validates structural properties common to both directions." ;
+    rdfs:comment "Base shape for generated relationship object properties (forward and inverse).  Targets subjects of oba:relationshipType so it validates only generated relationships, never meta-level vocabulary terms such as oba:joinsTo (which is an owl:ObjectProperty but carries no oba:relationshipType).  This keeps the shapes correct even when the OBA vocabulary is merged into the data graph (e.g. pyshacl -e oba.ttl)." ;
 
     # Required on both forward and inverse
     sh:property [
