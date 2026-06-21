@@ -213,6 +213,6 @@ OrionBelt Analytics v1.0.0 now supports:
 - Ontology generation
 - Schema analysis tools
 
-[1.0.0]: https://github.com/ralfbecher/orionbelt-analytics/releases/tag/v1.0.0
-[0.7.0]: https://github.com/ralfbecher/orionbelt-analytics/releases/tag/v0.7.0
-[0.6.0]: https://github.com/ralfbecher/orionbelt-analytics/releases/tag/v0.6.0
+[1.0.0]: https://github.com/ralforion/orionbelt-analytics/releases/tag/v1.0.0
+[0.7.0]: https://github.com/ralforion/orionbelt-analytics/releases/tag/v0.7.0
+[0.6.0]: https://github.com/ralforion/orionbelt-analytics/releases/tag/v0.6.0
