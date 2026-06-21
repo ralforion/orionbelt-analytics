@@ -581,6 +581,16 @@ async def plan_composite_query(
             f"Tables not found in schema graph: {', '.join(missing)}", "data_error"
         )
 
+    # Validate explicit dimensions too — an unknown dimension would otherwise be
+    # silently null-padded into every leg and mislead downstream SQL planning.
+    if dimensions:
+        missing_dims = [d for d in dimensions if d not in retriever.graph]
+        if missing_dims:
+            return create_error_response(
+                f"Dimensions not found in schema graph: {', '.join(missing_dims)}",
+                "data_error",
+            )
+
     facts = list(dict.fromkeys(facts))  # de-dupe, preserve order
 
     # Dimension-capable set reachable from each fact (many-to-one closure).
