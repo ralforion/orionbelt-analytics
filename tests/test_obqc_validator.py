@@ -484,6 +484,25 @@ class TestOBQCAxiomDrivenFanTrap(unittest.TestCase):
         self.assertFalse(result.fan_trap_risk)
 
 
+class TestOBQCDialectParity(unittest.TestCase):
+    """Guard that OBQC maps every supported database to a real sqlglot dialect."""
+
+    def test_dialect_map_covers_all_supported_databases(self):
+        from src.constants import SUPPORTED_DB_TYPES
+
+        missing = [db for db in SUPPORTED_DB_TYPES if db not in OBQCValidator.DIALECT_MAP]
+        self.assertEqual(
+            missing, [], f"databases missing from OBQC DIALECT_MAP: {missing}"
+        )
+
+    def test_mapped_dialects_resolve_in_sqlglot(self):
+        from sqlglot.dialects.dialect import Dialect
+
+        for db, dialect in OBQCValidator.DIALECT_MAP.items():
+            with self.subTest(db=db):
+                Dialect.get_or_raise(dialect)  # raises if the dialect is unknown
+
+
 class TestOBQCIssue(unittest.TestCase):
     """Test suite for OBQCIssue data class."""
 

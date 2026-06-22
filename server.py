@@ -50,7 +50,12 @@ def print_startup_info():
     logger.info("MCP server for database ad hoc analysis with ontology support and interactive charting")
     logger.info("="*60)
     
-    logger.info("🔧 Available MCP Tools (23):")
+    # Count comes straight from the registry so the banner can never drift
+    # from the tools actually registered in src/main.py.
+    from src.main import get_registered_tool_names
+
+    registered = get_registered_tool_names()
+    logger.info(f"🔧 Available MCP Tools ({len(registered)}):")
     tool_groups = {
         "Connection & Schema": [
             "connect_database - Connect to any supported database",
@@ -77,6 +82,11 @@ def print_startup_info():
             "graphrag_query_context - Optimized context for SQL generation",
             "graphrag_find_join_path - Discover join paths via graph traversal",
         ],
+        "Graph Reasoning": [
+            "reachable_from - Traverse object-property edges from a class",
+            "measurable_from - Find numeric measures reachable from a class",
+            "plan_composite_query - Plan a multi-hop query over the ontology",
+        ],
         "SPARQL & RDF": [
             "store_ontology_in_rdf - Persist ontology in Oxigraph",
             "query_sparql - Execute SPARQL queries (SELECT, ASK, CONSTRUCT)",
@@ -92,6 +102,16 @@ def print_startup_info():
         logger.info(f"  [{group}]")
         for tool in tools:
             logger.info(f"    • {tool}")
+
+    # Warn loudly if the curated banner ever drifts from the real registry.
+    listed = {entry.split(" - ", 1)[0].strip() for tools in tool_groups.values() for entry in tools}
+    missing = sorted(set(registered) - listed)
+    extra = sorted(listed - set(registered))
+    if missing or extra:
+        logger.warning(
+            "Startup tool banner out of sync with registry "
+            f"(missing: {missing or 'none'}; stale: {extra or 'none'})"
+        )
 
     logger.info("")
     logger.info("🗄️ Supported Databases: PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, Databricks")

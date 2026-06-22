@@ -405,7 +405,7 @@ class TestMCPToolsAsync:
 
         with patch('src.main.get_session_data', return_value=mock_session_data), \
              patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-             patch('src.main.get_session_id', return_value="test-session"), \
+             patch('src.server_state.get_session_id', return_value="test-session"), \
              patch('src.main.get_session_safe_filename', return_value="test_schema.json"), \
              patch('builtins.open', MagicMock()), \
              patch('json.dump'):
@@ -456,7 +456,7 @@ class TestMCPToolsAsync:
         with patch('src.main.get_session_data', return_value=mock_session_data), \
              patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
              patch('src.main.get_session_safe_filename', return_value="test_ontology.ttl"), \
-             patch('src.main.OntologyGenerator', return_value=mock_generator), \
+             patch('src.server_state.OntologyGenerator', return_value=mock_generator), \
              patch('builtins.open', MagicMock()):
 
             result = await main_module.generate_ontology(

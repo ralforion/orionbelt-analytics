@@ -222,8 +222,13 @@ class SQLInjectionValidator:
                 )
                 risk_level = SecurityLevel.CRITICAL
 
-        # Check for multiple statements
-        statements = [s.strip() for s in cleaned_query.split(';') if s.strip()]
+        # Check for multiple statements. Blank out single-quoted string literals
+        # first so a semicolon *inside* a literal (e.g. WHERE name = 'a;b') is not
+        # miscounted as a statement separator. Authoritative multi-statement
+        # detection is the parser-based analyze_sql_statement() gate; this is a
+        # coarse first filter.
+        literal_stripped = re.sub(r"'(?:[^']|'')*'", "''", cleaned_query)
+        statements = [s.strip() for s in literal_stripped.split(';') if s.strip()]
         if len(statements) > 1:
             issues.append("Multiple SQL statements not allowed")
             risk_level = SecurityLevel.CRITICAL
@@ -343,6 +348,87 @@ def audit_log_security_event(
     logger.warning(
         f"SECURITY_AUDIT: {event_type} | Risk: {risk_level.value} | Details: {safe_details}"
     )
+
+
+#: AST node types that mutate data or schema — never allowed for analytics SQL.
+_WRITE_EXPRESSIONS = (
+    "Insert", "Update", "Delete", "Merge",
+    "Create", "Drop", "Alter", "TruncateTable",
+)
+
+
+def analyze_sql_statement(sql_query: str, dialect: str = "postgres") -> Dict[str, Any]:
+    """Dialect-aware structural analysis of a SQL statement using sqlglot.
+
+    This is the *primary*, parser-based safety gate. Unlike regex/``startswith``
+    checks it is not fooled by semicolons inside string literals (false
+    "multiple statements") or by write operations buried after a CTE
+    (``WITH x AS (...) INSERT ...`` — which a ``startswith('WITH')`` check would
+    wrongly allow). The regex :class:`SQLInjectionValidator` remains a first
+    filter; this is the authoritative read-only / single-statement decision.
+
+    Args:
+        sql_query: The SQL statement to analyze.
+        dialect: sqlglot dialect name (e.g. ``postgres``, ``snowflake``).
+
+    Returns:
+        Dict with: ``parsed`` (bool), ``single_statement`` (bool),
+        ``query_type`` (SELECT|CTE_SELECT|METADATA|WRITE|UNKNOWN),
+        ``is_read_only`` (bool), ``write_operations`` (list[str]),
+        ``affected_tables`` (list[str]), ``error`` (str|None).
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    result: Dict[str, Any] = {
+        "parsed": False,
+        "single_statement": True,
+        "query_type": "UNKNOWN",
+        "is_read_only": False,
+        "write_operations": [],
+        "affected_tables": [],
+        "error": None,
+    }
+
+    try:
+        statements = [s for s in sqlglot.parse(sql_query, dialect=dialect) if s is not None]
+    except Exception as e:  # sqlglot.errors.ParseError and friends
+        result["error"] = f"SQL parse error: {e}"
+        return result
+
+    result["parsed"] = True
+    if not statements:
+        result["error"] = "Empty query"
+        return result
+    if len(statements) > 1:
+        result["single_statement"] = False
+        result["error"] = "Multiple SQL statements are not allowed"
+        return result
+
+    stmt = statements[0]
+    write_types = tuple(getattr(exp, name) for name in _WRITE_EXPRESSIONS if hasattr(exp, name))
+
+    # Detect write/DDL nodes anywhere in the tree (including nested in CTEs).
+    writes = sorted({type(n).__name__ for n in stmt.find_all(*write_types)})
+    if writes:
+        result["query_type"] = "WRITE"
+        result["write_operations"] = writes
+        result["error"] = f"Write/DDL operations are not allowed: {', '.join(writes)}"
+        return result
+
+    if isinstance(stmt, (exp.Select, exp.Union)):
+        result["query_type"] = "CTE_SELECT" if stmt.find(exp.With) is not None else "SELECT"
+        result["is_read_only"] = True
+    elif isinstance(stmt, (exp.Describe, exp.Show, exp.Command)):
+        # EXPLAIN parses to Command in sqlglot; DESCRIBE/SHOW are metadata.
+        result["query_type"] = "METADATA"
+        result["is_read_only"] = True
+    else:
+        result["error"] = "Only SELECT, CTE, and metadata queries are allowed"
+        return result
+
+    result["affected_tables"] = sorted({t.name for t in stmt.find_all(exp.Table) if t.name})
+    return result
 
 
 # Global instances

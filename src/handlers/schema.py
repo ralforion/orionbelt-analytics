@@ -12,13 +12,15 @@ from ..lifecycle.metadata import update_workspace_section
 from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
 from ..r2rml_generator import R2RMLGenerator
 
+from ..handler_context import HandlerContext
+
 logger = logging.getLogger(__name__)
 
 
 async def reset_cache(
     ctx: Context,
     cache_type: Optional[str],
-    get_session_data,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Reset cached schema and/or ontology data to force re-analysis.
 
@@ -27,7 +29,7 @@ async def reset_cache(
         cache_type: Type of cache to reset ("schema", "ontology", "all", or None)
         get_session_data: Function to get session data
     """
-    session = get_session_data(ctx)
+    session = services.get_session_data(ctx)
     cleared = []
 
     cache_type_lower = (cache_type or "all").lower()
@@ -63,10 +65,7 @@ async def discover_schema(
     ctx: Context,
     schema_name: Optional[str],
     lightweight: bool,
-    get_session_data,
-    get_session_db_manager,
-    get_session_safe_filename,
-    _auto_initialize_graphrag_background,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Analyze database schema and return table metadata with relationships.
 
@@ -82,7 +81,7 @@ async def discover_schema(
     # Log function entry to verify code is being called
     logger.debug(f"discover_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
 
-    session = get_session_data(ctx)
+    session = services.get_session_data(ctx)
     effective_schema = schema_name or ""
 
     # Set current schema so per-schema state (ontology, GraphRAG) is isolated
@@ -122,7 +121,7 @@ async def discover_schema(
         if auto_graphrag == "true" and cached_tables and not session.graphrag_initialized:
             logger.info(f"GraphRAG auto-init triggered for cached schema: {effective_schema or 'default'}")
             task = asyncio.create_task(
-                _auto_initialize_graphrag_background(
+                services.auto_initialize_graphrag_background(
                     schema_name=effective_schema or "default",
                     tables_info=cached_tables,
                     session=session,
@@ -167,7 +166,7 @@ async def discover_schema(
                 result["graphrag_auto_init"] = "started in background (from cache)"
             return result
 
-    db_manager = get_session_db_manager(ctx)
+    db_manager = services.get_session_db_manager(ctx)
     tables = db_manager.get_tables(schema_name)
 
     # Prefetch PKs and FKs at schema level (Snowflake optimization)
@@ -234,7 +233,7 @@ async def discover_schema(
         if auto_graphrag == "true" and table_info_objects:
             logger.info(f"GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
             task = asyncio.create_task(
-                _auto_initialize_graphrag_background(
+                services.auto_initialize_graphrag_background(
                     schema_name=schema_name or "default",
                     tables_info=table_info_objects,
                     session=session,
@@ -287,7 +286,7 @@ async def discover_schema(
         "tables": all_table_info,
     }
 
-    session = get_session_data(ctx)
+    session = services.get_session_data(ctx)
     session.cache_schema_analysis(schema_name or "", table_info_objects)
 
     # Save schema analysis to connection-scoped output folder
@@ -295,14 +294,14 @@ async def discover_schema(
     try:
         conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
-        schema_filename = get_session_safe_filename(ctx, "schema", schema_safe) + ".json"
+        schema_filename = services.get_session_safe_filename(ctx, "schema", schema_safe) + ".json"
         schema_file_path = conn_dir / schema_filename
 
         with open(schema_file_path, "w", encoding="utf-8") as f:
             json.dump(full_schema_data, f, indent=2, ensure_ascii=False)
 
         logger.info(f"Saved schema analysis to: {schema_file_path}")
-        get_session_data(ctx).schema_file = schema_filename
+        services.get_session_data(ctx).schema_file = schema_filename
     except Exception as e:
         logger.warning(f"Failed to save schema analysis to file: {e}")
 
@@ -349,14 +348,14 @@ async def discover_schema(
             )
 
             schema_safe = effective_schema.replace(" ", "_").replace(".", "_")
-            r2rml_filename = get_session_safe_filename(ctx, "r2rml", schema_safe) + ".ttl"
+            r2rml_filename = services.get_session_safe_filename(ctx, "r2rml", schema_safe) + ".ttl"
             r2rml_file_path = conn_dir / r2rml_filename
 
             with open(r2rml_file_path, "w", encoding="utf-8") as f:
                 f.write(r2rml_content)
 
             logger.info(f"Generated R2RML mapping: {r2rml_file_path}")
-            get_session_data(ctx).r2rml_file = r2rml_filename
+            services.get_session_data(ctx).r2rml_file = r2rml_filename
             schema_result["r2rml_file"] = r2rml_filename
             schema_result["r2rml_base_iri"] = base_iri
 
@@ -412,14 +411,14 @@ async def discover_schema(
     if auto_graphrag == "true" and table_info_objects:
         logger.info(f"GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
         task = asyncio.create_task(
-            _auto_initialize_graphrag_background(
+            services.auto_initialize_graphrag_background(
                 schema_name=schema_name or "default",
                 tables_info=table_info_objects,
-                session=get_session_data(ctx),
+                session=services.get_session_data(ctx),
                 ctx=ctx,
             )
         )
-        session = get_session_data(ctx)
+        session = services.get_session_data(ctx)
         session.graphrag._init_task = task
         logger.info("GraphRAG auto-initialization started in background (full mode)")
         schema_result["graphrag_auto_init"] = "started in background"
@@ -450,8 +449,7 @@ async def get_table_details(
     ctx: Context,
     table_name: str,
     schema_name: Optional[str],
-    get_session_data,
-    get_session_db_manager,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Get detailed metadata for a single table.
 
@@ -462,7 +460,7 @@ async def get_table_details(
         get_session_data: Function to get session data
         get_session_db_manager: Function to get session db manager
     """
-    session = get_session_data(ctx)
+    session = services.get_session_data(ctx)
 
     if not schema_name:
         schema_name = session.get_last_analyzed_schema()
@@ -499,7 +497,7 @@ async def get_table_details(
                     "cache_hit": True,
                 }
 
-    db_manager = get_session_db_manager(ctx)
+    db_manager = services.get_session_db_manager(ctx)
 
     try:
         table_info = db_manager.analyze_table(table_name, schema_name)
@@ -555,8 +553,7 @@ async def sample_table_data(
     table_name: str,
     schema_name: Optional[str],
     limit: int,
-    get_session_data,
-    get_session_db_manager,
+    services: "HandlerContext",
 ) -> List[Dict[str, Any]]:
     """Sample data from a specific table for analysis.
 
@@ -575,10 +572,10 @@ async def sample_table_data(
         limit = 10
 
     if not schema_name:
-        session = get_session_data(ctx)
+        session = services.get_session_data(ctx)
         schema_name = session.get_last_analyzed_schema()
 
-    db_manager = get_session_db_manager(ctx)
+    db_manager = services.get_session_db_manager(ctx)
     sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
 
     if sample_data and len(sample_data) > 0:

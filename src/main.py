@@ -1,35 +1,28 @@
 """Main MCP server application using FastMCP.
 
-This module is a thin registration layer for MCP tools. The actual
-implementation logic lives in src/handlers/ modules.
+This module is a thin registration layer: it builds the FastMCP server, wires up
+resources, and exposes one ``@mcp.tool()`` wrapper per tool that delegates to a
+handler in ``src/handlers/``. The supporting machinery lives in dedicated
+modules so this file stays mostly decorators + delegation:
+
+- session state, request helpers, error responses -> :mod:`src.server_state`
+- constrained MCP parameter types -> :mod:`src.tool_types`
+- skill resources -> :mod:`src.resources`
 """
 
-import asyncio
-import hashlib
-import json
 import logging
 import os
-from datetime import datetime, timedelta
-from typing import Annotated, Optional, List, Dict, Any, Literal, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
-from fastmcp import FastMCP, Context
+from fastmcp import Context, FastMCP
+from pydantic import Field
 
-from .database_manager import DatabaseManager
-from .ontology_generator import OntologyGenerator
-from .obqc_validator import OBQCValidator
-from . import __version__, __name__ as SERVER_NAME
-from .oxigraph_store import OxigraphStoreManager, OXIGRAPH_AVAILABLE
+from . import __name__ as SERVER_NAME
+from . import __version__
 
 # --- Centralized path and env loading (Task 1 & 2) ---
-from .paths import (
-    get_env_file_path,
-    ensure_output_dir,
-    get_connection_dir,
-    get_oxigraph_store_dir,
-    get_skills_dir,
-)
+from .paths import ensure_output_dir, get_env_file_path
 
 # Load environment variables using centralized path resolution (Task 1: C4 fix)
 env_path = get_env_file_path()
@@ -97,406 +90,76 @@ PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks.
 )
 
 
-# --- MCP Resources: Skills (Task 2: S3 - use get_skills_dir()) ---
-
-@mcp.resource("skill://fan-trap-prevention")
-def fan_trap_prevention_skill() -> str:
-    """Fan-trap prevention guide - comprehensive patterns and solutions."""
-    skills_path = get_skills_dir() / "fan-trap-prevention.md"
-    if skills_path.exists():
-        return skills_path.read_text()
-    return "Fan-trap prevention skill not found. Please ensure .claude/skills/fan-trap-prevention.md exists."
-
-
-@mcp.resource("skill://sql-best-practices")
-def sql_best_practices_skill() -> str:
-    """SQL best practices - identifier qualification and common patterns."""
-    skills_path = get_skills_dir() / "sql-best-practices.md"
-    if skills_path.exists():
-        return skills_path.read_text()
-    return "SQL best practices skill not found. Please ensure .claude/skills/sql-best-practices.md exists."
-
-
-@mcp.resource("skill://chart-examples")
-def chart_examples_skill() -> str:
-    """Chart generation examples - all chart types with complete examples."""
-    skills_path = get_skills_dir() / "chart-examples.md"
-    if skills_path.exists():
-        return skills_path.read_text()
-    return "Chart examples skill not found. Please ensure .claude/skills/chart-examples.md exists."
-
-
-@mcp.resource("skill://analytical-workflow")
-def analytical_workflow_skill() -> str:
-    """Complete analytical session workflow - optimal tool chain and best practices."""
-    skills_path = get_skills_dir() / "analytical-workflow.md"
-    if skills_path.exists():
-        return skills_path.read_text()
-    return "Analytical workflow skill not found. Please ensure .claude/skills/analytical-workflow.md exists."
-
-
-# --- Session State Management (Task 5: W2 - Decomposed SessionData) ---
-
-from .session import SessionData  # noqa: E402
-
-
-def get_session_id(ctx: Context) -> str:
-    """Get a unique session identifier from context."""
-    if hasattr(ctx, "session_id") and ctx.session_id:
-        return str(ctx.session_id)
-    if hasattr(ctx, "session") and ctx.session:
-        return f"session_{id(ctx.session)}"
-    logger.warning("Could not determine session ID from context, using default_session")
-    return "default_session"
-
-
-def _get_connection_fingerprint(db_manager: DatabaseManager) -> str:
-    """Generate unique fingerprint for current database connection."""
-    conn_info = db_manager.connection_info
-    if not conn_info:
-        return "no_connection"
-
-    fingerprint_data = (
-        f"{conn_info.get('database_type', '')}://"
-        f"{conn_info.get('host', '')}:{conn_info.get('port', '')}/"
-        f"{conn_info.get('database', '')}"
-        f"@{conn_info.get('schema', '')}"
-    )
-    return hashlib.sha256(fingerprint_data.encode()).hexdigest()[:16]
-
-
-def _calculate_schema_hash(tables_info: List[Any]) -> str:
-    """Calculate deterministic hash of schema structure."""
-    schema_structure = {"tables": []}
-
-    sorted_tables = sorted(tables_info, key=lambda t: t.name)
-    for table in sorted_tables:
-        table_data = {
-            "name": table.name,
-            "schema": table.schema,
-            "columns": [],
-            "primary_keys": sorted(table.primary_keys) if table.primary_keys else [],
-            "foreign_keys": [],
-        }
-
-        sorted_columns = sorted(table.columns, key=lambda c: c.name)
-        for col in sorted_columns:
-            table_data["columns"].append(
-                {"name": col.name, "data_type": col.data_type, "nullable": col.is_nullable}
-            )
-
-        if table.foreign_keys:
-            sorted_fks = sorted(table.foreign_keys, key=lambda f: f["column"])
-            for fk in sorted_fks:
-                table_data["foreign_keys"].append(
-                    {
-                        "column": fk["column"],
-                        "referenced_table": fk["referenced_table"],
-                        "referenced_column": fk["referenced_column"],
-                    }
-                )
-
-        schema_structure["tables"].append(table_data)
-
-    json_str = json.dumps(schema_structure, sort_keys=True)
-    return hashlib.sha256(json_str.encode()).hexdigest()
-
-
-def _clear_session_state(session: SessionData, reason: str = "connection change") -> None:
-    """Clear all session state caches and indexes."""
-    logger.info(f"Clearing session state ({reason})")
-
-    session.clear_schema_cache()
-
-    # Clear all per-schema state (ontology for every schema)
-    session.clear_all_schema_states()
-
-    # Clear connection-scoped state
-    session.graphrag_manager = None
-    session.graphrag_initialized = False
-    session.oxigraph_store = None
-    session.oxigraph_initialized = False
-
-    logger.info("Session state cleared")
-
-
-class ServerState:
-    """Manages server state with per-session isolation and idle eviction."""
-
-    def __init__(self):
-        self._sessions: Dict[str, SessionData] = {}
-        self._eviction_task: Optional[asyncio.Task] = None
-
-    @property
-    def session_count(self) -> int:
-        """Number of active sessions."""
-        return len(self._sessions)
-
-    def get_session(self, session_id: str) -> SessionData:
-        """Get or create session data for a given session ID."""
-        if session_id not in self._sessions:
-            self._sessions[session_id] = SessionData()
-            logger.debug(f"Created new session: {session_id}")
-        session = self._sessions[session_id]
-        session.touch()
-        self._ensure_eviction_task()
-        return session
-
-    def get_ontology_generator(
-        self, base_uri: str = "http://example.com/ontology/"
-    ) -> OntologyGenerator:
-        """Create a new ontology generator instance."""
-        return OntologyGenerator(base_uri=base_uri)
-
-    def cleanup_session(self, session_id: str):
-        """Clean up a specific session's resources."""
-        if session_id in self._sessions:
-            session = self._sessions[session_id]
-            if session.db_manager:
-                try:
-                    session.db_manager.disconnect()
-                except Exception as e:
-                    logger.warning(f"Error disconnecting db for session {session_id}: {e}")
-            if session.rdf_store.oxigraph_store:
-                try:
-                    session.rdf_store.oxigraph_store.close()
-                except Exception as e:
-                    logger.warning(f"Error closing Oxigraph for session {session_id}: {e}")
-            del self._sessions[session_id]
-            logger.debug(f"Cleaned up session: {session_id}")
-
-    def cleanup(self):
-        """Clean up all resources."""
-        if self._eviction_task and not self._eviction_task.done():
-            self._eviction_task.cancel()
-            logger.debug("Cancelled session eviction task")
-        for session_id in list(self._sessions.keys()):
-            self.cleanup_session(session_id)
-
-    # --- Idle eviction ---
-
-    def _ensure_eviction_task(self):
-        """Lazily start the eviction background task if not already running."""
-        if self._eviction_task is not None and not self._eviction_task.done():
-            return
-        try:
-            loop = asyncio.get_running_loop()
-            self._eviction_task = loop.create_task(self._eviction_loop())
-            logger.info("Started session eviction background task")
-        except RuntimeError:
-            pass  # No event loop (e.g. tests or sync context)
-
-    async def _eviction_loop(self):
-        """Periodically scan for and evict idle sessions."""
-        from .config import config_manager
-
-        config = config_manager.get_server_config()
-        idle_timeout = config.session_idle_timeout
-        scan_interval = config.session_scan_interval
-
-        if idle_timeout <= 0:
-            logger.info("Session idle eviction disabled (timeout=0)")
-            return
-
-        logger.info(
-            f"Session eviction active: timeout={idle_timeout}s, "
-            f"scan_interval={scan_interval}s"
-        )
-
-        while True:
-            try:
-                await asyncio.sleep(scan_interval)
-                self._evict_idle_sessions(idle_timeout)
-            except asyncio.CancelledError:
-                logger.info("Session eviction task cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in session eviction loop: {e}", exc_info=True)
-                await asyncio.sleep(scan_interval)
-
-    def _evict_idle_sessions(self, idle_timeout: int):
-        """Scan sessions and evict those idle beyond the timeout."""
-        now = datetime.now()
-        cutoff = now - timedelta(seconds=idle_timeout)
-
-        to_evict = []
-        for session_id, session in self._sessions.items():
-            if session.last_activity < cutoff:
-                idle_secs = (now - session.last_activity).total_seconds()
-                to_evict.append((session_id, idle_secs))
-
-        total = len(self._sessions)
-        evicting = len(to_evict)
-        if total > 0:
-            logger.debug(
-                f"Session scan: {total} total, {evicting} idle "
-                f"(timeout={idle_timeout}s)"
-            )
-
-        for session_id, idle_secs in to_evict:
-            logger.info(
-                f"Evicting idle session {session_id} "
-                f"(idle {idle_secs:.0f}s, timeout={idle_timeout}s)"
-            )
-            self.cleanup_session(session_id)
-
-        if evicting > 0:
-            logger.info(
-                f"Evicted {evicting} idle session(s). "
-                f"Remaining: {len(self._sessions)}"
-            )
-
-
-# Global server state
-_server_state = ServerState()
-
-
-def get_session_data(ctx: Context) -> SessionData:
-    """Get session data for the current context."""
-    session_id = get_session_id(ctx)
-    return _server_state.get_session(session_id)
-
-
-def get_session_db_manager(ctx: Context) -> DatabaseManager:
-    """Get or create a DatabaseManager for the current session."""
-    session = get_session_data(ctx)
-    if session.db_manager is None:
-        session.db_manager = DatabaseManager()
-        logger.debug(f"Created new DatabaseManager for session: {get_session_id(ctx)}")
-    return session.db_manager
-
-
-def get_session_obqc_validator(ctx: Context) -> Optional[OBQCValidator]:
-    """Get or create OBQC validator for the current session."""
-    session = get_session_data(ctx)
-
-    has_generated_ontology = session.ontology_file is not None
-    has_loaded_ontology = session.loaded_ontology is not None
-
-    if not has_generated_ontology and not has_loaded_ontology:
-        return None
-
-    if session.obqc_validator is None:
-        session.obqc_validator = OBQCValidator()
-
-        base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
-        ontology_generator = OntologyGenerator(base_uri)
-
-        if has_generated_ontology:
-            conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
-            ontology_path = conn_dir / session.ontology_file
-            if ontology_path.exists():
-                ontology_generator.load_from_file(str(ontology_path))
-                logger.debug(f"OBQC loaded ontology from session file: {session.ontology_file}")
-        elif has_loaded_ontology:
-            ontology_generator.load_from_string(session.loaded_ontology)
-            logger.debug(
-                f"OBQC loaded ontology from session's loaded ontology: {session.loaded_ontology_path}"
-            )
-
-        session.obqc_validator.load_ontology(ontology_generator.graph, base_uri)
-        logger.debug(f"Initialized OBQC validator for session: {get_session_id(ctx)}")
-
-    return session.obqc_validator
-
-
-def get_session_safe_filename(ctx: Context, prefix: str, suffix: str = "") -> str:
-    """Generate a connection-safe filename to prevent cross-database file collisions."""
-    session = get_session_data(ctx)
-    connection_prefix = (
-        session.connection_id[:8]
-        if session.connection_id and len(session.connection_id) >= 8
-        else "default"
-    )
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S%f")
-    if suffix:
-        return f"{prefix}_{connection_prefix}_{suffix}_{timestamp}"
-    return f"{prefix}_{connection_prefix}_{timestamp}"
-
-
-def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
-    """Load ontology from session state."""
-    session = get_session_data(ctx)
-    filename = session.ontology_file
-    if not filename:
-        raise ValueError("No ontology file in session state. Run generate_ontology first.")
-
-    conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
-    ontology_path = conn_dir / filename
-
-    if not ontology_path.exists():
-        raise ValueError(f"Ontology file not found: {filename}")
-
-    generator = _server_state.get_ontology_generator()
-    generator.load_from_file(str(ontology_path))
-
-    return generator, filename
-
-
-# --- Error Response Helper (Task 4 & 9: W1 partial) ---
-
-class ErrorResponse(BaseModel):
-    """Standardized error response format."""
-    error: str
-    error_type: str = "unknown"
-    details: Optional[str] = None
-
-
-def create_error_response(
-    error_msg: str, error_type: str = "unknown", details: Optional[str] = None
-) -> Dict[str, Any]:
-    """Create a standardized error response.
-
-    DEPRECATED: Use exceptions from src.exceptions instead.
-    Example: ConnectionError("message").to_response()
-
-    This function is kept for backward compatibility but new code should
-    use the exception hierarchy in src/exceptions.py.
-    """
-    response = ErrorResponse(error=error_msg, error_type=error_type, details=details)
-    return response.model_dump()
-
-
-# --- Oxigraph Store Helper ---
-
-def get_oxigraph_store(ctx: Context) -> Optional[OxigraphStoreManager]:
-    """Get or initialize connection-scoped Oxigraph store for the session."""
-    session = get_session_data(ctx)
-
-    if not OXIGRAPH_AVAILABLE:
-        logger.warning("pyoxigraph not available - SPARQL features disabled")
-        return None
-
-    if session.oxigraph_store is None:
-        try:
-            store_path = get_oxigraph_store_dir(connection_id=session.connection_id)
-            session.oxigraph_store = OxigraphStoreManager(store_path=store_path)
-            session.oxigraph_initialized = True
-
-            if session.connection_id:
-                logger.info(f"Initialized connection-scoped Oxigraph store at: {store_path}")
-            else:
-                logger.info(f"Initialized Oxigraph store at: {store_path} (legacy mode)")
-
-        except Exception as e:
-            logger.error(f"Failed to initialize Oxigraph store: {e}")
-            return None
-
-    return session.oxigraph_store
-
+# --- MCP Resources: skill files exposed over skill:// URIs ---
+from .resources import register_resources  # noqa: E402
+
+register_resources(mcp)
+
+
+# --- Session state and per-request helpers (extracted to server_state) ---
+from .server_state import (  # noqa: E402
+    _clear_session_state,
+    _get_connection_fingerprint,
+    _server_state,
+    create_error_response,
+    get_oxigraph_store,
+    get_session_data,
+    get_session_db_manager,
+    get_session_obqc_validator,
+    get_session_safe_filename,
+    load_ontology_from_session,
+)
+
+# Re-exported for backward compatibility with tests that import these from main.
+from .server_state import ServerState, _calculate_schema_hash  # noqa: E402,F401
+
+# --- Constrained MCP parameter types (extracted to tool_types) ---
+from .tool_types import (  # noqa: E402
+    _DbType,
+    _DocBody,
+    _FolderPath,
+    _Identifier,
+    _QueryBody,
+    _QueryText,
+    _SafeName,
+    _ShortText,
+    _Uri,
+)
+
+from .handler_context import HandlerContext  # noqa: E402
 
 # --- Handler imports (Task 7: C1/S2) ---
-# Imported here (after the tool registrations above) to keep the handler layer
-# decoupled from server setup; intentional late imports.
-
+# Imported here to keep the handler layer decoupled from server setup.
+from .handlers import chart as _h_chart  # noqa: E402
 from .handlers import connection as _h_connection  # noqa: E402
-from .handlers import schema as _h_schema  # noqa: E402
+from .handlers import graphrag as _h_graphrag  # noqa: E402
 from .handlers import ontology as _h_ontology  # noqa: E402
 from .handlers import query as _h_query  # noqa: E402
-from .handlers import chart as _h_chart  # noqa: E402
 from .handlers import rdf as _h_rdf  # noqa: E402
-from .handlers import graphrag as _h_graphrag  # noqa: E402
+from .handlers import schema as _h_schema  # noqa: E402
 from .handlers import workspace as _h_workspace  # noqa: E402
+
+
+def _services() -> HandlerContext:
+    """Build the per-request service bundle handed to handler functions.
+
+    Reads the module-level helpers each call so test patches on these names
+    (e.g. via ``src.main`` / ``src.server_state``) are honored.
+    """
+    return HandlerContext(
+        get_session_data=get_session_data,
+        get_session_db_manager=get_session_db_manager,
+        get_session_safe_filename=get_session_safe_filename,
+        get_session_obqc_validator=get_session_obqc_validator,
+        get_oxigraph_store=get_oxigraph_store,
+        load_ontology_from_session=load_ontology_from_session,
+        create_error_response=create_error_response,
+        server_state=_server_state,
+        get_connection_fingerprint=_get_connection_fingerprint,
+        clear_session_state=_clear_session_state,
+        auto_initialize_graphrag_background=_h_graphrag._auto_initialize_graphrag_background,
+        add_resource=mcp.add_resource,
+    )
 
 
 # ============================================================
@@ -505,33 +168,6 @@ from .handlers import workspace as _h_workspace  # noqa: E402
 # Each tool delegates to its handler module. The @mcp.tool()
 # decorators MUST stay here for FastMCP registration.
 # ============================================================
-
-# ------------------------------------------------------------
-# Constrained parameter types — bound input size and shape at the MCP boundary
-# so invalid/oversized arguments are rejected before reaching a handler. These
-# are defense-in-depth and a published-schema hint for hosts; handlers keep
-# their own runtime validation. (Surfaced by an mcp-security-audit run.)
-# ------------------------------------------------------------
-_DbType = Literal[
-    "postgresql", "snowflake", "dremio", "clickhouse",
-    "bigquery", "duckdb", "databricks", "mysql",
-]
-# Database/schema/table/column identifiers.
-_Identifier = Annotated[str, Field(max_length=255)]
-# Short natural-language text (titles, query intents).
-_ShortText = Annotated[str, Field(max_length=1000)]
-# Natural-language search queries.
-_QueryText = Annotated[str, Field(max_length=4000)]
-# Filenames / model names — no path separators (prevents traversal).
-_SafeName = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[^/\\]+$")]
-# A filesystem folder path.
-_FolderPath = Annotated[str, Field(max_length=1024)]
-# Raw SQL / SPARQL query bodies.
-_QueryBody = Annotated[str, Field(max_length=100_000)]
-# Large document payloads (YAML / TTL / JSON).
-_DocBody = Annotated[str, Field(max_length=5_000_000)]
-# URIs.
-_Uri = Annotated[str, Field(max_length=2048)]
 
 
 @mcp.tool()
@@ -550,12 +186,7 @@ async def connect_database(ctx: Context, db_type: _DbType) -> str:
     """
     return await _h_connection.connect_database(
         ctx, db_type,
-        get_session_db_manager=get_session_db_manager,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
-        _get_connection_fingerprint=_get_connection_fingerprint,
-        _clear_session_state=_clear_session_state,
-        get_oxigraph_store=get_oxigraph_store,
+        services=_services(),
     )
 
 
@@ -565,7 +196,7 @@ async def list_schemas(ctx: Context) -> List[str]:
 
     REQUIRES: connect_database must be called first.
     """
-    return await _h_connection.list_schemas(ctx, get_session_db_manager=get_session_db_manager)
+    return await _h_connection.list_schemas(ctx, services=_services())
 
 
 @mcp.tool()
@@ -581,7 +212,7 @@ async def reset_cache(
     Returns:
         Dictionary with status and cleared cache types
     """
-    return await _h_schema.reset_cache(ctx, cache_type, get_session_data=get_session_data)
+    return await _h_schema.reset_cache(ctx, cache_type, services=_services())
 
 
 @mcp.tool()
@@ -601,10 +232,7 @@ async def discover_schema(
     """
     return await _h_schema.discover_schema(
         ctx, schema_name, lightweight,
-        get_session_data=get_session_data,
-        get_session_db_manager=get_session_db_manager,
-        get_session_safe_filename=get_session_safe_filename,
-        _auto_initialize_graphrag_background=_h_graphrag._auto_initialize_graphrag_background,
+        services=_services(),
     )
 
 
@@ -627,8 +255,7 @@ async def get_table_details(
     """
     return await _h_schema.get_table_details(
         ctx, table_name, schema_name,
-        get_session_data=get_session_data,
-        get_session_db_manager=get_session_db_manager,
+        services=_services(),
     )
 
 
@@ -655,12 +282,7 @@ async def generate_ontology(
     """
     return await _h_ontology.generate_ontology(
         ctx, schema_info, schema_name, base_uri, auto_persist, graph_uri,
-        get_session_data=get_session_data,
-        get_session_db_manager=get_session_db_manager,
-        get_session_safe_filename=get_session_safe_filename,
-        get_oxigraph_store=get_oxigraph_store,
-        create_error_response=create_error_response,
-        _server_state=_server_state,
+        services=_services(),
     )
 
 
@@ -684,8 +306,7 @@ async def suggest_semantic_names(
     """
     return await _h_ontology.suggest_semantic_names(
         ctx, ontology_file,
-        get_session_data=get_session_data,
-        load_ontology_from_session=load_ontology_from_session,
+        services=_services(),
     )
 
 
@@ -722,11 +343,7 @@ async def apply_semantic_names(
     """
     return await _h_ontology.apply_semantic_names(
         ctx, suggestions, ontology_file, save_to_file,
-        get_session_data=get_session_data,
-        get_session_safe_filename=get_session_safe_filename,
-        load_ontology_from_session=load_ontology_from_session,
-        create_error_response=create_error_response,
-        get_oxigraph_store=get_oxigraph_store,
+        services=_services(),
     )
 
 
@@ -758,9 +375,7 @@ async def load_my_ontology(
         ctx, import_folder, auto_persist, graph_uri,
         ontology_content=ontology_content,
         file_name=file_name,
-        get_session_data=get_session_data,
-        get_oxigraph_store=get_oxigraph_store,
-        get_session_db_manager=get_session_db_manager,
+        services=_services(),
     )
 
 
@@ -784,13 +399,11 @@ async def download_artifact(
     if artifact_type == "ontology":
         return await _h_ontology.download_ontology(
             ctx, schema_name, source,
-            get_session_data=get_session_data,
-            get_oxigraph_store=get_oxigraph_store,
-            create_error_response=create_error_response,
+            services=_services(),
         )
     elif artifact_type == "r2rml":
         return await _h_ontology.download_r2rml(
-            ctx, schema_name, get_session_data=get_session_data
+            ctx, schema_name, services=_services()
         )
     else:
         return create_error_response(
@@ -817,8 +430,7 @@ async def sample_table_data(
     """
     return await _h_schema.sample_table_data(
         ctx, table_name, schema_name, limit,
-        get_session_data=get_session_data,
-        get_session_db_manager=get_session_db_manager,
+        services=_services(),
     )
 
 
@@ -852,10 +464,7 @@ async def execute_sql_query(
     """
     return await _h_query.execute_sql_query(
         ctx, sql_query, limit, checklist_completed, query_intent,
-        get_session_data=get_session_data,
-        get_session_db_manager=get_session_db_manager,
-        get_session_obqc_validator=get_session_obqc_validator,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -891,8 +500,7 @@ async def generate_chart(
         ctx, data_source, chart_type, x_column, y_column,
         color_column, title, chart_style,
         sort_by, sort_order, output_format,
-        get_session_data=get_session_data,
-        add_resource=mcp.add_resource,
+        services=_services(),
     )
 
 
@@ -911,8 +519,7 @@ async def cleanup_workspace(ctx: Context) -> str:
     """
     return await _h_workspace.cleanup_workspace(
         ctx,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -935,8 +542,7 @@ async def save_semantic_model(
     """
     return await _h_workspace.save_semantic_model(
         ctx, model_yaml, model_name, schema_name,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -955,8 +561,7 @@ async def get_semantic_model(
     """
     return await _h_workspace.get_semantic_model(
         ctx, model_name,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -969,8 +574,7 @@ async def list_semantic_models(ctx: Context) -> Dict[str, Any]:
     """
     return await _h_workspace.list_semantic_models(
         ctx,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1000,7 +604,7 @@ async def graphrag_search(
     """
     if overview:
         return await _h_graphrag.graphrag_overview(
-            ctx, get_session_data=get_session_data, create_error_response=create_error_response
+            ctx, services=_services()
         )
     if not query:
         return create_error_response(
@@ -1009,8 +613,7 @@ async def graphrag_search(
         )
     return await _h_graphrag.graphrag_search(
         ctx, query, top_k, element_type,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1033,8 +636,7 @@ async def graphrag_query_context(
     """
     return await _h_graphrag.graphrag_query_context(
         ctx, query, max_tables, max_columns,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1057,8 +659,7 @@ async def graphrag_find_join_path(
     """
     return await _h_graphrag.graphrag_find_join_path(
         ctx, from_table, to_table, max_hops,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1086,8 +687,7 @@ async def reachable_from(
     """
     return await _h_graphrag.reachable_from(
         ctx, table, max_hops,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1113,8 +713,7 @@ async def measurable_from(
     """
     return await _h_graphrag.measurable_from(
         ctx, table, max_hops,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1146,8 +745,7 @@ async def plan_composite_query(
     """
     return await _h_graphrag.plan_composite_query(
         ctx, facts, dimensions,
-        get_session_data=get_session_data,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1170,9 +768,7 @@ async def store_ontology_in_rdf(
     """
     return await _h_rdf.store_ontology_in_rdf(
         ctx, schema_name, graph_uri,
-        get_session_data=get_session_data,
-        get_oxigraph_store=get_oxigraph_store,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1199,8 +795,7 @@ async def query_sparql(
     """
     return await _h_rdf.query_sparql(
         ctx, sparql_query, timeout_seconds,
-        get_oxigraph_store=get_oxigraph_store,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1225,8 +820,7 @@ async def add_rdf_knowledge(
     """
     return await _h_rdf.add_rdf_knowledge(
         ctx, subject, predicate, object, metadata,
-        get_oxigraph_store=get_oxigraph_store,
-        create_error_response=create_error_response,
+        services=_services(),
     )
 
 
@@ -1235,3 +829,15 @@ async def add_rdf_knowledge(
 def cleanup_server():
     """Clean up server resources."""
     _server_state.cleanup()
+
+
+def get_registered_tool_names() -> List[str]:
+    """Return the sorted names of every tool registered on the MCP server.
+
+    This is the single source of truth for tool counts in the startup banner
+    and docs, so those numbers cannot drift from the actual registrations.
+    """
+    import asyncio
+
+    tools = asyncio.run(mcp.list_tools())
+    return sorted(tool.name for tool in tools)

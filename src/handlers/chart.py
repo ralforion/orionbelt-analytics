@@ -10,6 +10,8 @@ from fastmcp.utilities.types import Image
 from ..chart_utils import save_image_to_tmp
 from ..config import config_manager
 
+from ..handler_context import HandlerContext
+
 logger = logging.getLogger(__name__)
 
 # Static PNG export dimensions. Interactive charts are responsive (autosize) and
@@ -30,8 +32,7 @@ async def generate_chart(
     sort_by: Optional[str],
     sort_order: Optional[str],
     output_format: str,
-    get_session_data,
-    add_resource=None,
+    services: "HandlerContext",
 ) -> str:
     """Generate interactive or static charts from query results.
 
@@ -119,15 +120,15 @@ async def generate_chart(
             chart_id = uuid4()
             chart_uri = f"ui://orionbelt/chart/{chart_id}"
             chart_json_uri = f"ui://orionbelt/chart-json/{chart_id}"
-            if add_resource:
+            if services.add_resource:
                 from fastmcp.resources import TextResource
-                add_resource(TextResource(
+                services.add_resource(TextResource(
                     uri=chart_uri,
                     name=f"Chart: {title or chart_type_display}",
                     text=html,
                     mime_type="text/html",
                 ))
-                add_resource(TextResource(
+                services.add_resource(TextResource(
                     uri=chart_json_uri,
                     name=f"Chart JSON: {title or chart_type_display}",
                     text=fig.to_json(),
@@ -141,7 +142,7 @@ async def generate_chart(
             try:
                 chart_id = str(uuid4())
                 image_bytes = fig.to_image(format="png", width=PNG_WIDTH, height=PNG_HEIGHT)
-                connection_id = get_session_data(ctx).connection_id
+                connection_id = services.get_session_data(ctx).connection_id
                 image_file_path = save_image_to_tmp(
                     image_bytes, chart_id, "png", connection_id=connection_id
                 )
@@ -165,7 +166,7 @@ async def generate_chart(
     if isinstance(result, tuple) and len(result) == 2:
         image_bytes, chart_id = result
 
-        connection_id = get_session_data(ctx).connection_id
+        connection_id = services.get_session_data(ctx).connection_id
 
         image_file_path = save_image_to_tmp(
             image_bytes,

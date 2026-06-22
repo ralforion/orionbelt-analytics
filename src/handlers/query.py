@@ -8,6 +8,8 @@ from fastmcp import Context
 
 from ..exceptions import ConnectionError, ParameterError, ValidationError
 
+from ..handler_context import HandlerContext
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,8 +69,7 @@ def _extract_query_intent(sql: str) -> str:
 async def validate_sql_syntax(
     ctx: Context,
     sql_query: str,
-    get_session_db_manager,
-    get_session_obqc_validator,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Validate SQL syntax, security, and fan-trap risks before execution.
 
@@ -79,7 +80,7 @@ async def validate_sql_syntax(
         get_session_obqc_validator: Function to get OBQC validator
     """
     try:
-        db_manager = get_session_db_manager(ctx)
+        db_manager = services.get_session_db_manager(ctx)
 
         if not db_manager.has_engine():
             return {
@@ -111,7 +112,7 @@ async def validate_sql_syntax(
             validation_result["suggestions"] = []
 
         # OBQC validation
-        obqc_validator = get_session_obqc_validator(ctx)
+        obqc_validator = services.get_session_obqc_validator(ctx)
         if obqc_validator:
             db_type = db_manager.connection_info.get("type", "postgresql")
             obqc_result = obqc_validator.validate(sql_query.strip(), dialect=db_type)
@@ -185,10 +186,7 @@ async def execute_sql_query(
     limit: int,
     checklist_completed: bool,
     query_intent: Optional[str],
-    get_session_data,
-    get_session_db_manager,
-    get_session_obqc_validator,
-    create_error_response,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Execute SQL query with built-in validation and fan-trap protection.
 
@@ -207,7 +205,7 @@ async def execute_sql_query(
         if isinstance(checklist_completed, str):
             checklist_completed = checklist_completed.lower() in ("true", "1", "yes")
 
-        db_manager = get_session_db_manager(ctx)
+        db_manager = services.get_session_db_manager(ctx)
 
         if not db_manager.has_engine():
             return ConnectionError(
@@ -235,7 +233,7 @@ async def execute_sql_query(
 
         # OBQC validation (fan-trap detection, ontology-aware checks)
         obqc_warnings = []
-        obqc_validator = get_session_obqc_validator(ctx)
+        obqc_validator = services.get_session_obqc_validator(ctx)
         if obqc_validator:
             db_type = db_manager.connection_info.get("type", "postgresql")
             obqc_result = obqc_validator.validate(sql_query.strip(), dialect=db_type)
@@ -281,7 +279,7 @@ async def execute_sql_query(
             )
 
         # Auto-inject GraphRAG context if available
-        session = get_session_data(ctx)
+        session = services.get_session_data(ctx)
         if session.graphrag_initialized and session.graphrag_manager:
             try:
                 if query_intent:
@@ -328,7 +326,7 @@ async def execute_sql_query(
 
     except Exception as e:
         logger.error(f"Critical error in SQL execution: {e}")
-        return create_error_response(
+        return services.create_error_response(
             f"Internal server error during SQL execution: {str(e)}",
             "internal_error",
             "This may indicate a system-level issue. Please check server logs and try again.",

@@ -206,6 +206,7 @@ class TestAutoPersistBehavior:
         assert isinstance(result, str)
         assert "Ontology generated" in result or "triples" in result.lower() or "@prefix" in result
 
+    @patch('src.server_state.OXIGRAPH_AVAILABLE', False)
     @patch('src.main.get_session_data')
     async def test_auto_persist_fallback_when_oxigraph_unavailable(
         self, mock_session, mock_context, sample_tables
