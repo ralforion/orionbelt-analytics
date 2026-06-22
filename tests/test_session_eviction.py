@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.session import SessionData
 from src.main import ServerState
+from src.session import SessionData
 
 
 class TestSessionDataActivity:

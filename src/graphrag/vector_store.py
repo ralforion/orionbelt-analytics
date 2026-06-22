@@ -5,12 +5,13 @@ Provides efficient similarity search and nearest neighbor retrieval
 for schema elements using vector embeddings.
 """
 
-import logging
-from typing import List, Dict, Any, Optional, Tuple
-import numpy as np
-from dataclasses import dataclass, asdict
 import json
+import logging
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class StoredElement:
     """Represents a stored schema element with its embedding."""
+
     element_type: str
     element_id: str
     name: str
@@ -48,7 +50,7 @@ class VectorStore:
         name: str,
         description: str,
         embedding: np.ndarray,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         """
         Add a schema element to the store.
@@ -66,7 +68,7 @@ class VectorStore:
             if embedding.shape[0] < self.dimension:
                 embedding = np.pad(embedding, (0, self.dimension - embedding.shape[0]))
             else:
-                embedding = embedding[:self.dimension]
+                embedding = embedding[: self.dimension]
 
         element = StoredElement(
             element_type=element_type,
@@ -74,7 +76,7 @@ class VectorStore:
             name=name,
             description=description,
             metadata=metadata or {},
-            embedding=embedding.tolist()
+            embedding=embedding.tolist(),
         )
 
         self.elements.append(element)
@@ -94,7 +96,7 @@ class VectorStore:
                 name=elem.name,
                 description=elem.description,
                 embedding=elem.embedding,
-                metadata=elem.metadata
+                metadata=elem.metadata,
             )
 
         logger.info(f"Added {len(elements)} elements to vector store")
@@ -114,7 +116,7 @@ class VectorStore:
         query_embedding: np.ndarray,
         top_k: int = 5,
         element_type: Optional[str] = None,
-        threshold: float = 0.0
+        threshold: float = 0.0,
     ) -> List[Tuple[StoredElement, float]]:
         """
         Search for similar elements.
@@ -137,9 +139,11 @@ class VectorStore:
         # Normalize query
         if query_embedding.shape[0] != self.dimension:
             if query_embedding.shape[0] < self.dimension:
-                query_embedding = np.pad(query_embedding, (0, self.dimension - query_embedding.shape[0]))
+                query_embedding = np.pad(
+                    query_embedding, (0, self.dimension - query_embedding.shape[0])
+                )
             else:
-                query_embedding = query_embedding[:self.dimension]
+                query_embedding = query_embedding[: self.dimension]
 
         query_norm = np.linalg.norm(query_embedding)
         if query_norm > 0:
@@ -154,7 +158,9 @@ class VectorStore:
 
         # Filter by element type if specified
         if element_type:
-            type_mask = np.array([elem.element_type == element_type for elem in self.elements])
+            type_mask = np.array(
+                [elem.element_type == element_type for elem in self.elements]
+            )
             similarities = np.where(type_mask, similarities, -np.inf)
 
         # Filter by threshold
@@ -176,7 +182,7 @@ class VectorStore:
         query_text: str,
         embedder: Any,
         top_k: int = 5,
-        element_type: Optional[str] = None
+        element_type: Optional[str] = None,
     ) -> List[Tuple[StoredElement, float]]:
         """
         Search using natural language query.
@@ -229,13 +235,15 @@ class VectorStore:
         """
         data = {
             "dimension": self.dimension,
-            "elements": [asdict(elem) for elem in self.elements]
+            "elements": [asdict(elem) for elem in self.elements],
         }
 
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
 
-        logger.info(f"Saved vector store with {len(self.elements)} elements to {filepath}")
+        logger.info(
+            f"Saved vector store with {len(self.elements)} elements to {filepath}"
+        )
 
     def load(self, filepath: Path):
         """
@@ -244,17 +252,19 @@ class VectorStore:
         Args:
             filepath: Input file path (JSON)
         """
-        with open(filepath, 'r') as f:
+        with open(filepath, "r") as f:
             data = json.load(f)
 
-        self.dimension = data['dimension']
-        self.elements = [StoredElement(**elem) for elem in data['elements']]
+        self.dimension = data["dimension"]
+        self.elements = [StoredElement(**elem) for elem in data["elements"]]
         self._index_built = False
 
         # Rebuild index
         self.build_index()
 
-        logger.info(f"Loaded vector store with {len(self.elements)} elements from {filepath}")
+        logger.info(
+            f"Loaded vector store with {len(self.elements)} elements from {filepath}"
+        )
 
     def get_statistics(self) -> Dict[str, Any]:
         """
@@ -271,7 +281,7 @@ class VectorStore:
             "total_elements": len(self.elements),
             "dimension": self.dimension,
             "index_built": self._index_built,
-            "elements_by_type": type_counts
+            "elements_by_type": type_counts,
         }
 
     def clear(self):

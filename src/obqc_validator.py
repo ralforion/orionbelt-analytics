@@ -11,10 +11,10 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
 import sqlglot
+from rdflib import Graph, Namespace, URIRef
+from rdflib.namespace import OWL, RDF, RDFS, XSD
 from sqlglot import exp
 from sqlglot.errors import ParseError
-from rdflib import Graph, Namespace, URIRef
-from rdflib.namespace import RDF, RDFS, OWL, XSD
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
 
@@ -256,9 +256,13 @@ class OBQCValidator:
                     col_schema = ColumnSchema(
                         name=column_name,
                         table_name=table_name,
-                        sql_data_type=self._get_literal(subject, self._oba_ns.sqlDataType)
+                        sql_data_type=self._get_literal(
+                            subject, self._oba_ns.sqlDataType
+                        )
                         or "VARCHAR",
-                        is_nullable=self._get_bool(subject, self._oba_ns.isNullable, True),
+                        is_nullable=self._get_bool(
+                            subject, self._oba_ns.isNullable, True
+                        ),
                         is_primary_key=self._get_bool(
                             subject, self._oba_ns.isPrimaryKey, False
                         ),
@@ -595,7 +599,8 @@ class OBQCValidator:
                         severity=OBQCSeverity.WARNING,
                         message="JOIN condition may not match declared FK relationship",
                         location=f"JOIN {join_table}",
-                        suggestion=suggested or "Verify join matches foreign key constraint",
+                        suggestion=suggested
+                        or "Verify join matches foreign key constraint",
                         related_entities=[join_table] if join_table else [],
                     )
                 )
@@ -713,7 +718,10 @@ class OBQCValidator:
 
         def get_type_category(xsd_uri: str) -> str:
             uri_lower = xsd_uri.lower()
-            if any(t in uri_lower for t in ["integer", "decimal", "float", "double", "byte"]):
+            if any(
+                t in uri_lower
+                for t in ["integer", "decimal", "float", "double", "byte"]
+            ):
                 return "numeric"
             elif "string" in uri_lower:
                 return "string"
@@ -768,7 +776,10 @@ class OBQCValidator:
                         qualified = f"{col_table.lower()}.{col_name.lower()}"
 
                     # Check if it's in GROUP BY
-                    if qualified not in group_by_cols and col_name.lower() not in group_by_cols:
+                    if (
+                        qualified not in group_by_cols
+                        and col_name.lower() not in group_by_cols
+                    ):
                         # Check if it's inside an aggregate function
                         is_aggregated = self._is_inside_aggregate(expr, select)
 
@@ -794,9 +805,7 @@ class OBQCValidator:
                                     )
                                 )
 
-    def _is_inside_aggregate(
-        self, expr: exp.Expression, select: exp.Select
-    ) -> bool:
+    def _is_inside_aggregate(self, expr: exp.Expression, select: exp.Select) -> bool:
         """Check if expression is inside an aggregate function."""
         agg_types = (exp.Sum, exp.Count, exp.Avg, exp.Min, exp.Max)
 
@@ -804,7 +813,9 @@ class OBQCValidator:
             for col in agg.find_all(exp.Column):
                 if isinstance(expr, exp.Column):
                     if col.name == expr.name:
-                        if (col.table is None and expr.table is None) or col.table == expr.table:
+                        if (
+                            col.table is None and expr.table is None
+                        ) or col.table == expr.table:
                             return True
                 elif isinstance(expr, exp.Alias) and isinstance(expr.this, exp.Column):
                     if col.name == expr.this.name:

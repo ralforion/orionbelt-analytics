@@ -3,26 +3,26 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import create_engine, text, MetaData, inspect
+from sqlalchemy import MetaData, create_engine, inspect, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError
+from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import NullPool
 
 from ..constants import (
-    CONNECTION_TIMEOUT,
     BIGQUERY_SYSTEM_SCHEMAS,
-    MIN_SAMPLE_LIMIT,
-    MAX_SAMPLE_LIMIT,
+    CONNECTION_TIMEOUT,
     DEFAULT_SAMPLE_LIMIT,
-)
-from ..serialization import serialize_rows
-from ..security import (
-    SecureCredentialManager,
-    identifier_validator,
-    audit_log_security_event,
-    SecurityLevel,
+    MAX_SAMPLE_LIMIT,
+    MIN_SAMPLE_LIMIT,
 )
 from ..database_manager import ColumnInfo, TableInfo
+from ..security import (
+    SecureCredentialManager,
+    SecurityLevel,
+    audit_log_security_event,
+    identifier_validator,
+)
+from ..serialization import serialize_rows
 from .base import DatabaseDriver
 
 logger = logging.getLogger(__name__)
@@ -121,7 +121,9 @@ class BigQueryDriver(DatabaseDriver):
                 result = conn.execute(text("SELECT 1"))
                 result.fetchone()
 
-            logger.info(f"Connected to BigQuery project: {project_id}, dataset: {dataset or 'default'}")
+            logger.info(
+                f"Connected to BigQuery project: {project_id}, dataset: {dataset or 'default'}"
+            )
             return True
 
         except (SQLAlchemyError, OperationalError, DatabaseError) as e:
@@ -149,12 +151,14 @@ class BigQueryDriver(DatabaseDriver):
         """
         try:
             # Query INFORMATION_SCHEMA to get datasets
-            query = text(f"""
+            query = text(
+                f"""
                 SELECT schema_name
                 FROM `{self._project_id}`.INFORMATION_SCHEMA.SCHEMATA
                 WHERE schema_name NOT IN UNNEST({BIGQUERY_SYSTEM_SCHEMAS})
                 ORDER BY schema_name
-            """)
+            """
+            )
             with self.engine.connect() as conn:
                 result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
@@ -175,12 +179,14 @@ class BigQueryDriver(DatabaseDriver):
                 return []
 
             with self.engine.connect() as conn:
-                query = text(f"""
+                query = text(
+                    f"""
                     SELECT table_name
                     FROM `{self._project_id}.{dataset}`.INFORMATION_SCHEMA.TABLES
                     WHERE table_type = 'BASE TABLE'
                     ORDER BY table_name
-                """)
+                """
+                )
                 result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
         except SQLAlchemyError as e:
@@ -282,14 +288,17 @@ class BigQueryDriver(DatabaseDriver):
                         validation_result["suggestions"].append(
                             "Review BigQuery SQL syntax - it differs from standard SQL in some aspects"
                         )
-                    elif "permission" in error_msg.lower() or "denied" in error_msg.lower():
+                    elif (
+                        "permission" in error_msg.lower()
+                        or "denied" in error_msg.lower()
+                    ):
                         validation_result["suggestions"].append(
                             "Insufficient permissions to access the specified tables/datasets"
                         )
         except Exception as conn_error:
-            validation_result["error"] = (
-                f"Database connection error during validation: {conn_error}"
-            )
+            validation_result[
+                "error"
+            ] = f"Database connection error during validation: {conn_error}"
             validation_result["error_type"] = "connection_error"
 
         return validation_result

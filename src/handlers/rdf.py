@@ -1,21 +1,20 @@
 """Oxigraph RDF store and SPARQL handler implementations."""
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from fastmcp import Context
 
 from ..exceptions import (
     DependencyError,
-    StoreNotInitializedError,
     RDFError,
+    StoreNotInitializedError,
     ValidationError,
 )
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
-from ..lifecycle.metadata import update_workspace_section, update_workspace_rdf
-from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
-
 from ..handler_context import HandlerContext
+from ..lifecycle.metadata import update_workspace_rdf, update_workspace_section
+from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,9 @@ async def store_ontology_in_rdf(
 
     store = services.get_oxigraph_store(ctx)
     if store is None:
-        return StoreNotInitializedError("Failed to initialize Oxigraph store").to_response()
+        return StoreNotInitializedError(
+            "Failed to initialize Oxigraph store"
+        ).to_response()
 
     session = services.get_session_data(ctx)
     effective_schema = schema_name or session.get_last_analyzed_schema() or "default"
@@ -45,7 +46,11 @@ async def store_ontology_in_rdf(
         ).to_response()
 
     try:
-        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+        conn_dir = (
+            get_connection_dir(session.connection_id)
+            if session.connection_id
+            else ensure_output_dir()
+        )
         ontology_path = conn_dir / session.ontology_file
 
         if not ontology_path.exists():
@@ -70,6 +75,7 @@ async def store_ontology_in_rdf(
         if session.connection_id:
             try:
                 from datetime import datetime
+
                 await update_workspace_section(
                     connection_id=session.connection_id,
                     output_dir=OUTPUT_DIR,
@@ -114,6 +120,7 @@ def _detect_sparql_type(sparql_query: str) -> str:
     stripped = sparql_query.strip()
     # Skip PREFIX declarations to find the actual query keyword
     import re
+
     body = re.sub(r"(?i)^\s*(PREFIX\s+\S+\s+<[^>]+>\s*)+", "", stripped).strip()
     upper = body.upper()
     if upper.startswith("ASK"):
@@ -218,7 +225,9 @@ async def add_rdf_knowledge(
             subject=subject, predicate=predicate, object=object_value, metadata=metadata
         )
 
-        await ctx.info(f"Added knowledge triple: <{subject}> <{predicate}> {object_value}")
+        await ctx.info(
+            f"Added knowledge triple: <{subject}> <{predicate}> {object_value}"
+        )
 
         return (
             f"Knowledge added successfully!\n\n"

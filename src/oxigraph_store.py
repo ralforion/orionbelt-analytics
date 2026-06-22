@@ -7,10 +7,11 @@ Stores ontologies, schema metadata, and accumulated knowledge across sessions.
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 try:
-    from pyoxigraph import Store, NamedNode, Literal, Triple, RdfFormat
+    from pyoxigraph import Literal, NamedNode, RdfFormat, Store, Triple
+
     OXIGRAPH_AVAILABLE = True
 except ImportError:
     OXIGRAPH_AVAILABLE = False
@@ -29,8 +30,7 @@ def _escape_sparql_literal(value: str) -> str:
     Prevents SPARQL injection by escaping special characters.
     """
     return (
-        value
-        .replace("\\", "\\\\")
+        value.replace("\\", "\\\\")
         .replace('"', '\\"')
         .replace("'", "\\'")
         .replace("\n", "\\n")
@@ -75,9 +75,7 @@ class OxigraphStoreManager:
             except OSError:
                 lock_file = store_path / "store" / "LOCK"
                 if lock_file.exists():
-                    logger.warning(
-                        f"Removing stale Oxigraph lock file: {lock_file}"
-                    )
+                    logger.warning(f"Removing stale Oxigraph lock file: {lock_file}")
                     lock_file.unlink()
                     self.store = Store(str(store_path))
                 else:
@@ -90,12 +88,7 @@ class OxigraphStoreManager:
         # Track loaded ontologies
         self._loaded_ontologies: Dict[str, str] = {}  # schema_name -> graph_uri
 
-    def load_ontology(
-        self,
-        ontology_ttl: str,
-        graph_uri: str,
-        schema_name: str
-    ) -> int:
+    def load_ontology(self, ontology_ttl: str, graph_uri: str, schema_name: str) -> int:
         """
         Load ontology into the store.
 
@@ -115,27 +108,27 @@ class OxigraphStoreManager:
             try:
                 # Try with RdfFormat object (pyoxigraph >= 0.4.0)
                 self.store.load(
-                    ontology_ttl.encode('utf-8'),
+                    ontology_ttl.encode("utf-8"),
                     format=RdfFormat.TURTLE,
                     base_iri=graph_uri,
-                    to_graph=NamedNode(graph_uri)
+                    to_graph=NamedNode(graph_uri),
                 )
             except (TypeError, AttributeError):
                 # Fallback for older pyoxigraph versions
                 try:
                     self.store.load(
-                        ontology_ttl.encode('utf-8'),
+                        ontology_ttl.encode("utf-8"),
                         format="text/turtle",
                         base_iri=graph_uri,
-                        to_graph=NamedNode(graph_uri)
+                        to_graph=NamedNode(graph_uri),
                     )
                 except TypeError:
                     # Final fallback for very old versions using mime_type
                     self.store.load(
-                        ontology_ttl.encode('utf-8'),
+                        ontology_ttl.encode("utf-8"),
                         mime_type="text/turtle",
                         base_iri=graph_uri,
-                        to_graph=NamedNode(graph_uri)
+                        to_graph=NamedNode(graph_uri),
                     )
 
             triples_after = len(self.store)
@@ -155,9 +148,7 @@ class OxigraphStoreManager:
             raise
 
     def query_sparql(
-        self,
-        sparql_query: str,
-        timeout_seconds: Optional[int] = 30
+        self, sparql_query: str, timeout_seconds: Optional[int] = 30
     ) -> List[Dict[str, Any]]:
         """
         Execute SPARQL query.
@@ -189,7 +180,7 @@ class OxigraphStoreManager:
                 binding = {}
                 for var, term in solution.items():
                     # Convert RDF terms to strings
-                    if hasattr(term, 'value'):
+                    if hasattr(term, "value"):
                         binding[str(var)] = term.value
                     else:
                         binding[str(var)] = str(term)
@@ -229,17 +220,18 @@ class OxigraphStoreManager:
             result = self.store.query(sparql_query)
             # ASK queries return a boolean, not an iterator
             # pyoxigraph query() returns the boolean value for ASK queries
-            return bool(result) if isinstance(result, bool) else bool(next(iter(result), False))
+            return (
+                bool(result)
+                if isinstance(result, bool)
+                else bool(next(iter(result), False))
+            )
         except StopIteration:
             return False
         except Exception as e:
             logger.error(f"SPARQL ASK query failed: {e}", exc_info=True)
             raise
 
-    def query_sparql_construct(
-        self,
-        sparql_query: str
-    ) -> str:
+    def query_sparql_construct(self, sparql_query: str) -> str:
         """
         Execute SPARQL CONSTRUCT query.
 
@@ -278,7 +270,7 @@ class OxigraphStoreManager:
         predicate: str,
         object: str,
         graph_uri: Optional[str] = None,
-        object_is_literal: bool = False
+        object_is_literal: bool = False,
     ):
         """
         Add a single RDF triple to the store.
@@ -325,7 +317,7 @@ class OxigraphStoreManager:
         predicate: str,
         object: str,
         metadata: Optional[Dict[str, Any]] = None,
-        graph_uri: str = "http://example.com/knowledge"
+        graph_uri: str = "http://example.com/knowledge",
     ):
         """
         Add learned knowledge to the store with metadata.
@@ -354,7 +346,9 @@ class OxigraphStoreManager:
         """
         try:
             # Add main triple
-            self.add_triple(subject, predicate, object, graph_uri, object_is_literal=True)
+            self.add_triple(
+                subject, predicate, object, graph_uri, object_is_literal=True
+            )
 
             # Add metadata triples
             if metadata:
@@ -365,7 +359,7 @@ class OxigraphStoreManager:
                         meta_predicate,
                         str(value),
                         graph_uri,
-                        object_is_literal=True
+                        object_is_literal=True,
                     )
 
             logger.info(f"Added knowledge: {subject} -> {predicate}")
@@ -397,12 +391,9 @@ class OxigraphStoreManager:
                     }}
                 """
                 results = list(self.store.query(query))
-                triple_count = int(results[0]['count'].value) if results else 0
+                triple_count = int(results[0]["count"].value) if results else 0
 
-                return {
-                    "graph_uri": graph_uri,
-                    "triple_count": triple_count
-                }
+                return {"graph_uri": graph_uri, "triple_count": triple_count}
             else:
                 # Overall statistics
                 total_triples = len(self.store)
@@ -419,8 +410,8 @@ class OxigraphStoreManager:
                 return {
                     "total_triples": total_triples,
                     "named_graphs": len(graphs),
-                    "graphs": [str(g['g']) for g in graphs],
-                    "loaded_ontologies": dict(self._loaded_ontologies)
+                    "graphs": [str(g["g"]) for g in graphs],
+                    "loaded_ontologies": dict(self._loaded_ontologies),
                 }
 
         except Exception as e:
@@ -452,12 +443,10 @@ class OxigraphStoreManager:
         """
 
         results = self.query_sparql(query)
-        return [r['tableName'] for r in results]
+        return [r["tableName"] for r in results]
 
     def find_columns_by_type(
-        self,
-        data_type: str,
-        schema_graph: Optional[str] = None
+        self, data_type: str, schema_graph: Optional[str] = None
     ) -> List[Dict[str, str]]:
         """
         Find columns by data type using SPARQL.
@@ -490,19 +479,11 @@ class OxigraphStoreManager:
 
         results = self.query_sparql(query)
         return [
-            {
-                "table": r['tableName'],
-                "column": r['columnName'],
-                "type": r['dataType']
-            }
+            {"table": r["tableName"], "column": r["columnName"], "type": r["dataType"]}
             for r in results
         ]
 
-    def export_graph(
-        self,
-        graph_uri: str,
-        format: str = "turtle"
-    ) -> str:
+    def export_graph(self, graph_uri: str, format: str = "turtle") -> str:
         """
         Export a named graph.
 
@@ -527,6 +508,6 @@ class OxigraphStoreManager:
 
     def close(self):
         """Close the store (flush to disk if persistent)."""
-        if hasattr(self.store, 'close'):
+        if hasattr(self.store, "close"):
             self.store.close()
         logger.info("Closed Oxigraph store")

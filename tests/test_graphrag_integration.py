@@ -5,23 +5,24 @@ Comprehensive tests for GraphRAG integration.
 Tests all components: embedder, vector store, retriever, community detector, and manager.
 """
 
-import pytest
-from pathlib import Path
 import sys
+from pathlib import Path
+
 import numpy as np
+import pytest
 
 # Add src to path
 src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
-from graphrag.embedder import SchemaEmbedder  # noqa: E402
-from graphrag.vector_store import VectorStore  # noqa: E402
-from graphrag.retriever import GraphRetriever  # noqa: E402
 from graphrag.community_detector import CommunityDetector  # noqa: E402
+from graphrag.embedder import SchemaEmbedder  # noqa: E402
 from graphrag.manager import GraphRAGManager  # noqa: E402
-
+from graphrag.retriever import GraphRetriever  # noqa: E402
+from graphrag.vector_store import VectorStore  # noqa: E402
 
 # --- Fixtures ---
+
 
 @pytest.fixture
 def sample_tables():
@@ -39,7 +40,7 @@ def sample_tables():
                     "is_foreign_key": False,
                     "foreign_key_table": None,
                     "foreign_key_column": None,
-                    "comment": "Primary key"
+                    "comment": "Primary key",
                 },
                 {
                     "name": "name",
@@ -49,13 +50,13 @@ def sample_tables():
                     "is_foreign_key": False,
                     "foreign_key_table": None,
                     "foreign_key_column": None,
-                    "comment": "Customer name"
-                }
+                    "comment": "Customer name",
+                },
             ],
             "primary_keys": ["customer_id"],
             "foreign_keys": [],
             "comment": "Customer master data",
-            "row_count": 1000
+            "row_count": 1000,
         },
         {
             "name": "orders",
@@ -69,7 +70,7 @@ def sample_tables():
                     "is_foreign_key": False,
                     "foreign_key_table": None,
                     "foreign_key_column": None,
-                    "comment": None
+                    "comment": None,
                 },
                 {
                     "name": "customer_id",
@@ -79,19 +80,19 @@ def sample_tables():
                     "is_foreign_key": True,
                     "foreign_key_table": "customers",
                     "foreign_key_column": "customer_id",
-                    "comment": None
-                }
+                    "comment": None,
+                },
             ],
             "primary_keys": ["order_id"],
             "foreign_keys": [
                 {
                     "column": "customer_id",
                     "referenced_table": "customers",
-                    "referenced_column": "customer_id"
+                    "referenced_column": "customer_id",
                 }
             ],
             "comment": "Order transactions",
-            "row_count": 5000
+            "row_count": 5000,
         },
         {
             "name": "order_items",
@@ -105,7 +106,7 @@ def sample_tables():
                     "is_foreign_key": False,
                     "foreign_key_table": None,
                     "foreign_key_column": None,
-                    "comment": None
+                    "comment": None,
                 },
                 {
                     "name": "order_id",
@@ -115,24 +116,25 @@ def sample_tables():
                     "is_foreign_key": True,
                     "foreign_key_table": "orders",
                     "foreign_key_column": "order_id",
-                    "comment": None
-                }
+                    "comment": None,
+                },
             ],
             "primary_keys": ["item_id"],
             "foreign_keys": [
                 {
                     "column": "order_id",
                     "referenced_table": "orders",
-                    "referenced_column": "order_id"
+                    "referenced_column": "order_id",
                 }
             ],
             "comment": "Order line items",
-            "row_count": 15000
-        }
+            "row_count": 15000,
+        },
     ]
 
 
 # --- SchemaEmbedder Tests ---
+
 
 class TestSchemaEmbedder:
     """Test suite for SchemaEmbedder."""
@@ -141,7 +143,7 @@ class TestSchemaEmbedder:
         """Test TF-IDF embedder initialization."""
         embedder = SchemaEmbedder(embedding_model="tfidf")
         assert embedder.embedding_model == "tfidf"
-        assert hasattr(embedder, 'vectorizer')
+        assert hasattr(embedder, "vectorizer")
 
     def test_create_table_embedding(self, sample_tables):
         """Test creating embedding for a table."""
@@ -152,14 +154,16 @@ class TestSchemaEmbedder:
             table_name=table["name"],
             columns=table["columns"],
             comment=table["comment"],
-            foreign_keys=table["foreign_keys"]
+            foreign_keys=table["foreign_keys"],
         )
 
         assert element.element_type == "table"
         assert element.element_id == "customers"
         assert element.name == "customers"
         assert element.embedding is not None
-        assert len(element.embedding) <= 384  # Max dimension; actual varies with vocabulary
+        assert (
+            len(element.embedding) <= 384
+        )  # Max dimension; actual varies with vocabulary
 
     def test_create_column_embedding(self):
         """Test creating embedding for a column."""
@@ -171,7 +175,7 @@ class TestSchemaEmbedder:
             data_type="INTEGER",
             is_primary_key=True,
             is_foreign_key=False,
-            comment="Primary key"
+            comment="Primary key",
         )
 
         assert element.element_type == "column"
@@ -187,7 +191,7 @@ class TestSchemaEmbedder:
             from_table="orders",
             to_table="customers",
             join_columns=[("customer_id", "customer_id")],
-            relationship_type="many_to_one"
+            relationship_type="many_to_one",
         )
 
         assert element.element_type == "relationship"
@@ -214,10 +218,13 @@ class TestSchemaEmbedder:
         assert "relationships" in result
         assert len(result["tables"]) == 3
         assert len(result["columns"]) > 0
-        assert len(result["relationships"]) == 2  # orders->customers, order_items->orders
+        assert (
+            len(result["relationships"]) == 2
+        )  # orders->customers, order_items->orders
 
 
 # --- VectorStore Tests ---
+
 
 class TestVectorStore:
     """Test suite for VectorStore."""
@@ -240,7 +247,7 @@ class TestVectorStore:
             name="customers",
             description="Customer data",
             embedding=embedding,
-            metadata={"column_count": 10}
+            metadata={"column_count": 10},
         )
 
         assert len(store.elements) == 1
@@ -257,7 +264,7 @@ class TestVectorStore:
                 element_id=f"table_{i}",
                 name=f"table_{i}",
                 description=f"Table {i}",
-                embedding=embedding
+                embedding=embedding,
             )
 
         store.build_index()
@@ -303,6 +310,7 @@ class TestVectorStore:
 
 # --- GraphRetriever Tests ---
 
+
 class TestGraphRetriever:
     """Test suite for GraphRetriever."""
 
@@ -318,7 +326,9 @@ class TestGraphRetriever:
         retriever.build_graph(sample_tables)
 
         assert retriever.graph.number_of_nodes() == 3
-        assert retriever.graph.number_of_edges() == 2  # orders->customers, order_items->orders
+        assert (
+            retriever.graph.number_of_edges() == 2
+        )  # orders->customers, order_items->orders
 
     def test_find_join_path_direct(self, sample_tables):
         """Test finding direct join path."""
@@ -347,15 +357,17 @@ class TestGraphRetriever:
         retriever = GraphRetriever()
 
         # Add isolated table
-        tables = sample_tables + [{
-            "name": "isolated_table",
-            "schema": "public",
-            "columns": [],
-            "foreign_keys": [],
-            "primary_keys": [],
-            "comment": None,
-            "row_count": 0
-        }]
+        tables = sample_tables + [
+            {
+                "name": "isolated_table",
+                "schema": "public",
+                "columns": [],
+                "foreign_keys": [],
+                "primary_keys": [],
+                "comment": None,
+                "row_count": 0,
+            }
+        ]
 
         retriever.build_graph(tables)
 
@@ -377,19 +389,23 @@ class TestGraphRetriever:
         retriever = GraphRetriever()
 
         # Create schema with fan-trap
-        fan_trap_tables = sample_tables + [{
-            "name": "payments",
-            "schema": "public",
-            "columns": [],
-            "primary_keys": [],
-            "foreign_keys": [{
-                "column": "order_id",
-                "referenced_table": "orders",
-                "referenced_column": "order_id"
-            }],
-            "comment": None,
-            "row_count": 0
-        }]
+        fan_trap_tables = sample_tables + [
+            {
+                "name": "payments",
+                "schema": "public",
+                "columns": [],
+                "primary_keys": [],
+                "foreign_keys": [
+                    {
+                        "column": "order_id",
+                        "referenced_table": "orders",
+                        "referenced_column": "order_id",
+                    }
+                ],
+                "comment": None,
+                "row_count": 0,
+            }
+        ]
 
         retriever.build_graph(fan_trap_tables)
 
@@ -403,6 +419,7 @@ class TestGraphRetriever:
 
 
 # --- CommunityDetector Tests ---
+
 
 class TestCommunityDetector:
     """Test suite for CommunityDetector."""
@@ -444,6 +461,7 @@ class TestCommunityDetector:
 
 
 # --- GraphRAGManager Tests ---
+
 
 class TestGraphRAGManager:
     """Test suite for GraphRAGManager."""
@@ -515,6 +533,7 @@ class TestGraphRAGManager:
 
 # --- Integration Tests ---
 
+
 class TestGraphRAGIntegration:
     """End-to-end integration tests."""
 
@@ -545,7 +564,9 @@ class TestGraphRAGIntegration:
         manager = GraphRAGManager(embedding_model="tfidf")
         manager.initialize_from_schema(sample_tables, schema_name="public")
 
-        context = manager.get_query_context("customer orders", max_tables=2, max_columns=10)
+        context = manager.get_query_context(
+            "customer orders", max_tables=2, max_columns=10
+        )
 
         # Should be significantly less than full schema
         token_estimate = context["token_estimate"]

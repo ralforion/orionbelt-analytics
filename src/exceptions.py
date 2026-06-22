@@ -5,11 +5,12 @@ that replace ad-hoc string-based error_type fields.
 """
 
 from enum import Enum
-from typing import Optional, List
+from typing import List, Optional
 
 
 class ErrorType(str, Enum):
     """Enumeration of all error types for consistent error reporting."""
+
     VALIDATION = "validation_error"
     PARAMETER = "parameter_error"
     CONNECTION = "connection_error"
@@ -29,8 +30,12 @@ class OrionBeltError(Exception):
 
     error_type: ErrorType = ErrorType.INTERNAL
 
-    def __init__(self, message: str, details: Optional[str] = None,
-                 suggestions: Optional[List[str]] = None):
+    def __init__(
+        self,
+        message: str,
+        details: Optional[str] = None,
+        suggestions: Optional[List[str]] = None,
+    ):
         self.message = message
         self.details = details
         self.suggestions = suggestions or []
@@ -52,34 +57,41 @@ class OrionBeltError(Exception):
 
 class ConnectionError(OrionBeltError):
     """Database connection failures."""
+
     error_type = ErrorType.CONNECTION
 
 
 class DatabaseError(OrionBeltError):
     """Database operation failures (query execution, schema analysis)."""
+
     error_type = ErrorType.DATABASE
 
 
 class ValidationError(OrionBeltError):
     """Input validation failures."""
+
     error_type = ErrorType.VALIDATION
 
 
 class ParameterError(OrionBeltError):
     """Missing or invalid tool parameters."""
+
     error_type = ErrorType.PARAMETER
 
 
 class RDFError(OrionBeltError):
     """RDF/ontology store errors."""
+
     error_type = ErrorType.RDF
 
 
 class StoreNotInitializedError(OrionBeltError):
     """RDF or vector store not initialized."""
+
     error_type = ErrorType.STORE
 
 
 class DependencyError(OrionBeltError):
     """Missing optional dependency."""
+
     error_type = ErrorType.DEPENDENCY

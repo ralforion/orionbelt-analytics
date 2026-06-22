@@ -6,12 +6,12 @@ __email__ = "contributors@example.com"
 __description__ = "OrionBelt Analytics - the Ontology-based MCP server for your Text-2-SQL convenience"
 __name__ = "OrionBelt Analytics"
 
-# Export main components for easier imports
-from .database_manager import DatabaseManager, TableInfo, ColumnInfo
-from .ontology_generator import OntologyGenerator
 from .config import config_manager
 from .constants import SUPPORTED_DB_TYPES
 
+# Export main components for easier imports
+from .database_manager import ColumnInfo, DatabaseManager, TableInfo
+from .ontology_generator import OntologyGenerator
 from .session import SessionData
 
 __all__ = [

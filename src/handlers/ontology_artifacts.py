@@ -2,14 +2,13 @@
 
 import logging
 import re
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from fastmcp import Context
 
-from ..paths import ensure_output_dir, get_connection_dir
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
-
 from ..handler_context import HandlerContext
+from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..paths import ensure_output_dir, get_connection_dir
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,11 @@ async def download_ontology(
                 }
 
         schema_safe = schema_name.replace(" ", "_").replace(".", "_")
-        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+        conn_dir = (
+            get_connection_dir(session.connection_id)
+            if session.connection_id
+            else ensure_output_dir()
+        )
 
         if source == "rdf" and OXIGRAPH_AVAILABLE:
             store = services.get_oxigraph_store(ctx)
@@ -70,11 +73,15 @@ async def download_ontology(
                     [
                         line
                         for line in ontology_ttl.split("\n")
-                        if line.strip() and not line.strip().startswith("#") and not line.strip().startswith("@")
+                        if line.strip()
+                        and not line.strip().startswith("#")
+                        and not line.strip().startswith("@")
                     ]
                 )
 
-                logger.info(f"Exported ontology from RDF store <{graph_uri}> to {file_path}")
+                logger.info(
+                    f"Exported ontology from RDF store <{graph_uri}> to {file_path}"
+                )
 
                 return {
                     "success": True,
@@ -101,7 +108,9 @@ async def download_ontology(
             # currently active in the session — schema_name may differ from the
             # current schema (per-schema ontology state).
             schema_state = session.get_schema_state(schema_name)
-            ontology_filename = schema_state.ontology.ontology_file if schema_state else None
+            ontology_filename = (
+                schema_state.ontology.ontology_file if schema_state else None
+            )
             if not ontology_filename:
                 pattern = f"ontology_{schema_safe}*.ttl"
                 matching_files = list(conn_dir.glob(pattern))
@@ -177,7 +186,11 @@ async def download_r2rml(
                 }
 
         schema_safe = schema_name.replace(" ", "_").replace(".", "_")
-        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+        conn_dir = (
+            get_connection_dir(session.connection_id)
+            if session.connection_id
+            else ensure_output_dir()
+        )
 
         # Read the *requested* schema's R2RML file, not the current schema's
         # (schema_name may differ from the active schema).

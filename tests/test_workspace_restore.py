@@ -28,8 +28,9 @@ class TestWorkspaceRdfRestore(unittest.IsolatedAsyncioTestCase):
         session = SessionData()
         ctx = MagicMock()
 
-        with patch("src.handlers.workspace.VersionMetadataManager") as MgrCls, \
-             patch("src.handlers.workspace.OXIGRAPH_AVAILABLE", True):
+        with patch("src.handlers.workspace.VersionMetadataManager") as MgrCls, patch(
+            "src.handlers.workspace.OXIGRAPH_AVAILABLE", True
+        ):
             MgrCls.return_value.get_workspace.return_value = workspace
             result = await _restore_workspace_core(
                 ctx, session, "conn-123", None, services
@@ -56,8 +57,9 @@ class TestWorkspaceRdfRestore(unittest.IsolatedAsyncioTestCase):
         del bare_function.get_oxigraph_store  # force AttributeError on attr access
         session = SessionData()
 
-        with patch("src.handlers.workspace.VersionMetadataManager") as MgrCls, \
-             patch("src.handlers.workspace.OXIGRAPH_AVAILABLE", True):
+        with patch("src.handlers.workspace.VersionMetadataManager") as MgrCls, patch(
+            "src.handlers.workspace.OXIGRAPH_AVAILABLE", True
+        ):
             MgrCls.return_value.get_workspace.return_value = workspace
             result = await _restore_workspace_core(
                 MagicMock(), session, "conn-123", None, bare_function

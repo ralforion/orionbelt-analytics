@@ -81,7 +81,9 @@ def validate_ontology(ontology_ttl: str) -> Dict[str, Any]:
             meta_shacl=False,
         )
 
-        violations = 0 if conforms else max(results_text.count("Constraint Violation"), 1)
+        violations = (
+            0 if conforms else max(results_text.count("Constraint Violation"), 1)
+        )
         return {
             "available": True,
             "conforms": bool(conforms),

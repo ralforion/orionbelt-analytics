@@ -4,20 +4,18 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Optional, Dict, Any, Union
+from typing import Any, Dict, Optional, Union
 
 from fastmcp import Context
 
-from ..ontology_generator import OntologyGenerator
-from ..lifecycle.metadata import update_workspace_section
-from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..config import config_manager
-from ..utils import safe_ctx_info, is_client_disconnect
-
-from .ontology_generation import _build_minimal_graph_summary
-
 from ..handler_context import HandlerContext
+from ..lifecycle.metadata import update_workspace_section
+from ..ontology_generator import OntologyGenerator
+from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
+from ..utils import is_client_disconnect, safe_ctx_info
+from .ontology_generation import _build_minimal_graph_summary
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +43,9 @@ async def _maybe_sample_rename_suggestions(
     payload.
     """
     if not config_manager.get_server_config().enable_sampling:
-        logger.info("MCP sampling disabled (ENABLE_SAMPLING=false) — using legacy review path")
+        logger.info(
+            "MCP sampling disabled (ENABLE_SAMPLING=false) — using legacy review path"
+        )
         return None
 
     if not (cryptic_classes or cryptic_props_by_table or cryptic_relationships):
@@ -187,12 +187,13 @@ def _build_rename_prompt(items: list[str]) -> str:
         '"description":"International Bank Account Number for the account.",'
         '"table_name":"acctbal"}],'
         '"relationships":[]}\n\n'
-        "Now produce suggestions for the items below. Items:\n"
-        + "\n".join(items)
+        "Now produce suggestions for the items below. Items:\n" + "\n".join(items)
     )
 
 
-def _normalize_structured_suggestions(parsed: Optional[Dict[str, Any]]) -> Dict[str, list]:
+def _normalize_structured_suggestions(
+    parsed: Optional[Dict[str, Any]]
+) -> Dict[str, list]:
     """Validate and clean a structured suggestions payload.
 
     Drops items missing required fields, strips suggestions that match the
@@ -255,7 +256,9 @@ def _parse_rename_json(text: str) -> Optional[Dict[str, Any]]:
     if stripped.startswith("{") and stripped.endswith("}"):
         candidates.append(stripped)
 
-    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
+    fence_match = re.search(
+        r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE
+    )
     if fence_match:
         candidates.append(fence_match.group(1))
 
@@ -285,7 +288,11 @@ async def suggest_semantic_names(
         try:
             if ontology_file:
                 session = services.get_session_data(ctx)
-                file_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+                file_dir = (
+                    get_connection_dir(session.connection_id)
+                    if session.connection_id
+                    else ensure_output_dir()
+                )
                 ontology_path = file_dir / ontology_file
                 if not ontology_path.exists():
                     return {
@@ -344,7 +351,10 @@ async def suggest_semantic_names(
             cryptic_relationships=cryptic_relationships,
         )
 
-        if sampled_suggestions and any(sampled_suggestions.get(k) for k in ("classes", "properties", "relationships")):
+        if sampled_suggestions and any(
+            sampled_suggestions.get(k)
+            for k in ("classes", "properties", "relationships")
+        ):
             sampled_total = sum(
                 len(sampled_suggestions.get(k) or [])
                 for k in ("classes", "properties", "relationships")
@@ -414,7 +424,11 @@ async def apply_semantic_names(
         session = services.get_session_data(ctx)
         try:
             if ontology_file:
-                conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+                conn_dir = (
+                    get_connection_dir(session.connection_id)
+                    if session.connection_id
+                    else ensure_output_dir()
+                )
                 ontology_path = conn_dir / ontology_file
                 if not ontology_path.exists():
                     return services.create_error_response(
@@ -455,8 +469,15 @@ async def apply_semantic_names(
         new_ontology_filename = None
         if save_to_file:
             try:
-                conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
-                new_ontology_filename = services.get_session_safe_filename(ctx, "ontology", "semantic") + ".ttl"
+                conn_dir = (
+                    get_connection_dir(session.connection_id)
+                    if session.connection_id
+                    else ensure_output_dir()
+                )
+                new_ontology_filename = (
+                    services.get_session_safe_filename(ctx, "ontology", "semantic")
+                    + ".ttl"
+                )
                 ontology_file_path = conn_dir / new_ontology_filename
 
                 with open(ontology_file_path, "w", encoding="utf-8") as f:
@@ -510,16 +531,22 @@ async def apply_semantic_names(
                 store = services.get_oxigraph_store(ctx)
                 if store:
                     session = services.get_session_data(ctx)
-                    schema_name = getattr(session, "schema_name", "default") or "default"
+                    schema_name = (
+                        getattr(session, "schema_name", "default") or "default"
+                    )
                     schema_safe = schema_name.replace(" ", "_").replace(".", "_")
                     graph_uri = f"http://example.com/schema/{schema_safe}"
-                    triple_count = store.load_ontology(updated_ontology, graph_uri, schema_name)
+                    triple_count = store.load_ontology(
+                        updated_ontology, graph_uri, schema_name
+                    )
                     result += f"\nPersisted to Oxigraph: {triple_count:,} triples in <{graph_uri}>"
                     result += f"\nToken savings: ~{len(updated_ontology) // 4} tokens saved by auto-persisting to RDF store!"
                     result += '\nUse query_sparql() to explore or download_artifact(artifact_type="ontology") to get the TTL file.'
                     persisted = True
             except Exception as e:
-                logger.warning(f"Auto-persist semantic ontology to Oxigraph failed: {e}")
+                logger.warning(
+                    f"Auto-persist semantic ontology to Oxigraph failed: {e}"
+                )
 
         if not persisted:
             # Without Oxigraph, return a minimal graph summary instead of full TTL
@@ -529,5 +556,6 @@ async def apply_semantic_names(
 
     except Exception as e:
         logger.error(f"Error applying semantic names: {e}")
-        return services.create_error_response(f"Failed to apply semantic names: {str(e)}", "internal_error")
-
+        return services.create_error_response(
+            f"Failed to apply semantic names: {str(e)}", "internal_error"
+        )

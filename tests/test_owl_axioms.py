@@ -1,12 +1,13 @@
 """Tests for OWL axiom generation: FunctionalProperty, disjointWith, propertyChainAxiom."""
 
 import unittest
-from rdflib import URIRef, Namespace
-from rdflib.namespace import RDF, RDFS, OWL
 
-from src.ontology_generator import OntologyGenerator
-from src.database_manager import TableInfo, ColumnInfo
+from rdflib import Namespace, URIRef
+from rdflib.namespace import OWL, RDF, RDFS
+
 from src.constants import OBA_NAMESPACE
+from src.database_manager import ColumnInfo, TableInfo
+from src.ontology_generator import OntologyGenerator
 
 OBA = Namespace(OBA_NAMESPACE)
 
@@ -28,12 +29,18 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="name", data_type="VARCHAR(200)",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=False,
+                    name="name",
+                    data_type="VARCHAR(200)",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False,
                 ),
             ],
             primary_keys=["id"],
@@ -46,21 +53,37 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="customer_id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=True,
-                    foreign_key_table="customers", foreign_key_column="id",
+                    name="customer_id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=True,
+                    foreign_key_table="customers",
+                    foreign_key_column="id",
                 ),
                 ColumnInfo(
-                    name="total", data_type="DECIMAL(12,2)",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=False,
+                    name="total",
+                    data_type="DECIMAL(12,2)",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False,
                 ),
             ],
             primary_keys=["id"],
-            foreign_keys=[{"column": "customer_id", "referenced_table": "customers", "referenced_column": "id"}],
+            foreign_keys=[
+                {
+                    "column": "customer_id",
+                    "referenced_table": "customers",
+                    "referenced_column": "id",
+                }
+            ],
             row_count=482000,
         )
 
@@ -69,21 +92,37 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="customer_id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=True,
-                    foreign_key_table="customers", foreign_key_column="id",
+                    name="customer_id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=True,
+                    foreign_key_table="customers",
+                    foreign_key_column="id",
                 ),
                 ColumnInfo(
-                    name="refund_amount", data_type="DECIMAL(12,2)",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=False,
+                    name="refund_amount",
+                    data_type="DECIMAL(12,2)",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False,
                 ),
             ],
             primary_keys=["id"],
-            foreign_keys=[{"column": "customer_id", "referenced_table": "customers", "referenced_column": "id"}],
+            foreign_keys=[
+                {
+                    "column": "customer_id",
+                    "referenced_table": "customers",
+                    "referenced_column": "id",
+                }
+            ],
             row_count=31000,
         )
 
@@ -125,12 +164,18 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="name", data_type="VARCHAR(100)",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=False,
+                    name="name",
+                    data_type="VARCHAR(100)",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False,
                 ),
             ],
             primary_keys=["id"],
@@ -142,12 +187,18 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="product_id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=False,
+                    name="product_id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False,
                 ),
             ],
             primary_keys=["id"],
@@ -183,10 +234,11 @@ class TestOwlAxioms(unittest.TestCase):
         g = self.generator.graph
 
         # Either direction is valid for disjointWith (symmetric)
-        has_disjoint = (
-            (orders_uri, OWL.disjointWith, returns_uri) in g
-            or (returns_uri, OWL.disjointWith, orders_uri) in g
-        )
+        has_disjoint = (orders_uri, OWL.disjointWith, returns_uri) in g or (
+            returns_uri,
+            OWL.disjointWith,
+            orders_uri,
+        ) in g
         self.assertTrue(has_disjoint, "orders and returns should be owl:disjointWith")
 
     def test_no_disjoint_between_fk_pair(self):
@@ -221,17 +273,30 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="customer_id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=True,
-                    foreign_key_table="customers", foreign_key_column="id",
+                    name="customer_id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=True,
+                    foreign_key_table="customers",
+                    foreign_key_column="id",
                 ),
             ],
             primary_keys=["id"],
-            foreign_keys=[{"column": "customer_id", "referenced_table": "customers", "referenced_column": "id"}],
+            foreign_keys=[
+                {
+                    "column": "customer_id",
+                    "referenced_table": "customers",
+                    "referenced_column": "id",
+                }
+            ],
             row_count=200000,
         )
 
@@ -256,12 +321,18 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="name", data_type="VARCHAR(100)",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=False,
+                    name="name",
+                    data_type="VARCHAR(100)",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False,
                 ),
             ],
             primary_keys=["id"],
@@ -274,17 +345,30 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="region_id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=True,
-                    foreign_key_table="regions", foreign_key_column="id",
+                    name="region_id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=True,
+                    foreign_key_table="regions",
+                    foreign_key_column="id",
                 ),
             ],
             primary_keys=["id"],
-            foreign_keys=[{"column": "region_id", "referenced_table": "regions", "referenced_column": "id"}],
+            foreign_keys=[
+                {
+                    "column": "region_id",
+                    "referenced_table": "regions",
+                    "referenced_column": "id",
+                }
+            ],
             row_count=15000,
         )
 
@@ -311,8 +395,11 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
             ],
             primary_keys=["id"],
@@ -324,17 +411,30 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="region_id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=True,
-                    foreign_key_table="regions", foreign_key_column="id",
+                    name="region_id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=True,
+                    foreign_key_table="regions",
+                    foreign_key_column="id",
                 ),
             ],
             primary_keys=["id"],
-            foreign_keys=[{"column": "region_id", "referenced_table": "regions", "referenced_column": "id"}],
+            foreign_keys=[
+                {
+                    "column": "region_id",
+                    "referenced_table": "regions",
+                    "referenced_column": "id",
+                }
+            ],
             row_count=15000,
         )
         # orders FK to both customers AND regions (direct)
@@ -343,24 +443,43 @@ class TestOwlAxioms(unittest.TestCase):
             schema="public",
             columns=[
                 ColumnInfo(
-                    name="id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=True, is_foreign_key=False,
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
-                    name="customer_id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=True,
-                    foreign_key_table="customers", foreign_key_column="id",
+                    name="customer_id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=True,
+                    foreign_key_table="customers",
+                    foreign_key_column="id",
                 ),
                 ColumnInfo(
-                    name="region_id", data_type="INTEGER",
-                    is_nullable=False, is_primary_key=False, is_foreign_key=True,
-                    foreign_key_table="regions", foreign_key_column="id",
+                    name="region_id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=True,
+                    foreign_key_table="regions",
+                    foreign_key_column="id",
                 ),
             ],
             primary_keys=["id"],
             foreign_keys=[
-                {"column": "customer_id", "referenced_table": "customers", "referenced_column": "id"},
-                {"column": "region_id", "referenced_table": "regions", "referenced_column": "id"},
+                {
+                    "column": "customer_id",
+                    "referenced_table": "customers",
+                    "referenced_column": "id",
+                },
+                {
+                    "column": "region_id",
+                    "referenced_table": "regions",
+                    "referenced_column": "id",
+                },
             ],
             row_count=482000,
         )
@@ -384,7 +503,6 @@ class TestOwlAxioms(unittest.TestCase):
         g = self.generator.graph
         chain_triples = list(g.triples((None, OWL.propertyChainAxiom, None)))
         self.assertEqual(len(chain_triples), 0)
-
 
     # -------------------------------------------------------------------------
     # oba:joinsTo shared traversable join predicate tests (Phase 1)

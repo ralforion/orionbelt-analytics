@@ -27,7 +27,9 @@ class TestResources(unittest.TestCase):
         self.assertEqual(set(mcp.registered), set(resources._SKILLS))
         self.assertEqual(len(mcp.registered), 4)
 
-    def test_loader_reads_existing_skill(self, ):
+    def test_loader_reads_existing_skill(
+        self,
+    ):
         loader = resources._make_skill_loader("fan-trap-prevention.md", "title")
         self.assertEqual(loader.__doc__, "title")
         self.assertTrue(loader.__name__.endswith("_skill"))

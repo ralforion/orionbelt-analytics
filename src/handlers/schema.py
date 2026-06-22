@@ -4,15 +4,14 @@ import asyncio
 import json
 import logging
 import os
-from typing import Optional, Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 from fastmcp import Context
 
-from ..lifecycle.metadata import update_workspace_section
-from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
-from ..r2rml_generator import R2RMLGenerator
-
 from ..handler_context import HandlerContext
+from ..lifecycle.metadata import update_workspace_section
+from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
+from ..r2rml_generator import R2RMLGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,9 @@ async def discover_schema(
         _auto_initialize_graphrag_background: Background init function
     """
     # Log function entry to verify code is being called
-    logger.debug(f"discover_schema() called - schema: '{schema_name}', lightweight: {lightweight}")
+    logger.debug(
+        f"discover_schema() called - schema: '{schema_name}', lightweight: {lightweight}"
+    )
 
     session = services.get_session_data(ctx)
     effective_schema = schema_name or ""
@@ -103,7 +104,9 @@ async def discover_schema(
 
     cached_tables = session.get_cached_schema(effective_schema)
 
-    logger.debug(f"Cache check result - cached_tables: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")
+    logger.debug(
+        f"Cache check result - cached_tables: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})"
+    )
 
     if cached_tables:
         ontology_also_cached = session.ontology_file is not None
@@ -114,12 +117,22 @@ async def discover_schema(
         # Debug logging to diagnose auto-init issues
         logger.debug("GraphRAG auto-init check (CACHED path):")
         logger.debug(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
-        logger.debug(f"  cached_tables exists: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})")
+        logger.debug(
+            f"  cached_tables exists: {bool(cached_tables)} (count: {len(cached_tables) if cached_tables else 0})"
+        )
         logger.info(f"  session.graphrag_initialized: {session.graphrag_initialized}")
-        logger.debug(f"  Will trigger: {auto_graphrag == 'true' and cached_tables and not session.graphrag_initialized}")
+        logger.debug(
+            f"  Will trigger: {auto_graphrag == 'true' and cached_tables and not session.graphrag_initialized}"
+        )
 
-        if auto_graphrag == "true" and cached_tables and not session.graphrag_initialized:
-            logger.info(f"GraphRAG auto-init triggered for cached schema: {effective_schema or 'default'}")
+        if (
+            auto_graphrag == "true"
+            and cached_tables
+            and not session.graphrag_initialized
+        ):
+            logger.info(
+                f"GraphRAG auto-init triggered for cached schema: {effective_schema or 'default'}"
+            )
             task = asyncio.create_task(
                 services.auto_initialize_graphrag_background(
                     schema_name=effective_schema or "default",
@@ -129,7 +142,9 @@ async def discover_schema(
                 )
             )
             session.graphrag._init_task = task
-            logger.info("GraphRAG auto-initialization started in background (from cache)")
+            logger.info(
+                "GraphRAG auto-initialization started in background (from cache)"
+            )
 
         if ontology_also_cached:
             await ctx.info(
@@ -206,7 +221,9 @@ async def discover_schema(
                 logger.warning(f"Failed to analyze table {table_name}: {e}")
 
         session.cache_schema_analysis(schema_name or "", table_info_objects)
-        logger.info(f"Cached {len(table_info_objects)} tables for generate_ontology() reuse")
+        logger.info(
+            f"Cached {len(table_info_objects)} tables for generate_ontology() reuse"
+        )
 
         lightweight_result = {
             "schema": schema_name or "default",
@@ -227,11 +244,17 @@ async def discover_schema(
         # Debug logging to diagnose auto-init issues
         logger.debug("GraphRAG auto-init check (NON-CACHED path):")
         logger.debug(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
-        logger.debug(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
-        logger.debug(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")
+        logger.debug(
+            f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})"
+        )
+        logger.debug(
+            f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}"
+        )
 
         if auto_graphrag == "true" and table_info_objects:
-            logger.info(f"GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
+            logger.info(
+                f"GraphRAG auto-init triggered for schema: {schema_name or 'default'}"
+            )
             task = asyncio.create_task(
                 services.auto_initialize_graphrag_background(
                     schema_name=schema_name or "default",
@@ -292,9 +315,15 @@ async def discover_schema(
     # Save schema analysis to connection-scoped output folder
     schema_filename = None
     try:
-        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+        conn_dir = (
+            get_connection_dir(session.connection_id)
+            if session.connection_id
+            else ensure_output_dir()
+        )
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
-        schema_filename = services.get_session_safe_filename(ctx, "schema", schema_safe) + ".json"
+        schema_filename = (
+            services.get_session_safe_filename(ctx, "schema", schema_safe) + ".json"
+        )
         schema_file_path = conn_dir / schema_filename
 
         with open(schema_file_path, "w", encoding="utf-8") as f:
@@ -312,10 +341,14 @@ async def discover_schema(
         if t.foreign_keys:
             relationships[t.name] = t.foreign_keys
             if len(t.foreign_keys) > 1:
-                fan_trap_warnings.append({
-                    "table": t.name,
-                    "referenced_tables": [fk["referenced_table"] for fk in t.foreign_keys],
-                })
+                fan_trap_warnings.append(
+                    {
+                        "table": t.name,
+                        "referenced_tables": [
+                            fk["referenced_table"] for fk in t.foreign_keys
+                        ],
+                    }
+                )
 
     schema_result = {
         "schema": schema_name or "default",
@@ -331,7 +364,11 @@ async def discover_schema(
     # Generate R2RML mapping
     if table_info_objects:
         try:
-            conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+            conn_dir = (
+                get_connection_dir(session.connection_id)
+                if session.connection_id
+                else ensure_output_dir()
+            )
             from ..constants import DEFAULT_R2RML_BASE_IRI
 
             effective_schema = schema_name or "default"
@@ -342,13 +379,17 @@ async def discover_schema(
 
             database_name = db_manager.connection_info.get("database", "database")
 
-            r2rml_generator = R2RMLGenerator(base_iri=base_iri, database_name=database_name)
+            r2rml_generator = R2RMLGenerator(
+                base_iri=base_iri, database_name=database_name
+            )
             r2rml_content = r2rml_generator.generate_from_schema(
                 table_info_objects, schema_name=effective_schema
             )
 
             schema_safe = effective_schema.replace(" ", "_").replace(".", "_")
-            r2rml_filename = services.get_session_safe_filename(ctx, "r2rml", schema_safe) + ".ttl"
+            r2rml_filename = (
+                services.get_session_safe_filename(ctx, "r2rml", schema_safe) + ".ttl"
+            )
             r2rml_file_path = conn_dir / r2rml_filename
 
             with open(r2rml_file_path, "w", encoding="utf-8") as f:
@@ -359,7 +400,9 @@ async def discover_schema(
             schema_result["r2rml_file"] = r2rml_filename
             schema_result["r2rml_base_iri"] = base_iri
 
-            await ctx.info(f"R2RML mapping generated with {len(table_info_objects)} tables")
+            await ctx.info(
+                f"R2RML mapping generated with {len(table_info_objects)} tables"
+            )
         except Exception as e:
             logger.warning(f"Failed to generate R2RML mapping: {e}")
             schema_result["r2rml_error"] = str(e)
@@ -405,11 +448,17 @@ async def discover_schema(
     # Debug logging to diagnose auto-init issues
     logger.debug("GraphRAG auto-init check (FULL MODE path):")
     logger.debug(f"  AUTO_GRAPHRAG env: '{auto_graphrag}'")
-    logger.debug(f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})")
-    logger.debug(f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}")
+    logger.debug(
+        f"  table_info_objects exists: {bool(table_info_objects)} (count: {len(table_info_objects) if table_info_objects else 0})"
+    )
+    logger.debug(
+        f"  Will trigger: {auto_graphrag == 'true' and bool(table_info_objects)}"
+    )
 
     if auto_graphrag == "true" and table_info_objects:
-        logger.info(f"GraphRAG auto-init triggered for schema: {schema_name or 'default'}")
+        logger.info(
+            f"GraphRAG auto-init triggered for schema: {schema_name or 'default'}"
+        )
         task = asyncio.create_task(
             services.auto_initialize_graphrag_background(
                 schema_name=schema_name or "default",
@@ -427,6 +476,7 @@ async def discover_schema(
     if session.connection_id and schema_filename:
         try:
             from datetime import datetime
+
             await update_workspace_section(
                 connection_id=session.connection_id,
                 output_dir=OUTPUT_DIR,
@@ -503,7 +553,9 @@ async def get_table_details(
         table_info = db_manager.analyze_table(table_name, schema_name)
 
         if not table_info:
-            await ctx.error(f"Table '{table_name}' not found in schema '{schema_name or 'default'}'")
+            await ctx.error(
+                f"Table '{table_name}' not found in schema '{schema_name or 'default'}'"
+            )
             return {
                 "success": False,
                 "error": f"Table '{table_name}' not found",
@@ -534,7 +586,9 @@ async def get_table_details(
             "row_count": table_info.row_count,
         }
 
-        await ctx.info(f"Retrieved details for table '{table_name}': {len(table_info.columns)} columns")
+        await ctx.info(
+            f"Retrieved details for table '{table_name}': {len(table_info.columns)} columns"
+        )
         return table_dict
 
     except Exception as e:

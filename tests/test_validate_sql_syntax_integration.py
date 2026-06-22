@@ -22,9 +22,7 @@ class TestValidateSqlSyntaxIntegration(unittest.TestCase):
     def test_semicolon_inside_string_literal_is_not_multi_statement(self):
         # Regression: the regex ';' split used to wrongly reject this as
         # "multiple statements" before the parser could classify it.
-        result = self.db.validate_sql_syntax(
-            "SELECT a FROM t WHERE name = 'a;b'"
-        )
+        result = self.db.validate_sql_syntax("SELECT a FROM t WHERE name = 'a;b'")
         self.assertNotEqual(result.get("error_type"), "security_error")
         self.assertEqual(result["query_type"], "SELECT")
         self.assertTrue(result["is_valid"])

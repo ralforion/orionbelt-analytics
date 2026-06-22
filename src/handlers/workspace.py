@@ -11,11 +11,10 @@ from fastmcp import Context
 
 from ..database_manager import TableInfo
 from ..graphrag import GraphRAGManager
+from ..handler_context import HandlerContext
 from ..lifecycle.metadata import VersionMetadataManager
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
-from ..paths import OUTPUT_DIR, get_connection_dir, get_models_dir, ensure_output_dir
-
-from ..handler_context import HandlerContext
+from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir, get_models_dir
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +250,9 @@ def _format_restore_summary(result: Dict[str, Any]) -> str:
             lines.append("- suggest_semantic_names() to enrich the ontology")
     if "Ontology '" in restored_str:
         lines.append("- query_sparql() for semantic queries")
-        lines.append("- execute_sql_query() for data queries (includes OBQC validation)")
+        lines.append(
+            "- execute_sql_query() for data queries (includes OBQC validation)"
+        )
     if "GraphRAG" in restored_str:
         lines.append("- graphrag_search() for semantic schema search")
 
@@ -409,10 +410,13 @@ async def save_semantic_model(
     # Update workspace metadata
     try:
         mgr = VersionMetadataManager(connection_id, OUTPUT_DIR)
-        workspace = mgr.metadata.setdefault("workspace", {
-            "updated_at": datetime.now().isoformat(),
-            "schemas": {},
-        })
+        workspace = mgr.metadata.setdefault(
+            "workspace",
+            {
+                "updated_at": datetime.now().isoformat(),
+                "schemas": {},
+            },
+        )
         models = workspace.setdefault("models", {})
         models[model_name] = {
             "file": model_filename,
@@ -424,7 +428,9 @@ async def save_semantic_model(
     except Exception as e:
         logger.warning(f"Failed to update workspace metadata for model: {e}")
 
-    await ctx.info(f"Saved semantic model '{model_name}' for schema '{effective_schema}'")
+    await ctx.info(
+        f"Saved semantic model '{model_name}' for schema '{effective_schema}'"
+    )
 
     return {
         "success": True,

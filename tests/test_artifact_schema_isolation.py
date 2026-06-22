@@ -37,9 +37,7 @@ async def test_download_ontology_uses_requested_schema_not_current():
     conn_dir = ensure_output_dir()
     (conn_dir / "ontology_A.ttl").write_text("@prefix a: <x> .\n# A", encoding="utf-8")
 
-    result = await download_ontology(
-        MagicMock(), "A", "file", _services(session)
-    )
+    result = await download_ontology(MagicMock(), "A", "file", _services(session))
 
     assert result["success"] is True
     # Must read A's file even though current schema is B.
@@ -49,7 +47,9 @@ async def test_download_ontology_uses_requested_schema_not_current():
 async def test_download_r2rml_uses_requested_schema_not_current():
     session = _two_schema_session()
     conn_dir = ensure_output_dir()
-    (conn_dir / "r2rml_A.ttl").write_text('rr:baseIRI "http://a/" .\n', encoding="utf-8")
+    (conn_dir / "r2rml_A.ttl").write_text(
+        'rr:baseIRI "http://a/" .\n', encoding="utf-8"
+    )
 
     result = await download_r2rml(MagicMock(), "A", _services(session))
 

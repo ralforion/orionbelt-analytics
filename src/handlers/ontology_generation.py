@@ -8,12 +8,11 @@ from typing import Optional
 
 from fastmcp import Context
 
-from ..database_manager import TableInfo, ColumnInfo
-from ..lifecycle.metadata import update_workspace_section, update_workspace_rdf
-from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
-
+from ..database_manager import ColumnInfo, TableInfo
 from ..handler_context import HandlerContext
+from ..lifecycle.metadata import update_workspace_rdf, update_workspace_section
+from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,7 @@ def _build_minimal_graph_summary(ontology_ttl: str) -> str:
     schema structure without consuming the full serialization.
     """
     from rdflib import Graph, Namespace
-    from rdflib.namespace import RDF, RDFS, OWL
+    from rdflib.namespace import OWL, RDF, RDFS
 
     g = Graph()
     g.parse(data=ontology_ttl, format="turtle")
@@ -141,7 +140,9 @@ async def generate_ontology(
     if schema_info:
         # Use provided schema information
         try:
-            schema_data = json.loads(schema_info) if isinstance(schema_info, str) else schema_info
+            schema_data = (
+                json.loads(schema_info) if isinstance(schema_info, str) else schema_info
+            )
 
             if "tables" in schema_data:
                 for table_data in schema_data["tables"]:
@@ -194,7 +195,9 @@ async def generate_ontology(
             logger.info(
                 f"Using CACHED schema from discover_schema: {len(tables_info)} tables (no re-query needed)"
             )
-            await ctx.info(f"Using cached schema: {len(tables_info)} tables - no database queries needed")
+            await ctx.info(
+                f"Using cached schema: {len(tables_info)} tables - no database queries needed"
+            )
         else:
             schema_name = effective_schema or schema_name
             db_manager = services.get_session_db_manager(ctx)
@@ -207,7 +210,9 @@ async def generate_ontology(
 
             try:
                 tables = db_manager.get_tables(schema_name)
-                logger.info(f"Found {len(tables)} tables in schema '{schema_name or 'default'}': {tables}")
+                logger.info(
+                    f"Found {len(tables)} tables in schema '{schema_name or 'default'}': {tables}"
+                )
 
                 if schema_name:
                     db_manager.prefetch_schema_constraints(schema_name)
@@ -228,7 +233,9 @@ async def generate_ontology(
                 )
 
     if not tables_info:
-        return services.create_error_response("No tables found to generate ontology from", "data_error")
+        return services.create_error_response(
+            "No tables found to generate ontology from", "data_error"
+        )
 
     generator = services.server_state.get_ontology_generator(base_uri=base_uri)
     ontology_ttl = generator.generate_from_schema(tables_info)
@@ -243,7 +250,8 @@ async def generate_ontology(
             if shacl["available"] and not shacl["conforms"]:
                 logger.warning(
                     "SHACL: generated ontology has %d violation(s):\n%s",
-                    shacl["violations"], shacl["report"],
+                    shacl["violations"],
+                    shacl["report"],
                 )
                 await ctx.info(
                     f"SHACL validation: {shacl['violations']} violation(s) in the "
@@ -258,16 +266,24 @@ async def generate_ontology(
     ontology_filename = None
     try:
         session = services.get_session_data(ctx)
-        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+        conn_dir = (
+            get_connection_dir(session.connection_id)
+            if session.connection_id
+            else ensure_output_dir()
+        )
 
         schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
-        ontology_filename = services.get_session_safe_filename(ctx, "ontology", schema_safe) + ".ttl"
+        ontology_filename = (
+            services.get_session_safe_filename(ctx, "ontology", schema_safe) + ".ttl"
+        )
         ontology_file_path = conn_dir / ontology_filename
 
         with open(ontology_file_path, "w", encoding="utf-8") as f:
             f.write(ontology_ttl)
 
-        logger.info(f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables")
+        logger.info(
+            f"Generated ontology for schema '{schema_name or 'default'}': {len(tables_info)} tables"
+        )
         logger.info(f"Saved ontology to: {ontology_file_path}")
 
         session.ontology_file = ontology_filename
@@ -315,10 +331,16 @@ async def generate_ontology(
                 store = services.get_oxigraph_store(ctx)
                 if store:
                     if not graph_uri:
-                        schema_safe = (schema_name or "default").replace(" ", "_").replace(".", "_")
+                        schema_safe = (
+                            (schema_name or "default")
+                            .replace(" ", "_")
+                            .replace(".", "_")
+                        )
                         graph_uri = f"http://example.com/schema/{schema_safe}"
 
-                    triple_count = store.load_ontology(ontology_ttl, graph_uri, schema_name or "default")
+                    triple_count = store.load_ontology(
+                        ontology_ttl, graph_uri, schema_name or "default"
+                    )
                     logger.info(
                         f"Auto-persisted ontology to Oxigraph: {triple_count} triples in graph <{graph_uri}>"
                     )
@@ -382,7 +404,9 @@ To improve ontology for business users:
 
                     return result
             except Exception as e:
-                logger.warning(f"Auto-persist to Oxigraph failed: {e}, falling back to full TTL return")
+                logger.warning(
+                    f"Auto-persist to Oxigraph failed: {e}, falling back to full TTL return"
+                )
 
         # Fallback: return minimal graph summary instead of full TTL
         result = f"Ontology generated and saved to file: {ontology_filename}\n"
@@ -393,7 +417,9 @@ To improve ontology for business users:
             result += "\n\nSEMANTIC NAME RESOLUTION RECOMMENDED"
             result += f"\nFound {cryptic_count} names that may be abbreviations or cryptic identifiers."
             result += "\n1. Call suggest_semantic_names() - NO parameters needed, ontology is CACHED"
-            result += "\n2. Review the suggestions and provide business-friendly alternatives"
+            result += (
+                "\n2. Review the suggestions and provide business-friendly alternatives"
+            )
             result += "\n3. Call apply_semantic_names() with your suggestions"
 
         return result
@@ -404,4 +430,3 @@ To improve ontology for business users:
             "Ontology file save failed but ontology generated; next call should be suggest_semantic_names to improve cryptic names"
         )
         return _build_minimal_graph_summary(ontology_ttl)
-

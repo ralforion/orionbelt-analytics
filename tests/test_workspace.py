@@ -12,29 +12,29 @@ Covers:
 """
 
 import asyncio
-import pytest
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
-from src.database_manager import TableInfo, ColumnInfo
-from src.lifecycle.metadata import (
-    VersionMetadataManager,
-    update_workspace_section,
-    update_workspace_rdf,
-)
-from src.workspace import detect_workspace, format_workspace_summary
-from src.graphrag.retriever import GraphRetriever
-from src.graphrag.community_detector import CommunityDetector
+import pytest
 
 import src.main as main_module
+from src.database_manager import ColumnInfo, TableInfo
+from src.graphrag.community_detector import CommunityDetector
+from src.graphrag.retriever import GraphRetriever
+from src.lifecycle.metadata import (
+    VersionMetadataManager,
+    update_workspace_rdf,
+    update_workspace_section,
+)
 from src.main import mcp
+from src.workspace import detect_workspace, format_workspace_summary
 
 
 def _get_tool_fn(name):
     """Get the underlying function for a tool."""
     obj = getattr(main_module, name)
-    return getattr(obj, 'fn', obj)
+    return getattr(obj, "fn", obj)
 
 
 class TestMetadataWorkspaceExtension:
@@ -53,10 +53,14 @@ class TestMetadataWorkspaceExtension:
     def test_update_workspace_creates_section(self):
         """update_workspace creates workspace section if missing."""
         mgr = VersionMetadataManager(self.connection_id, self.output_dir)
-        mgr.update_workspace("public", "schema", {
-            "schema_file": "schema_public.json",
-            "table_count": 10,
-        })
+        mgr.update_workspace(
+            "public",
+            "schema",
+            {
+                "schema_file": "schema_public.json",
+                "table_count": 10,
+            },
+        )
 
         workspace = mgr.get_workspace()
         assert workspace is not None
@@ -104,10 +108,12 @@ class TestMetadataWorkspaceExtension:
     def test_update_workspace_rdf_store(self):
         """update_workspace_rdf_store sets rdf_store section."""
         mgr = VersionMetadataManager(self.connection_id, self.output_dir)
-        mgr.update_workspace_rdf_store({
-            "initialized": True,
-            "graph_uris": ["http://example.com/g1"],
-        })
+        mgr.update_workspace_rdf_store(
+            {
+                "initialized": True,
+                "graph_uris": ["http://example.com/g1"],
+            }
+        )
 
         workspace = mgr.get_workspace()
         assert workspace["rdf_store"]["initialized"] is True
@@ -165,7 +171,9 @@ class TestAsyncWriteSerialization:
         assert workspace is not None
         assert len(workspace["schemas"]) == 5
         for i in range(5):
-            assert workspace["schemas"][f"schema_{i}"]["schema"]["table_count"] == i * 10
+            assert (
+                workspace["schemas"][f"schema_{i}"]["schema"]["table_count"] == i * 10
+            )
 
     @pytest.mark.asyncio
     async def test_concurrent_rdf_write(self):
@@ -202,19 +210,24 @@ class TestWorkspaceDetection:
         # Set up workspace metadata + actual files
         mgr = VersionMetadataManager(self.connection_id, self.output_dir)
         mgr.update_workspace_connection("postgresql", "testdb")
-        mgr.update_workspace("public", "schema", {
-            "schema_file": "schema_test.json",
-            "table_count": 5,
-            "analyzed_at": "2026-04-14T10:00:00",
-        })
+        mgr.update_workspace(
+            "public",
+            "schema",
+            {
+                "schema_file": "schema_test.json",
+                "table_count": 5,
+                "analyzed_at": "2026-04-14T10:00:00",
+            },
+        )
 
         # Create the actual file in the connection dir
         conn_dir = self.output_dir / self.connection_id
         conn_dir.mkdir(parents=True, exist_ok=True)
         (conn_dir / "schema_test.json").write_text('{"tables": []}')
 
-        with patch("src.workspace.OUTPUT_DIR", self.output_dir), \
-             patch("src.workspace.get_connection_dir", return_value=conn_dir):
+        with patch("src.workspace.OUTPUT_DIR", self.output_dir), patch(
+            "src.workspace.get_connection_dir", return_value=conn_dir
+        ):
             result = detect_workspace(self.connection_id)
 
         assert result is not None
@@ -230,7 +243,11 @@ class TestWorkspaceDetection:
             "schemas": {
                 "public": {
                     "schema": {"available": True, "table_count": 42},
-                    "ontology": {"available": True, "enriched": True, "persisted_to_rdf": True},
+                    "ontology": {
+                        "available": True,
+                        "enriched": True,
+                        "persisted_to_rdf": True,
+                    },
                     "graphrag": {"available": True, "embedding_count": 312},
                 }
             },
@@ -259,10 +276,17 @@ class TestGraphRetrieverLoadGraph:
     def test_load_graph_rebuilds(self):
         """load_graph rebuilds the graph from tables_info."""
         tables = [
-            {"name": "orders", "columns": [], "foreign_keys": [
-                {"column": "customer_id", "referenced_table": "customers",
-                 "referenced_column": "id"}
-            ]},
+            {
+                "name": "orders",
+                "columns": [],
+                "foreign_keys": [
+                    {
+                        "column": "customer_id",
+                        "referenced_table": "customers",
+                        "referenced_column": "id",
+                    }
+                ],
+            },
             {"name": "customers", "columns": [], "foreign_keys": []},
         ]
         retriever = GraphRetriever()
@@ -276,6 +300,7 @@ class TestCommunityDetectorLoadCommunities:
 
     def _make_detector(self):
         import networkx as nx
+
         g = nx.DiGraph()
         g.add_nodes_from(["t1", "t2", "t3"])
         return CommunityDetector(g)
@@ -309,10 +334,20 @@ class TestTableInfoFromDict:
             "name": "users",
             "schema": "public",
             "columns": [
-                {"name": "id", "data_type": "integer", "is_nullable": False,
-                 "is_primary_key": True, "is_foreign_key": False},
-                {"name": "email", "data_type": "varchar", "is_nullable": True,
-                 "is_primary_key": False, "is_foreign_key": False},
+                {
+                    "name": "id",
+                    "data_type": "integer",
+                    "is_nullable": False,
+                    "is_primary_key": True,
+                    "is_foreign_key": False,
+                },
+                {
+                    "name": "email",
+                    "data_type": "varchar",
+                    "is_nullable": True,
+                    "is_primary_key": False,
+                    "is_foreign_key": False,
+                },
             ],
             "primary_keys": ["id"],
             "foreign_keys": [],
@@ -346,8 +381,11 @@ class TestTableInfoFromDict:
     def test_from_dict_with_column_info_instances(self):
         """from_dict handles already-deserialized ColumnInfo objects."""
         col = ColumnInfo(
-            name="id", data_type="int", is_nullable=False,
-            is_primary_key=True, is_foreign_key=False,
+            name="id",
+            data_type="int",
+            is_nullable=False,
+            is_primary_key=True,
+            is_foreign_key=False,
         )
         data = {
             "name": "test",
@@ -407,16 +445,27 @@ class TestGraphRAGManagerLoadState:
         )
 
         tables = [
-            {"name": "orders", "columns": [
-                {"name": "id", "data_type": "int"}
-            ], "foreign_keys": [
-                {"column": "customer_id", "referenced_table": "customers",
-                 "referenced_column": "id"}
-            ], "comment": "Order records"},
-            {"name": "customers", "columns": [
-                {"name": "id", "data_type": "int"},
-                {"name": "name", "data_type": "varchar"},
-            ], "foreign_keys": [], "comment": "Customer accounts"},
+            {
+                "name": "orders",
+                "columns": [{"name": "id", "data_type": "int"}],
+                "foreign_keys": [
+                    {
+                        "column": "customer_id",
+                        "referenced_table": "customers",
+                        "referenced_column": "id",
+                    }
+                ],
+                "comment": "Order records",
+            },
+            {
+                "name": "customers",
+                "columns": [
+                    {"name": "id", "data_type": "int"},
+                    {"name": "name", "data_type": "varchar"},
+                ],
+                "foreign_keys": [],
+                "comment": "Customer accounts",
+            },
         ]
 
         mgr.initialize_from_schema(tables, schema_name="public")
@@ -476,8 +525,9 @@ class TestMultiSchemaSessionState:
 
     def test_graphrag_is_connection_scoped(self):
         """GraphRAG state is connection-scoped (shared across schemas)."""
-        from src.session import SessionData
         from unittest.mock import Mock
+
+        from src.session import SessionData
 
         session = SessionData()
         manager = Mock(name="graphrag_manager")
@@ -513,8 +563,9 @@ class TestMultiSchemaSessionState:
 
     def test_rdf_store_is_connection_scoped(self):
         """RDF store remains connection-scoped (shared across schemas)."""
-        from src.session import SessionData
         from unittest.mock import Mock
+
+        from src.session import SessionData
 
         session = SessionData()
         store = Mock(name="oxigraph_store")
