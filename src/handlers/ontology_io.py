@@ -227,7 +227,7 @@ async def load_my_ontology(
 
         # Check compatibility with connected database
         compatibility = None
-        if services.get_session_db_manager:
+        if services.provides("get_session_db_manager"):
             compatibility = _check_ontology_db_compatibility(
                 graph, ctx, services.get_session_db_manager, session
             )
