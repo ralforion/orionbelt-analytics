@@ -6,11 +6,12 @@ This test verifies the bug fix for Phase 2 where lightweight mode wasn't caching
 TableInfo objects, causing generate_ontology() to fail or re-query the database.
 """
 
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, MagicMock, AsyncMock, patch
 
 import src.main as main_module
-from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
+from src.database_manager import ColumnInfo, DatabaseManager, TableInfo
 
 
 def create_mock_context():
@@ -42,19 +43,19 @@ def mock_db_manager():
                         data_type="INTEGER",
                         is_nullable=False,
                         is_primary_key=True,
-                        is_foreign_key=False
+                        is_foreign_key=False,
                     ),
                     ColumnInfo(
                         name="name",
                         data_type="VARCHAR",
                         is_nullable=False,
                         is_primary_key=False,
-                        is_foreign_key=False
-                    )
+                        is_foreign_key=False,
+                    ),
                 ],
                 primary_keys=["customer_id"],
                 foreign_keys=[],
-                row_count=100
+                row_count=100,
             )
         elif table_name == "orders":
             return TableInfo(
@@ -66,7 +67,7 @@ def mock_db_manager():
                         data_type="INTEGER",
                         is_nullable=False,
                         is_primary_key=True,
-                        is_foreign_key=False
+                        is_foreign_key=False,
                     ),
                     ColumnInfo(
                         name="customer_id",
@@ -75,18 +76,18 @@ def mock_db_manager():
                         is_primary_key=False,
                         is_foreign_key=True,
                         foreign_key_table="customers",
-                        foreign_key_column="customer_id"
-                    )
+                        foreign_key_column="customer_id",
+                    ),
                 ],
                 primary_keys=["order_id"],
                 foreign_keys=[
                     {
                         "column": "customer_id",
                         "referenced_table": "customers",
-                        "referenced_column": "customer_id"
+                        "referenced_column": "customer_id",
                     }
                 ],
-                row_count=500
+                row_count=500,
             )
         elif table_name == "order_items":
             return TableInfo(
@@ -98,7 +99,7 @@ def mock_db_manager():
                         data_type="INTEGER",
                         is_nullable=False,
                         is_primary_key=True,
-                        is_foreign_key=False
+                        is_foreign_key=False,
                     ),
                     ColumnInfo(
                         name="order_id",
@@ -107,18 +108,18 @@ def mock_db_manager():
                         is_primary_key=False,
                         is_foreign_key=True,
                         foreign_key_table="orders",
-                        foreign_key_column="order_id"
-                    )
+                        foreign_key_column="order_id",
+                    ),
                 ],
                 primary_keys=["item_id"],
                 foreign_keys=[
                     {
                         "column": "order_id",
                         "referenced_table": "orders",
-                        "referenced_column": "order_id"
+                        "referenced_column": "order_id",
                     }
                 ],
-                row_count=1500
+                row_count=1500,
             )
         return None
 
@@ -139,11 +140,13 @@ def mock_context():
 async def test_lightweight_caches_for_ontology(mock_context, mock_db_manager, tmp_path):
     """Test that lightweight mode caches full TableInfo for generate_ontology()."""
 
-    with patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-         patch('src.main.get_session_data') as mock_session_data, \
-         patch('src.handlers.ontology_generation.ensure_output_dir', return_value=tmp_path), \
-         patch('src.main.get_session_safe_filename', return_value="test"):
-
+    with patch("src.main.get_session_db_manager", return_value=mock_db_manager), patch(
+        "src.main.get_session_data"
+    ) as mock_session_data, patch(
+        "src.handlers.ontology_generation.ensure_output_dir", return_value=tmp_path
+    ), patch(
+        "src.main.get_session_safe_filename", return_value="test"
+    ):
         # Mock session data
         session = Mock()
         session.get_cached_schema.return_value = None  # No cache initially
@@ -159,7 +162,9 @@ async def test_lightweight_caches_for_ontology(mock_context, mock_db_manager, tm
 
         # Step 1: Call discover_schema in lightweight mode
         # Use .fn accessor to handle both FunctionTool (under coverage) and plain function
-        analyze_fn = getattr(main_module.discover_schema, 'fn', main_module.discover_schema)
+        analyze_fn = getattr(
+            main_module.discover_schema, "fn", main_module.discover_schema
+        )
         result = await analyze_fn(mock_context, schema_name="public", lightweight=True)
 
         # Verify lightweight result structure
@@ -189,43 +194,64 @@ async def test_lightweight_caches_for_ontology(mock_context, mock_db_manager, tm
 async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tmp_path):
     """Test that generate_ontology() works with data cached by lightweight mode."""
 
-    with patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-         patch('src.main.get_session_data') as mock_session_data, \
-         patch('src.handlers.ontology_generation.ensure_output_dir', return_value=tmp_path), \
-         patch('src.main.get_session_safe_filename', return_value="test"), \
-         patch('src.main._server_state') as mock_server_state:
-
+    with patch("src.main.get_session_db_manager", return_value=mock_db_manager), patch(
+        "src.main.get_session_data"
+    ) as mock_session_data, patch(
+        "src.handlers.ontology_generation.ensure_output_dir", return_value=tmp_path
+    ), patch(
+        "src.main.get_session_safe_filename", return_value="test"
+    ), patch(
+        "src.main._server_state"
+    ) as mock_server_state:
         # Prepare cached tables (simulating what lightweight mode would cache)
         cached_tables = [
             TableInfo(
                 name="customers",
                 schema="public",
                 columns=[
-                    ColumnInfo(name="customer_id", data_type="INTEGER", is_nullable=False,
-                              is_primary_key=True, is_foreign_key=False)
+                    ColumnInfo(
+                        name="customer_id",
+                        data_type="INTEGER",
+                        is_nullable=False,
+                        is_primary_key=True,
+                        is_foreign_key=False,
+                    )
                 ],
                 primary_keys=["customer_id"],
                 foreign_keys=[],
-                row_count=100
+                row_count=100,
             ),
             TableInfo(
                 name="orders",
                 schema="public",
                 columns=[
-                    ColumnInfo(name="order_id", data_type="INTEGER", is_nullable=False,
-                              is_primary_key=True, is_foreign_key=False),
-                    ColumnInfo(name="customer_id", data_type="INTEGER", is_nullable=False,
-                              is_primary_key=False, is_foreign_key=True,
-                              foreign_key_table="customers", foreign_key_column="customer_id")
+                    ColumnInfo(
+                        name="order_id",
+                        data_type="INTEGER",
+                        is_nullable=False,
+                        is_primary_key=True,
+                        is_foreign_key=False,
+                    ),
+                    ColumnInfo(
+                        name="customer_id",
+                        data_type="INTEGER",
+                        is_nullable=False,
+                        is_primary_key=False,
+                        is_foreign_key=True,
+                        foreign_key_table="customers",
+                        foreign_key_column="customer_id",
+                    ),
                 ],
                 primary_keys=["order_id"],
-                foreign_keys=[{
-                    "column": "customer_id",
-                    "referenced_table": "customers",
-                    "referenced_column": "customer_id"
-                }],
-                row_count=500
-            )
+                foreign_keys=[
+                    {
+                        "column": "customer_id",
+                        "referenced_table": "customers",
+                        "referenced_column": "customer_id",
+                    }
+                ],
+                row_count=500,
+            ),
         ]
 
         # Mock session with cached data
@@ -238,7 +264,9 @@ async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tm
 
         # Mock ontology generator
         mock_generator = Mock()
-        mock_generator.generate_from_schema.return_value = "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> ."
+        mock_generator.generate_from_schema.return_value = (
+            "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> ."
+        )
         mock_generator.graph = Mock()
         mock_generator.graph.parse = Mock()
         mock_generator.base_uri = "http://example.org/"
@@ -246,13 +274,15 @@ async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tm
         mock_generator.extract_names_for_review.return_value = {
             "tables": [],
             "columns": [],
-            "cryptic_count": 0
+            "cryptic_count": 0,
         }
         mock_server_state.get_ontology_generator.return_value = mock_generator
 
         # Step 2: Call generate_ontology WITHOUT schema_info parameter
         # Use .fn accessor to handle both FunctionTool (under coverage) and plain function
-        generate_fn = getattr(main_module.generate_ontology, 'fn', main_module.generate_ontology)
+        generate_fn = getattr(
+            main_module.generate_ontology, "fn", main_module.generate_ontology
+        )
         await generate_fn(mock_context)
 
         # Verify it used the cached data
@@ -266,15 +296,20 @@ async def test_ontology_uses_lightweight_cache(mock_context, mock_db_manager, tm
 
 
 @pytest.mark.asyncio
-async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manager, tmp_path):
+async def test_full_workflow_lightweight_to_ontology(
+    mock_context, mock_db_manager, tmp_path
+):
     """Integration test: lightweight analyze -> generate ontology."""
 
-    with patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-         patch('src.main.get_session_data') as mock_session_data, \
-         patch('src.handlers.ontology_generation.ensure_output_dir', return_value=tmp_path), \
-         patch('src.main.get_session_safe_filename', return_value="test"), \
-         patch('src.main._server_state') as mock_server_state:
-
+    with patch("src.main.get_session_db_manager", return_value=mock_db_manager), patch(
+        "src.main.get_session_data"
+    ) as mock_session_data, patch(
+        "src.handlers.ontology_generation.ensure_output_dir", return_value=tmp_path
+    ), patch(
+        "src.main.get_session_safe_filename", return_value="test"
+    ), patch(
+        "src.main._server_state"
+    ) as mock_server_state:
         # Real session-like behavior
         cached_data = {}
 
@@ -316,7 +351,9 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
 
         # Mock ontology generator
         mock_generator = Mock()
-        mock_generator.generate_from_schema.return_value = "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> ."
+        mock_generator.generate_from_schema.return_value = (
+            "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> ."
+        )
         mock_generator.graph = Mock()
         mock_generator.graph.parse = Mock()
         mock_generator.base_uri = "http://example.org/"
@@ -324,16 +361,22 @@ async def test_full_workflow_lightweight_to_ontology(mock_context, mock_db_manag
         mock_generator.extract_names_for_review.return_value = {
             "tables": [],
             "columns": [],
-            "cryptic_count": 0
+            "cryptic_count": 0,
         }
         mock_server_state.get_ontology_generator.return_value = mock_generator
 
         # Use .fn accessor to handle both FunctionTool (under coverage) and plain function
-        analyze_fn = getattr(main_module.discover_schema, 'fn', main_module.discover_schema)
-        generate_fn = getattr(main_module.generate_ontology, 'fn', main_module.generate_ontology)
+        analyze_fn = getattr(
+            main_module.discover_schema, "fn", main_module.discover_schema
+        )
+        generate_fn = getattr(
+            main_module.generate_ontology, "fn", main_module.generate_ontology
+        )
 
         # Step 1: discover_schema(lightweight=True)
-        schema_result = await analyze_fn(mock_context, schema_name="public", lightweight=True)
+        schema_result = await analyze_fn(
+            mock_context, schema_name="public", lightweight=True
+        )
 
         assert schema_result["mode"] == "lightweight"
         assert schema_result["table_count"] == 3

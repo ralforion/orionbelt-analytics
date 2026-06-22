@@ -6,9 +6,10 @@ helping organize large schemas into understandable domains.
 """
 
 import logging
-from typing import List, Dict, Any, Set, Optional
-import networkx as nx
 from collections import defaultdict
+from typing import Any, Dict, List, Optional, Set
+
+import networkx as nx
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +70,16 @@ class CommunityDetector:
                 self.table_to_community[table] = community_id
 
             self.communities = dict(communities)
-            logger.info(f"Detected {len(self.communities)} communities using Louvain method")
+            logger.info(
+                f"Detected {len(self.communities)} communities using Louvain method"
+            )
 
             return self.communities
 
         except ImportError:
-            logger.warning("python-louvain not installed, falling back to connected components")
+            logger.warning(
+                "python-louvain not installed, falling back to connected components"
+            )
             return self._detect_connected_components()
 
     def _detect_connected_components(self) -> Dict[int, Set[str]]:
@@ -97,7 +102,9 @@ class CommunityDetector:
                 self.table_to_community[table] = idx
 
         self.communities = communities
-        logger.info(f"Detected {len(self.communities)} communities using connected components")
+        logger.info(
+            f"Detected {len(self.communities)} communities using connected components"
+        )
 
         return self.communities
 
@@ -122,7 +129,9 @@ class CommunityDetector:
                 self.table_to_community[table] = idx
 
         self.communities = communities
-        logger.info(f"Detected {len(self.communities)} communities using label propagation")
+        logger.info(
+            f"Detected {len(self.communities)} communities using label propagation"
+        )
 
         return self.communities
 
@@ -207,7 +216,7 @@ class CommunityDetector:
             "tables": sorted(list(tables)),
             "internal_relationships": internal_edges,
             "central_table": central_table,
-            "avg_connections": sum(degrees.values()) / len(degrees) if degrees else 0
+            "avg_connections": sum(degrees.values()) / len(degrees) if degrees else 0,
         }
 
     def get_all_summaries(self) -> List[Dict[str, Any]]:
@@ -238,13 +247,13 @@ class CommunityDetector:
             table_names = list(tables)
 
             if len(table_names) == 1:
-                domain_names[community_id] = table_names[0].replace('_', ' ').title()
+                domain_names[community_id] = table_names[0].replace("_", " ").title()
                 continue
 
             # Find common words in table names
             word_counts = defaultdict(int)
             for table in table_names:
-                words = table.lower().split('_')
+                words = table.lower().split("_")
                 for word in words:
                     if len(word) > 2:  # Ignore very short words
                         word_counts[word] += 1

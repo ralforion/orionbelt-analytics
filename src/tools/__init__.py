@@ -8,5 +8,5 @@ All other tool modules have been removed; their logic lives in ``src/handlers/``
 from .chart import generate_chart
 
 __all__ = [
-    'generate_chart',
+    "generate_chart",
 ]

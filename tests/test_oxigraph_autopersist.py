@@ -8,14 +8,15 @@ This module tests:
 - Fallback behavior when Oxigraph not available
 """
 
-import pytest
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from src.oxigraph_store import OxigraphStoreManager, OXIGRAPH_AVAILABLE
-from src.database_manager import TableInfo, ColumnInfo
+import pytest
+
+from src.database_manager import ColumnInfo, TableInfo
+from src.oxigraph_store import OXIGRAPH_AVAILABLE, OxigraphStoreManager
 
 
 class TestOxigraphStoreManager:
@@ -86,7 +87,11 @@ class TestOxigraphStoreManager:
         assert exported_ttl is not None
         assert len(exported_ttl) > 0
         # export_graph may return bytes or str
-        exported_str = exported_ttl.decode("utf-8") if isinstance(exported_ttl, bytes) else exported_ttl
+        exported_str = (
+            exported_ttl.decode("utf-8")
+            if isinstance(exported_ttl, bytes)
+            else exported_ttl
+        )
         assert "Customer" in exported_str or "ns:Customer" in exported_str
 
     @pytest.mark.skipif(not OXIGRAPH_AVAILABLE, reason="Oxigraph not available")
@@ -173,8 +178,8 @@ class TestAutoPersistBehavior:
         ]
 
     @pytest.mark.skipif(not OXIGRAPH_AVAILABLE, reason="Oxigraph not available")
-    @patch('src.main.get_oxigraph_store')
-    @patch('src.main.get_session_data')
+    @patch("src.main.get_oxigraph_store")
+    @patch("src.main.get_session_data")
     async def test_auto_persist_enabled_returns_summary(
         self, mock_session, mock_get_store, mock_context, sample_tables
     ):
@@ -197,17 +202,19 @@ class TestAutoPersistBehavior:
 
         # Call with auto_persist=True (default)
         result = await generate_ontology(
-            mock_context,
-            schema_name="public",
-            auto_persist=True
+            mock_context, schema_name="public", auto_persist=True
         )
 
         # Should return summary, not full TTL
         assert isinstance(result, str)
-        assert "Ontology generated" in result or "triples" in result.lower() or "@prefix" in result
+        assert (
+            "Ontology generated" in result
+            or "triples" in result.lower()
+            or "@prefix" in result
+        )
 
-    @patch('src.server_state.OXIGRAPH_AVAILABLE', False)
-    @patch('src.main.get_session_data')
+    @patch("src.server_state.OXIGRAPH_AVAILABLE", False)
+    @patch("src.main.get_session_data")
     async def test_auto_persist_fallback_when_oxigraph_unavailable(
         self, mock_session, mock_context, sample_tables
     ):
@@ -225,9 +232,7 @@ class TestAutoPersistBehavior:
 
         # Call with auto_persist=True (should fallback since oxigraph may not be available)
         result = await generate_ontology(
-            mock_context,
-            schema_name="public",
-            auto_persist=True
+            mock_context, schema_name="public", auto_persist=True
         )
 
         # Should return minimal graph summary (not full TTL)
@@ -235,7 +240,7 @@ class TestAutoPersistBehavior:
         assert len(result) > 0
         assert "Minimal Graph Summary" in result or "Classes" in result
 
-    @patch('src.main.get_session_data')
+    @patch("src.main.get_session_data")
     async def test_auto_persist_false_returns_minimal_summary(
         self, mock_session, mock_context, sample_tables
     ):
@@ -253,9 +258,7 @@ class TestAutoPersistBehavior:
 
         # Call with auto_persist=False
         result = await generate_ontology(
-            mock_context,
-            schema_name="public",
-            auto_persist=False
+            mock_context, schema_name="public", auto_persist=False
         )
 
         # Should return minimal graph summary instead of full TTL
@@ -277,8 +280,20 @@ class TestSchemaHashDetection:
                 name="users",
                 schema="public",
                 columns=[
-                    ColumnInfo(name="id", data_type="integer", is_nullable=False, is_primary_key=True, is_foreign_key=False),
-                    ColumnInfo(name="name", data_type="varchar", is_nullable=False, is_primary_key=False, is_foreign_key=False),
+                    ColumnInfo(
+                        name="id",
+                        data_type="integer",
+                        is_nullable=False,
+                        is_primary_key=True,
+                        is_foreign_key=False,
+                    ),
+                    ColumnInfo(
+                        name="name",
+                        data_type="varchar",
+                        is_nullable=False,
+                        is_primary_key=False,
+                        is_foreign_key=False,
+                    ),
                 ],
                 primary_keys=["id"],
                 foreign_keys=[],
@@ -290,8 +305,20 @@ class TestSchemaHashDetection:
                 name="users",
                 schema="public",
                 columns=[
-                    ColumnInfo(name="id", data_type="integer", is_nullable=False, is_primary_key=True, is_foreign_key=False),
-                    ColumnInfo(name="name", data_type="varchar", is_nullable=False, is_primary_key=False, is_foreign_key=False),
+                    ColumnInfo(
+                        name="id",
+                        data_type="integer",
+                        is_nullable=False,
+                        is_primary_key=True,
+                        is_foreign_key=False,
+                    ),
+                    ColumnInfo(
+                        name="name",
+                        data_type="varchar",
+                        is_nullable=False,
+                        is_primary_key=False,
+                        is_foreign_key=False,
+                    ),
                 ],
                 primary_keys=["id"],
                 foreign_keys=[],
@@ -313,7 +340,13 @@ class TestSchemaHashDetection:
                 name="users",
                 schema="public",
                 columns=[
-                    ColumnInfo(name="id", data_type="integer", is_nullable=False, is_primary_key=True, is_foreign_key=False),
+                    ColumnInfo(
+                        name="id",
+                        data_type="integer",
+                        is_nullable=False,
+                        is_primary_key=True,
+                        is_foreign_key=False,
+                    ),
                 ],
                 primary_keys=["id"],
                 foreign_keys=[],
@@ -326,8 +359,20 @@ class TestSchemaHashDetection:
                 name="users",
                 schema="public",
                 columns=[
-                    ColumnInfo(name="id", data_type="integer", is_nullable=False, is_primary_key=True, is_foreign_key=False),
-                    ColumnInfo(name="email", data_type="varchar", is_nullable=True, is_primary_key=False, is_foreign_key=False),
+                    ColumnInfo(
+                        name="id",
+                        data_type="integer",
+                        is_nullable=False,
+                        is_primary_key=True,
+                        is_foreign_key=False,
+                    ),
+                    ColumnInfo(
+                        name="email",
+                        data_type="varchar",
+                        is_nullable=True,
+                        is_primary_key=False,
+                        is_foreign_key=False,
+                    ),
                 ],
                 primary_keys=["id"],
                 foreign_keys=[],
@@ -348,7 +393,13 @@ class TestSchemaHashDetection:
                 name="users",
                 schema="public",
                 columns=[
-                    ColumnInfo(name="id", data_type="integer", is_nullable=False, is_primary_key=True, is_foreign_key=False),
+                    ColumnInfo(
+                        name="id",
+                        data_type="integer",
+                        is_nullable=False,
+                        is_primary_key=True,
+                        is_foreign_key=False,
+                    ),
                 ],
                 primary_keys=["id"],
                 foreign_keys=[],
@@ -361,7 +412,13 @@ class TestSchemaHashDetection:
                 name="users",
                 schema="public",
                 columns=[
-                    ColumnInfo(name="id", data_type="integer", is_nullable=False, is_primary_key=True, is_foreign_key=False),
+                    ColumnInfo(
+                        name="id",
+                        data_type="integer",
+                        is_nullable=False,
+                        is_primary_key=True,
+                        is_foreign_key=False,
+                    ),
                 ],
                 primary_keys=["id"],
                 foreign_keys=[],

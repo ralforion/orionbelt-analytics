@@ -6,9 +6,9 @@ based on retention policies.
 """
 
 import logging
-from pathlib import Path
-from typing import Dict, Any, Optional
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from .metadata import VersionMetadataManager
 
@@ -34,9 +34,7 @@ class DataCleanupManager:
         self.metadata_mgr = VersionMetadataManager(connection_id, output_dir)
 
     def cleanup_graphrag(
-        self,
-        schema_name: str,
-        dry_run: bool = True
+        self, schema_name: str, dry_run: bool = True
     ) -> Dict[str, Any]:
         """
         Clean up old GraphRAG data based on retention policy.
@@ -49,15 +47,14 @@ class DataCleanupManager:
             Cleanup report
         """
         versions_to_delete = self.metadata_mgr.get_versions_to_cleanup(
-            schema_name,
-            data_type="graphrag"
+            schema_name, data_type="graphrag"
         )
 
         if not versions_to_delete:
             return {
                 "deleted": [],
                 "kept_all": True,
-                "reason": "All versions within retention policy"
+                "reason": "All versions within retention policy",
             }
 
         deleted = []
@@ -71,38 +68,35 @@ class DataCleanupManager:
 
                     # Mark as deleted in metadata
                     self.metadata_mgr.mark_version_deleted(
-                        schema_name,
-                        version.version,
-                        "graphrag"
+                        schema_name, version.version, "graphrag"
                     )
 
-                age_days = (datetime.now() - datetime.fromisoformat(version.created_at)).days
+                age_days = (
+                    datetime.now() - datetime.fromisoformat(version.created_at)
+                ).days
 
-                deleted.append({
-                    "version": version.version,
-                    "age_days": age_days,
-                    "created_at": version.created_at,
-                    "reason": f"Age {age_days} days exceeds max {self.metadata_mgr.get_retention_policy().graphrag_max_age_days} days"
-                })
+                deleted.append(
+                    {
+                        "version": version.version,
+                        "age_days": age_days,
+                        "created_at": version.created_at,
+                        "reason": f"Age {age_days} days exceeds max {self.metadata_mgr.get_retention_policy().graphrag_max_age_days} days",
+                    }
+                )
 
             except Exception as e:
-                logger.error(f"Failed to delete GraphRAG version {version.version}: {e}")
-                errors.append({
-                    "version": version.version,
-                    "error": str(e)
-                })
+                logger.error(
+                    f"Failed to delete GraphRAG version {version.version}: {e}"
+                )
+                errors.append({"version": version.version, "error": str(e)})
 
-        return {
-            "deleted": deleted,
-            "errors": errors,
-            "dry_run": dry_run
-        }
+        return {"deleted": deleted, "errors": errors, "dry_run": dry_run}
 
     def cleanup_ontology(
         self,
         schema_name: str,
         dry_run: bool = True,
-        oxigraph_store: Optional[Any] = None
+        oxigraph_store: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Clean up old RDF ontology data based on retention policy.
@@ -116,15 +110,14 @@ class DataCleanupManager:
             Cleanup report
         """
         versions_to_delete = self.metadata_mgr.get_versions_to_cleanup(
-            schema_name,
-            data_type="ontology"
+            schema_name, data_type="ontology"
         )
 
         if not versions_to_delete:
             return {
                 "deleted": [],
                 "kept_all": True,
-                "reason": "All versions within retention policy"
+                "reason": "All versions within retention policy",
             }
 
         deleted = []
@@ -143,38 +136,37 @@ class DataCleanupManager:
                         try:
                             oxigraph_store.delete_graph(version.ontology_graph_uri)
                         except Exception as e:
-                            logger.warning(f"Failed to delete graph {version.ontology_graph_uri}: {e}")
+                            logger.warning(
+                                f"Failed to delete graph {version.ontology_graph_uri}: {e}"
+                            )
 
                     # Mark as deleted in metadata
                     self.metadata_mgr.mark_version_deleted(
-                        schema_name,
-                        version.version,
-                        "ontology"
+                        schema_name, version.version, "ontology"
                     )
 
-                age_days = (datetime.now() - datetime.fromisoformat(version.created_at)).days
+                age_days = (
+                    datetime.now() - datetime.fromisoformat(version.created_at)
+                ).days
 
-                deleted.append({
-                    "version": version.version,
-                    "age_days": age_days,
-                    "created_at": version.created_at,
-                    "graph_uri": version.ontology_graph_uri,
-                    "ttl_file": version.ontology_ttl_file,
-                    "reason": f"Age {age_days} days exceeds max {self.metadata_mgr.get_retention_policy().ontology_max_age_days} days"
-                })
+                deleted.append(
+                    {
+                        "version": version.version,
+                        "age_days": age_days,
+                        "created_at": version.created_at,
+                        "graph_uri": version.ontology_graph_uri,
+                        "ttl_file": version.ontology_ttl_file,
+                        "reason": f"Age {age_days} days exceeds max {self.metadata_mgr.get_retention_policy().ontology_max_age_days} days",
+                    }
+                )
 
             except Exception as e:
-                logger.error(f"Failed to delete Ontology version {version.version}: {e}")
-                errors.append({
-                    "version": version.version,
-                    "error": str(e)
-                })
+                logger.error(
+                    f"Failed to delete Ontology version {version.version}: {e}"
+                )
+                errors.append({"version": version.version, "error": str(e)})
 
-        return {
-            "deleted": deleted,
-            "errors": errors,
-            "dry_run": dry_run
-        }
+        return {"deleted": deleted, "errors": errors, "dry_run": dry_run}
 
     def _delete_graphrag_files(self, schema_name: str, version: int):
         """
@@ -190,13 +182,15 @@ class DataCleanupManager:
             # ChromaDB collections are managed by ChromaDB itself
             # We'll need to use the ChromaDB client to delete collections
             # For now, just log
-            logger.info(f"ChromaDB collection cleanup for version {version} (managed by ChromaDB)")
+            logger.info(
+                f"ChromaDB collection cleanup for version {version} (managed by ChromaDB)"
+            )
 
         # Check for JSON files (legacy or backup)
         json_patterns = [
             f"vector_store_{schema_name}_v{version}.json",
             f"graph_{schema_name}_v{version}.json",
-            f"communities_{schema_name}_v{version}.json"
+            f"communities_{schema_name}_v{version}.json",
         ]
 
         for pattern in json_patterns:
@@ -204,4 +198,3 @@ class DataCleanupManager:
             if file_path.exists():
                 file_path.unlink()
                 logger.info(f"Deleted {file_path}")
-

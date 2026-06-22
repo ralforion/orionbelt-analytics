@@ -72,7 +72,11 @@ def _calculate_schema_hash(tables_info: List[Any]) -> str:
         sorted_columns = sorted(table.columns, key=lambda c: c.name)
         for col in sorted_columns:
             table_data["columns"].append(
-                {"name": col.name, "data_type": col.data_type, "nullable": col.is_nullable}
+                {
+                    "name": col.name,
+                    "data_type": col.data_type,
+                    "nullable": col.is_nullable,
+                }
             )
 
         if table.foreign_keys:
@@ -92,7 +96,9 @@ def _calculate_schema_hash(tables_info: List[Any]) -> str:
     return hashlib.sha256(json_str.encode()).hexdigest()
 
 
-def _clear_session_state(session: SessionData, reason: str = "connection change") -> None:
+def _clear_session_state(
+    session: SessionData, reason: str = "connection change"
+) -> None:
     """Clear all session state caches and indexes."""
     logger.info(f"Clearing session state ({reason})")
 
@@ -146,12 +152,16 @@ class ServerState:
                 try:
                     session.db_manager.disconnect()
                 except Exception as e:
-                    logger.warning(f"Error disconnecting db for session {session_id}: {e}")
+                    logger.warning(
+                        f"Error disconnecting db for session {session_id}: {e}"
+                    )
             if session.rdf_store.oxigraph_store:
                 try:
                     session.rdf_store.oxigraph_store.close()
                 except Exception as e:
-                    logger.warning(f"Error closing Oxigraph for session {session_id}: {e}")
+                    logger.warning(
+                        f"Error closing Oxigraph for session {session_id}: {e}"
+                    )
             del self._sessions[session_id]
             logger.debug(f"Cleaned up session: {session_id}")
 
@@ -273,11 +283,17 @@ def get_session_obqc_validator(ctx: Context) -> Optional[OBQCValidator]:
         ontology_generator = OntologyGenerator(base_uri)
 
         if has_generated_ontology:
-            conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+            conn_dir = (
+                get_connection_dir(session.connection_id)
+                if session.connection_id
+                else ensure_output_dir()
+            )
             ontology_path = conn_dir / session.ontology_file
             if ontology_path.exists():
                 ontology_generator.load_from_file(str(ontology_path))
-                logger.debug(f"OBQC loaded ontology from session file: {session.ontology_file}")
+                logger.debug(
+                    f"OBQC loaded ontology from session file: {session.ontology_file}"
+                )
         elif has_loaded_ontology:
             ontology_generator.load_from_string(session.loaded_ontology)
             logger.debug(
@@ -309,9 +325,15 @@ def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
     session = get_session_data(ctx)
     filename = session.ontology_file
     if not filename:
-        raise ValueError("No ontology file in session state. Run generate_ontology first.")
+        raise ValueError(
+            "No ontology file in session state. Run generate_ontology first."
+        )
 
-    conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+    conn_dir = (
+        get_connection_dir(session.connection_id)
+        if session.connection_id
+        else ensure_output_dir()
+    )
     ontology_path = conn_dir / filename
 
     if not ontology_path.exists():
@@ -325,6 +347,7 @@ def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
 
 class ErrorResponse(BaseModel):
     """Standardized error response format."""
+
     error: str
     error_type: str = "unknown"
     details: Optional[str] = None
@@ -360,9 +383,13 @@ def get_oxigraph_store(ctx: Context) -> Optional[OxigraphStoreManager]:
             session.oxigraph_initialized = True
 
             if session.connection_id:
-                logger.info(f"Initialized connection-scoped Oxigraph store at: {store_path}")
+                logger.info(
+                    f"Initialized connection-scoped Oxigraph store at: {store_path}"
+                )
             else:
-                logger.info(f"Initialized Oxigraph store at: {store_path} (legacy mode)")
+                logger.info(
+                    f"Initialized Oxigraph store at: {store_path} (legacy mode)"
+                )
 
         except Exception as e:
             logger.error(f"Failed to initialize Oxigraph store: {e}")

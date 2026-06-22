@@ -10,18 +10,20 @@ This implementation offers:
 - Automatic indexing (HNSW algorithm)
 """
 
+import json
 import logging
-from typing import List, Dict, Any, Optional, Tuple
-import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
-import json
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 
 from ..paths import OUTPUT_DIR
 
 try:
     import chromadb
     from chromadb.config import Settings
+
     CHROMADB_AVAILABLE = True
 except ImportError:
     CHROMADB_AVAILABLE = False
@@ -33,6 +35,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class StoredElement:
     """Represents a stored schema element with its embedding."""
+
     element_type: str
     element_id: str
     name: str
@@ -51,7 +54,12 @@ class ChromaDBVectorStore:
         data/                   # Vector data files
     """
 
-    def __init__(self, connection_id: str = "default", schema_name: str = "default", dimension: int = 384):
+    def __init__(
+        self,
+        connection_id: str = "default",
+        schema_name: str = "default",
+        dimension: int = 384,
+    ):
         """
         Initialize ChromaDB vector store.
 
@@ -76,10 +84,7 @@ class ChromaDBVectorStore:
         # Initialize ChromaDB client (embedded mode)
         self.client = chromadb.PersistentClient(
             path=str(db_path),
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True
-            )
+            settings=Settings(anonymized_telemetry=False, allow_reset=True),
         )
 
         # Collection name based on schema
@@ -92,10 +97,12 @@ class ChromaDBVectorStore:
                 metadata={
                     "schema_name": schema_name,
                     "connection_id": connection_id,
-                    "dimension": dimension
-                }
+                    "dimension": dimension,
+                },
             )
-            logger.info(f"Initialized ChromaDB collection: {collection_name} at {db_path}")
+            logger.info(
+                f"Initialized ChromaDB collection: {collection_name} at {db_path}"
+            )
         except Exception as e:
             logger.error(f"Failed to initialize ChromaDB collection: {e}")
             raise
@@ -109,7 +116,7 @@ class ChromaDBVectorStore:
         name: str,
         description: str,
         embedding: np.ndarray,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         """
         Add a schema element to the store.
@@ -143,14 +150,14 @@ class ChromaDBVectorStore:
             if embedding.shape[0] < self.dimension:
                 embedding = np.pad(embedding, (0, self.dimension - embedding.shape[0]))
             else:
-                embedding = embedding[:self.dimension]
+                embedding = embedding[: self.dimension]
 
         # Add to ChromaDB
         try:
             self.collection.add(
                 ids=[element_id],
                 embeddings=[embedding.tolist()],
-                metadatas=[chroma_metadata]
+                metadatas=[chroma_metadata],
             )
         except Exception as e:
             logger.error(f"Failed to add element {element_id}: {e}")
@@ -179,7 +186,7 @@ class ChromaDBVectorStore:
             }
 
             # Add element metadata
-            if hasattr(elem, 'metadata') and elem.metadata:
+            if hasattr(elem, "metadata") and elem.metadata:
                 for key, value in elem.metadata.items():
                     if isinstance(value, (str, int, float, bool)):
                         chroma_metadata[key] = value
@@ -190,9 +197,11 @@ class ChromaDBVectorStore:
             embedding = elem.embedding
             if embedding.shape[0] != self.dimension:
                 if embedding.shape[0] < self.dimension:
-                    embedding = np.pad(embedding, (0, self.dimension - embedding.shape[0]))
+                    embedding = np.pad(
+                        embedding, (0, self.dimension - embedding.shape[0])
+                    )
                 else:
-                    embedding = embedding[:self.dimension]
+                    embedding = embedding[: self.dimension]
 
             ids.append(elem.element_id)
             embeddings.append(embedding.tolist())
@@ -200,11 +209,7 @@ class ChromaDBVectorStore:
 
         # Batch add to ChromaDB
         try:
-            self.collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                metadatas=metadatas
-            )
+            self.collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas)
             logger.info(f"Added {len(elements)} elements to ChromaDB vector store")
         except Exception as e:
             logger.error(f"Failed to batch add elements: {e}")
@@ -221,7 +226,7 @@ class ChromaDBVectorStore:
         query_embedding: np.ndarray,
         top_k: int = 5,
         element_type: Optional[str] = None,
-        threshold: float = 0.0
+        threshold: float = 0.0,
     ) -> List[Tuple[StoredElement, float]]:
         """
         Search for similar elements using ChromaDB.
@@ -241,9 +246,11 @@ class ChromaDBVectorStore:
         # Normalize query embedding
         if query_embedding.shape[0] != self.dimension:
             if query_embedding.shape[0] < self.dimension:
-                query_embedding = np.pad(query_embedding, (0, self.dimension - query_embedding.shape[0]))
+                query_embedding = np.pad(
+                    query_embedding, (0, self.dimension - query_embedding.shape[0])
+                )
             else:
-                query_embedding = query_embedding[:self.dimension]
+                query_embedding = query_embedding[: self.dimension]
 
         # Prepare metadata filter
         where_filter = None
@@ -256,7 +263,7 @@ class ChromaDBVectorStore:
                 query_embeddings=[query_embedding.tolist()],
                 n_results=top_k,
                 where=where_filter,
-                include=["metadatas", "distances", "embeddings"]
+                include=["metadatas", "distances", "embeddings"],
             )
         except Exception as e:
             logger.error(f"ChromaDB query failed: {e}")
@@ -265,14 +272,14 @@ class ChromaDBVectorStore:
         # Convert results to StoredElement format
         stored_elements = []
 
-        if not results['ids'] or not results['ids'][0]:
+        if not results["ids"] or not results["ids"][0]:
             return []
 
-        for i in range(len(results['ids'][0])):
-            element_id = results['ids'][0][i]
-            metadata = results['metadatas'][0][i]
-            distance = results['distances'][0][i]
-            embedding = results['embeddings'][0][i]
+        for i in range(len(results["ids"][0])):
+            element_id = results["ids"][0][i]
+            metadata = results["metadatas"][0][i]
+            distance = results["distances"][0][i]
+            embedding = results["embeddings"][0][i]
 
             # Convert distance to similarity (ChromaDB uses L2 distance)
             # Similarity = 1 / (1 + distance)
@@ -287,7 +294,9 @@ class ChromaDBVectorStore:
             for key, value in metadata.items():
                 if key not in ["element_type", "name", "description"]:
                     # Try to parse JSON strings back to objects
-                    if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
+                    if isinstance(value, str) and (
+                        value.startswith("{") or value.startswith("[")
+                    ):
                         try:
                             elem_metadata[key] = json.loads(value)
                         except (json.JSONDecodeError, ValueError):
@@ -301,7 +310,7 @@ class ChromaDBVectorStore:
                 name=metadata.get("name", ""),
                 description=metadata.get("description", ""),
                 metadata=elem_metadata,
-                embedding=embedding
+                embedding=embedding,
             )
 
             stored_elements.append((element, similarity))
@@ -313,7 +322,7 @@ class ChromaDBVectorStore:
         query_text: str,
         embedder: Any,
         top_k: int = 5,
-        element_type: Optional[str] = None
+        element_type: Optional[str] = None,
     ) -> List[Tuple[StoredElement, float]]:
         """
         Search using natural language query.
@@ -342,21 +351,22 @@ class ChromaDBVectorStore:
         """
         try:
             result = self.collection.get(
-                ids=[element_id],
-                include=["metadatas", "embeddings"]
+                ids=[element_id], include=["metadatas", "embeddings"]
             )
 
-            if not result['ids']:
+            if not result["ids"]:
                 return None
 
-            metadata = result['metadatas'][0]
-            embedding = result['embeddings'][0]
+            metadata = result["metadatas"][0]
+            embedding = result["embeddings"][0]
 
             # Reconstruct metadata dict
             elem_metadata = {}
             for key, value in metadata.items():
                 if key not in ["element_type", "name", "description"]:
-                    if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
+                    if isinstance(value, str) and (
+                        value.startswith("{") or value.startswith("[")
+                    ):
                         try:
                             elem_metadata[key] = json.loads(value)
                         except (json.JSONDecodeError, ValueError):
@@ -370,7 +380,7 @@ class ChromaDBVectorStore:
                 name=metadata.get("name", ""),
                 description=metadata.get("description", ""),
                 metadata=elem_metadata,
-                embedding=embedding
+                embedding=embedding,
             )
         except Exception as e:
             logger.error(f"Failed to get element {element_id}: {e}")
@@ -389,19 +399,21 @@ class ChromaDBVectorStore:
         try:
             results = self.collection.get(
                 where={"element_type": element_type},
-                include=["metadatas", "embeddings"]
+                include=["metadatas", "embeddings"],
             )
 
             elements = []
-            for i in range(len(results['ids'])):
-                element_id = results['ids'][i]
-                metadata = results['metadatas'][i]
-                embedding = results['embeddings'][i]
+            for i in range(len(results["ids"])):
+                element_id = results["ids"][i]
+                metadata = results["metadatas"][i]
+                embedding = results["embeddings"][i]
 
                 elem_metadata = {}
                 for key, value in metadata.items():
                     if key not in ["element_type", "name", "description"]:
-                        if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
+                        if isinstance(value, str) and (
+                            value.startswith("{") or value.startswith("[")
+                        ):
                             try:
                                 elem_metadata[key] = json.loads(value)
                             except (json.JSONDecodeError, ValueError):
@@ -409,14 +421,16 @@ class ChromaDBVectorStore:
                         else:
                             elem_metadata[key] = value
 
-                elements.append(StoredElement(
-                    element_type=metadata.get("element_type", "unknown"),
-                    element_id=element_id,
-                    name=metadata.get("name", ""),
-                    description=metadata.get("description", ""),
-                    metadata=elem_metadata,
-                    embedding=embedding
-                ))
+                elements.append(
+                    StoredElement(
+                        element_type=metadata.get("element_type", "unknown"),
+                        element_id=element_id,
+                        name=metadata.get("name", ""),
+                        description=metadata.get("description", ""),
+                        metadata=elem_metadata,
+                        embedding=embedding,
+                    )
+                )
 
             return elements
         except Exception as e:
@@ -432,20 +446,20 @@ class ChromaDBVectorStore:
         """
         try:
             # Get all data from ChromaDB
-            results = self.collection.get(
-                include=["metadatas", "embeddings"]
-            )
+            results = self.collection.get(include=["metadatas", "embeddings"])
 
             elements = []
-            for i in range(len(results['ids'])):
-                element_id = results['ids'][i]
-                metadata = results['metadatas'][i]
-                embedding = results['embeddings'][i]
+            for i in range(len(results["ids"])):
+                element_id = results["ids"][i]
+                metadata = results["metadatas"][i]
+                embedding = results["embeddings"][i]
 
                 elem_metadata = {}
                 for key, value in metadata.items():
                     if key not in ["element_type", "name", "description"]:
-                        if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
+                        if isinstance(value, str) and (
+                            value.startswith("{") or value.startswith("[")
+                        ):
                             try:
                                 elem_metadata[key] = json.loads(value)
                             except (json.JSONDecodeError, ValueError):
@@ -459,7 +473,9 @@ class ChromaDBVectorStore:
                     "name": metadata.get("name", ""),
                     "description": metadata.get("description", ""),
                     "metadata": elem_metadata,
-                    "embedding": embedding.tolist() if hasattr(embedding, 'tolist') else embedding
+                    "embedding": embedding.tolist()
+                    if hasattr(embedding, "tolist")
+                    else embedding,
                 }
                 elements.append(element_dict)
 
@@ -467,17 +483,21 @@ class ChromaDBVectorStore:
                 "dimension": self.dimension,
                 "connection_id": self.connection_id,
                 "schema_name": self.schema_name,
-                "elements": elements
+                "elements": elements,
             }
 
-            with open(filepath, 'w') as f:
+            with open(filepath, "w") as f:
                 json.dump(data, f, indent=2)
 
-            logger.info(f"Exported ChromaDB vector store ({len(elements)} elements) to {filepath}")
+            logger.info(
+                f"Exported ChromaDB vector store ({len(elements)} elements) to {filepath}"
+            )
         except Exception as e:
             logger.error(f"Failed to export vector store: {e}")
             # Don't raise - ChromaDB is already persisted, JSON export is optional
-            logger.warning("ChromaDB is already persisted to disk, JSON export failed but data is safe")
+            logger.warning(
+                "ChromaDB is already persisted to disk, JSON export failed but data is safe"
+            )
 
     def load(self, filepath: Path):
         """
@@ -487,7 +507,7 @@ class ChromaDBVectorStore:
             filepath: Input file path (JSON)
         """
         try:
-            with open(filepath, 'r') as f:
+            with open(filepath, "r") as f:
                 data = json.load(f)
 
             # Clear existing data
@@ -498,7 +518,7 @@ class ChromaDBVectorStore:
             embeddings = []
             metadatas = []
 
-            for elem_dict in data.get('elements', []):
+            for elem_dict in data.get("elements", []):
                 # Prepare metadata
                 chroma_metadata = {
                     "element_type": elem_dict.get("element_type", "unknown"),
@@ -513,19 +533,17 @@ class ChromaDBVectorStore:
                     else:
                         chroma_metadata[key] = json.dumps(value)
 
-                ids.append(elem_dict['element_id'])
-                embeddings.append(elem_dict['embedding'])
+                ids.append(elem_dict["element_id"])
+                embeddings.append(elem_dict["embedding"])
                 metadatas.append(chroma_metadata)
 
             # Batch add
             if ids:
-                self.collection.add(
-                    ids=ids,
-                    embeddings=embeddings,
-                    metadatas=metadatas
-                )
+                self.collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas)
 
-            logger.info(f"Imported ChromaDB vector store ({len(ids)} elements) from {filepath}")
+            logger.info(
+                f"Imported ChromaDB vector store ({len(ids)} elements) from {filepath}"
+            )
         except Exception as e:
             logger.error(f"Failed to import vector store: {e}")
             raise
@@ -544,10 +562,9 @@ class ChromaDBVectorStore:
         try:
             for element_type in ["table", "column", "relationship"]:
                 results = self.collection.get(
-                    where={"element_type": element_type},
-                    include=[]
+                    where={"element_type": element_type}, include=[]
                 )
-                type_counts[element_type] = len(results['ids'])
+                type_counts[element_type] = len(results["ids"])
         except Exception:
             type_counts = {"table": 0, "column": 0, "relationship": 0}
 
@@ -559,7 +576,7 @@ class ChromaDBVectorStore:
             "index_built": self._index_built,
             "elements_by_type": type_counts,
             "storage_backend": "ChromaDB",
-            "storage_path": f"tmp/chromadb/{self.connection_id}"
+            "storage_path": f"tmp/chromadb/{self.connection_id}",
         }
 
     def clear(self):
@@ -568,14 +585,16 @@ class ChromaDBVectorStore:
             # Delete and recreate collection
             self.client.delete_collection(self.collection.name)
 
-            collection_name = f"schema_{self.schema_name}".replace("-", "_").replace(".", "_")
+            collection_name = f"schema_{self.schema_name}".replace("-", "_").replace(
+                ".", "_"
+            )
             self.collection = self.client.get_or_create_collection(
                 name=collection_name,
                 metadata={
                     "schema_name": self.schema_name,
                     "connection_id": self.connection_id,
-                    "dimension": self.dimension
-                }
+                    "dimension": self.dimension,
+                },
             )
             logger.info(f"Cleared ChromaDB vector store: {collection_name}")
         except Exception as e:

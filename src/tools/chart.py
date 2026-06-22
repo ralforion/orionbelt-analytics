@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..chart_utils import create_plotly_chart
 
@@ -21,7 +21,7 @@ def generate_chart(
     height: int = 600,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
-    output_format: str = "image"
+    output_format: str = "image",
 ) -> Union[Tuple[bytes, str], Dict[str, Any]]:
     """Generate chart and return either Plotly data or image bytes.
 
@@ -66,7 +66,9 @@ def generate_chart(
             missing_libs.append("plotly")
 
         if missing_libs:
-            return {"error": f"❌ Missing required visualization libraries: {', '.join(missing_libs)}. Install with: pip install {' '.join(missing_libs)}"}
+            return {
+                "error": f"❌ Missing required visualization libraries: {', '.join(missing_libs)}. Install with: pip install {' '.join(missing_libs)}"
+            }
 
         # Validate input data
         if not data_source:
@@ -79,7 +81,9 @@ def generate_chart(
 
         # Validate required columns
         if x_column not in df.columns:
-            return {"error": f"❌ X-axis column '{x_column}' not found in data. Available columns: {list(df.columns)}"}
+            return {
+                "error": f"❌ X-axis column '{x_column}' not found in data. Available columns: {list(df.columns)}"
+            }
 
         # Auto-detect time series data and switch to line chart
         def is_time_based_column(column_data):
@@ -94,17 +98,26 @@ def generate_chart(
                 return False
 
             # Check for common time-based patterns
-            if column_data.dtype == 'object' or column_data.dtype == 'string':
+            if column_data.dtype == "object" or column_data.dtype == "string":
                 for val in sample:
                     val_str = str(val).lower()
                     # Check for common date/time patterns
                     time_indicators = [
-                        'date', 'time', 'year', 'month', 'day', 'hour',
-                        'timestamp', 'period', 'quarter', 'week'
+                        "date",
+                        "time",
+                        "year",
+                        "month",
+                        "day",
+                        "hour",
+                        "timestamp",
+                        "period",
+                        "quarter",
+                        "week",
                     ]
                     # Check if value contains date separators or time indicators
-                    if any(sep in str(val) for sep in ['-', '/', ':', 'T']) or \
-                       any(ind in val_str for ind in time_indicators):
+                    if any(sep in str(val) for sep in ["-", "/", ":", "T"]) or any(
+                        ind in val_str for ind in time_indicators
+                    ):
                         try:
                             # Try to parse as datetime
                             pd.to_datetime(val)
@@ -118,7 +131,9 @@ def generate_chart(
         if x_column in df.columns and is_time_based_column(df[x_column]):
             if chart_type == "bar":
                 chart_type = "line"
-                logger.info(f"Auto-switched from bar to line chart due to time-based x-axis: {x_column}")
+                logger.info(
+                    f"Auto-switched from bar to line chart due to time-based x-axis: {x_column}"
+                )
 
             # Auto-set sorting for time series if not specified
             if sort_by is None:
@@ -130,23 +145,29 @@ def generate_chart(
         if chart_type in ["bar", "line", "scatter"] and y_column:
             if isinstance(y_column, list):
                 if chart_type not in ["bar", "line"]:
-                    return {"error": f"❌ Multiple y_columns only supported for bar and line charts, not {chart_type}"}
+                    return {
+                        "error": f"❌ Multiple y_columns only supported for bar and line charts, not {chart_type}"
+                    }
                 missing_cols = [col for col in y_column if col not in df.columns]
                 if missing_cols:
-                    return {"error": f"❌ Y-axis columns {missing_cols} not found in data. Available columns: {list(df.columns)}"}
+                    return {
+                        "error": f"❌ Y-axis columns {missing_cols} not found in data. Available columns: {list(df.columns)}"
+                    }
             else:
                 # Single measure
                 if y_column not in df.columns:
-                    return {"error": f"❌ Y-axis column '{y_column}' not found in data. Available columns: {list(df.columns)}"}
+                    return {
+                        "error": f"❌ Y-axis column '{y_column}' not found in data. Available columns: {list(df.columns)}"
+                    }
 
         # Generate title if not provided
         if not title:
             if chart_type == "bar":
                 if isinstance(y_column, list):
-                    y_label = ', '.join(y_column)
+                    y_label = ", ".join(y_column)
                     title = f"{y_label} by {x_column}"
                 else:
-                    y_label = y_column if isinstance(y_column, str) else 'Count'
+                    y_label = y_column if isinstance(y_column, str) else "Count"
                     title = f"{y_label} by {x_column}"
                 if chart_style == "stacked" and color_column:
                     title += f" (stacked by {color_column})"
@@ -158,41 +179,77 @@ def generate_chart(
             elif chart_type == "scatter":
                 title = f"{y_column} vs {x_column}"
             elif chart_type == "heatmap":
-                title = f"Heatmap of {x_column}" + (f" and {y_column}" if y_column else "")
+                title = f"Heatmap of {x_column}" + (
+                    f" and {y_column}" if y_column else ""
+                )
             else:
                 title = f"Chart of {x_column}"
 
         # Create chart ID for file naming and logging
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_title = "".join(c for c in title.replace(" ", "_") if c.isalnum() or c in "_-")
+        safe_title = "".join(
+            c for c in title.replace(" ", "_") if c.isalnum() or c in "_-"
+        )
         chart_id = f"{chart_type}_{safe_title}_{timestamp}"
 
         # Handle interactive output format (return Plotly figure object)
         if output_format == "interactive":
             try:
-                fig = create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height, sort_by, sort_order)
+                fig = create_plotly_chart(
+                    df,
+                    chart_type,
+                    x_column,
+                    y_column,
+                    color_column,
+                    title,
+                    chart_style,
+                    width,
+                    height,
+                    sort_by,
+                    sort_order,
+                )
 
-                logger.info(f"Created interactive {chart_type} chart with {len(df)} data points")
+                logger.info(
+                    f"Created interactive {chart_type} chart with {len(df)} data points"
+                )
                 return {
                     "figure": fig,
                     "metadata": {
                         "chart_id": chart_id,
                         "chart_type": chart_type,
                         "data_points": len(df),
-                    }
+                    },
                 }
 
             except ImportError as e:
                 logger.warning(f"Plotly not available for interactive mode: {e}")
-                return {"error": "Plotly required for interactive charts. Install with: pip install plotly"}
+                return {
+                    "error": "Plotly required for interactive charts. Install with: pip install plotly"
+                }
 
         # Handle image output format (return PNG bytes using Plotly + kaleido)
         try:
-            fig = create_plotly_chart(df, chart_type, x_column, y_column, color_column, title, chart_style, width, height, sort_by, sort_order)
-            image_bytes = fig.to_image(format='png', width=width, height=height, scale=2)
+            fig = create_plotly_chart(
+                df,
+                chart_type,
+                x_column,
+                y_column,
+                color_column,
+                title,
+                chart_style,
+                width,
+                height,
+                sort_by,
+                sort_order,
+            )
+            image_bytes = fig.to_image(
+                format="png", width=width, height=height, scale=2
+            )
         except Exception as e:
             if "kaleido" in str(e).lower():
-                return {"error": "❌ kaleido required for PNG export. Install with: pip install kaleido"}
+                return {
+                    "error": "❌ kaleido required for PNG export. Install with: pip install kaleido"
+                }
             raise
 
         logger.info(f"Created {chart_type} chart image with {len(df)} data points")

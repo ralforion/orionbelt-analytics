@@ -4,15 +4,14 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from fastmcp import Context
 
-from ..paths import PROJECT_ROOT
 from ..constants import OBA_NAMESPACE
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
-
 from ..handler_context import HandlerContext
+from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..paths import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +23,7 @@ def _check_ontology_db_compatibility(graph, ctx, get_session_db_manager, session
     """
     try:
         from rdflib import Namespace
-        from rdflib.namespace import RDF, OWL
+        from rdflib.namespace import OWL, RDF
 
         db_manager = get_session_db_manager(ctx)
         if not db_manager.has_engine():
@@ -56,18 +55,14 @@ def _check_ontology_db_compatibility(graph, ctx, get_session_db_manager, session
             db_tables_list = db_manager.get_tables(schema_name)
             db_tables = {t.lower(): t for t in db_tables_list}
         except Exception as e:
-            logger.warning(f"Could not fetch database tables for compatibility check: {e}")
+            logger.warning(
+                f"Could not fetch database tables for compatibility check: {e}"
+            )
             return None
 
-        matched = sorted(
-            onto_tables[k] for k in onto_tables if k in db_tables
-        )
-        onto_only = sorted(
-            onto_tables[k] for k in onto_tables if k not in db_tables
-        )
-        db_only = sorted(
-            db_tables[k] for k in db_tables if k not in onto_tables
-        )
+        matched = sorted(onto_tables[k] for k in onto_tables if k in db_tables)
+        onto_only = sorted(onto_tables[k] for k in onto_tables if k not in db_tables)
+        db_only = sorted(db_tables[k] for k in db_tables if k not in onto_tables)
 
         total_onto = len(onto_tables)
         match_count = len(matched)
@@ -133,7 +128,7 @@ async def load_my_ontology(
     """Load an ontology from inline content or the newest .ttl file from the import folder."""
     try:
         from rdflib import Graph
-        from rdflib.namespace import RDF, OWL
+        from rdflib.namespace import OWL, RDF
 
         newest_file = None
         ttl_files = []
@@ -213,7 +208,9 @@ async def load_my_ontology(
         datatype_props = len(list(graph.subjects(RDF.type, OWL.DatatypeProperty)))
         object_props = len(list(graph.subjects(RDF.type, OWL.ObjectProperty)))
 
-        modified_time = datetime.fromtimestamp(file_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        modified_time = datetime.fromtimestamp(file_stat.st_mtime).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
 
         session = services.get_session_data(ctx)
         session.loaded_ontology = ontology_content
@@ -246,7 +243,9 @@ async def load_my_ontology(
                         graph_uri = f"http://example.com/schema/{schema_name}"
                     used_graph_uri = graph_uri
 
-                    triple_count = store.load_ontology(ontology_content, graph_uri, schema_name)
+                    triple_count = store.load_ontology(
+                        ontology_content, graph_uri, schema_name
+                    )
                     stored_in_rdf = True
 
                     logger.info(
@@ -257,12 +256,20 @@ async def load_my_ontology(
                     )
                 else:
                     logger.warning("Oxigraph store not available for auto-persist")
-                    await ctx.info(f"Ontology loaded with {classes_count} classes; ready for SQL generation")
+                    await ctx.info(
+                        f"Ontology loaded with {classes_count} classes; ready for SQL generation"
+                    )
             except Exception as e:
-                logger.warning(f"Auto-persist to Oxigraph failed: {e}, ontology still available in session state")
-                await ctx.info(f"Ontology loaded with {classes_count} classes; ready for SQL generation")
+                logger.warning(
+                    f"Auto-persist to Oxigraph failed: {e}, ontology still available in session state"
+                )
+                await ctx.info(
+                    f"Ontology loaded with {classes_count} classes; ready for SQL generation"
+                )
         else:
-            await ctx.info(f"Ontology loaded with {classes_count} classes; ready for SQL generation")
+            await ctx.info(
+                f"Ontology loaded with {classes_count} classes; ready for SQL generation"
+            )
 
         response = {
             "success": True,
@@ -275,7 +282,9 @@ async def load_my_ontology(
             "properties_count": datatype_props,
             "relationships_count": object_props,
             "total_files_found": len(ttl_files),
-            "other_files": [f.name for f in ttl_files[1:5]] if len(ttl_files) > 1 else [],
+            "other_files": [f.name for f in ttl_files[1:5]]
+            if len(ttl_files) > 1
+            else [],
             "stored_in_rdf": stored_in_rdf,
         }
 
@@ -309,7 +318,9 @@ async def load_my_ontology(
                     "3. execute_sql_query (use ontology context for accurate SQL)",
                 ],
             }
-            response["note"] = "This ontology is now active and will be used instead of auto-generated ontologies"
+            response[
+                "note"
+            ] = "This ontology is now active and will be used instead of auto-generated ontologies"
 
         if compatibility:
             response["compatibility"] = compatibility
@@ -323,4 +334,3 @@ async def load_my_ontology(
             "error": f"Failed to load ontology: {str(e)}",
             "error_type": "internal_error",
         }
-

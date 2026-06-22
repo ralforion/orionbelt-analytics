@@ -2,10 +2,9 @@
 
 import pytest
 
-from src.shacl_validator import validate_ontology, shacl_available
+from src.database_manager import ColumnInfo, TableInfo
 from src.ontology_generator import OntologyGenerator
-from src.database_manager import TableInfo, ColumnInfo
-
+from src.shacl_validator import shacl_available, validate_ontology
 
 pytestmark = pytest.mark.skipif(
     not shacl_available(),
@@ -15,30 +14,63 @@ pytestmark = pytest.mark.skipif(
 
 def _ecommerce_ttl() -> str:
     customers = TableInfo(
-        name="customers", schema="public",
+        name="customers",
+        schema="public",
         columns=[
-            ColumnInfo(name="id", data_type="INTEGER", is_nullable=False,
-                       is_primary_key=True, is_foreign_key=False),
-            ColumnInfo(name="name", data_type="VARCHAR(200)", is_nullable=False,
-                       is_primary_key=False, is_foreign_key=False),
-        ],
-        primary_keys=["id"], foreign_keys=[], row_count=100,
-    )
-    orders = TableInfo(
-        name="orders", schema="public",
-        columns=[
-            ColumnInfo(name="id", data_type="INTEGER", is_nullable=False,
-                       is_primary_key=True, is_foreign_key=False),
-            ColumnInfo(name="customer_id", data_type="INTEGER", is_nullable=False,
-                       is_primary_key=False, is_foreign_key=True,
-                       foreign_key_table="customers", foreign_key_column="id"),
+            ColumnInfo(
+                name="id",
+                data_type="INTEGER",
+                is_nullable=False,
+                is_primary_key=True,
+                is_foreign_key=False,
+            ),
+            ColumnInfo(
+                name="name",
+                data_type="VARCHAR(200)",
+                is_nullable=False,
+                is_primary_key=False,
+                is_foreign_key=False,
+            ),
         ],
         primary_keys=["id"],
-        foreign_keys=[{"column": "customer_id", "referenced_table": "customers", "referenced_column": "id"}],
+        foreign_keys=[],
+        row_count=100,
+    )
+    orders = TableInfo(
+        name="orders",
+        schema="public",
+        columns=[
+            ColumnInfo(
+                name="id",
+                data_type="INTEGER",
+                is_nullable=False,
+                is_primary_key=True,
+                is_foreign_key=False,
+            ),
+            ColumnInfo(
+                name="customer_id",
+                data_type="INTEGER",
+                is_nullable=False,
+                is_primary_key=False,
+                is_foreign_key=True,
+                foreign_key_table="customers",
+                foreign_key_column="id",
+            ),
+        ],
+        primary_keys=["id"],
+        foreign_keys=[
+            {
+                "column": "customer_id",
+                "referenced_table": "customers",
+                "referenced_column": "id",
+            }
+        ],
         row_count=1000,
     )
     gen = OntologyGenerator("http://test.com/ontology/")
-    return gen.generate_from_schema([customers, orders], include_inferred_relationships=False)
+    return gen.generate_from_schema(
+        [customers, orders], include_inferred_relationships=False
+    )
 
 
 def test_generated_ontology_conforms():

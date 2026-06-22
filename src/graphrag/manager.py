@@ -5,24 +5,27 @@ Coordinates embeddings, vector search, graph traversal, and community detection
 to provide intelligent schema navigation and context-aware query generation.
 """
 
-import logging
-from typing import List, Dict, Any, Optional
-from pathlib import Path
 import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+from .community_detector import CommunityDetector
 from .embedder import SchemaEmbedder
 from .retriever import GraphRetriever
-from .community_detector import CommunityDetector
 
 # Try to use ChromaDB if available, fallback to JSON-based VectorStore
 try:
-    from .vector_store_chromadb import ChromaDBVectorStore, CHROMADB_AVAILABLE
+    from .vector_store_chromadb import CHROMADB_AVAILABLE, ChromaDBVectorStore
+
     if CHROMADB_AVAILABLE:
         logger = logging.getLogger(__name__)
         logger.info("ChromaDB available - using high-performance vector storage")
     else:
         logger = logging.getLogger(__name__)
-        logger.warning("ChromaDB not available - falling back to JSON-based vector storage")
+        logger.warning(
+            "ChromaDB not available - falling back to JSON-based vector storage"
+        )
 except ImportError:
     CHROMADB_AVAILABLE = False
     logger = logging.getLogger(__name__)
@@ -37,7 +40,7 @@ class GraphRAGManager:
         embedding_model: str = "tfidf",
         embedding_dimension: int = 384,
         connection_id: Optional[str] = None,
-        schema_name: Optional[str] = None
+        schema_name: Optional[str] = None,
     ):
         """
         Initialize GraphRAG manager.
@@ -55,11 +58,12 @@ class GraphRAGManager:
             self.vector_store = ChromaDBVectorStore(
                 connection_id=connection_id or "default",
                 schema_name=schema_name or "default",
-                dimension=embedding_dimension
+                dimension=embedding_dimension,
             )
             logger.info("Initialized ChromaDB vector store")
         else:
             from .vector_store import VectorStore
+
             self.vector_store = VectorStore(dimension=embedding_dimension)
             logger.warning("Using JSON-based vector store (ChromaDB not available)")
 
@@ -72,9 +76,7 @@ class GraphRAGManager:
         self._connection_id: Optional[str] = connection_id or "default"
 
     def initialize_from_schema(
-        self,
-        tables_info: List[Dict[str, Any]],
-        schema_name: str = "default"
+        self, tables_info: List[Dict[str, Any]], schema_name: str = "default"
     ):
         """
         Initialize GraphRAG from schema metadata.
@@ -83,7 +85,9 @@ class GraphRAGManager:
             tables_info: List of table metadata dictionaries
             schema_name: Schema identifier
         """
-        logger.info(f"Initializing GraphRAG for schema '{schema_name}' with {len(tables_info)} tables")
+        logger.info(
+            f"Initializing GraphRAG for schema '{schema_name}' with {len(tables_info)} tables"
+        )
 
         self._schema_name = schema_name
 
@@ -113,9 +117,7 @@ class GraphRAGManager:
         logger.info("GraphRAG initialization complete")
 
     def accumulate_schema(
-        self,
-        tables_info: List[Dict[str, Any]],
-        schema_name: str = "default"
+        self, tables_info: List[Dict[str, Any]], schema_name: str = "default"
     ):
         """Add a schema's tables to an already-initialized GraphRAG (accumulative).
 
@@ -162,10 +164,7 @@ class GraphRAGManager:
         )
 
     def search_schema(
-        self,
-        query: str,
-        top_k: int = 5,
-        element_type: Optional[str] = None
+        self, query: str, top_k: int = 5, element_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Search schema using natural language.
@@ -179,13 +178,15 @@ class GraphRAGManager:
             List of matching schema elements with scores
         """
         if not self._initialized:
-            raise RuntimeError("GraphRAG not initialized. Call initialize_from_schema() first.")
+            raise RuntimeError(
+                "GraphRAG not initialized. Call initialize_from_schema() first."
+            )
 
         results = self.vector_store.search_by_text(
             query_text=query,
             embedder=self.embedder,
             top_k=top_k,
-            element_type=element_type
+            element_type=element_type,
         )
 
         return [
@@ -195,9 +196,9 @@ class GraphRAGManager:
                     "id": elem.element_id,
                     "name": elem.name,
                     "description": elem.description,
-                    "metadata": elem.metadata
+                    "metadata": elem.metadata,
                 },
-                "similarity_score": float(score)
+                "similarity_score": float(score),
             }
             for elem, score in results
         ]
@@ -207,7 +208,7 @@ class GraphRAGManager:
         query: str,
         top_k: int = 5,
         include_related: bool = True,
-        max_related_distance: int = 1
+        max_related_distance: int = 1,
     ) -> Dict[str, Any]:
         """
         Find tables relevant to a natural language query.
@@ -233,7 +234,7 @@ class GraphRAGManager:
             "primary_tables": table_results,
             "related_tables": {},
             "communities": {},
-            "suggested_joins": []
+            "suggested_joins": [],
         }
 
         if not primary_tables:
@@ -244,8 +245,7 @@ class GraphRAGManager:
             all_related = {}
             for table in primary_tables:
                 related = self.graph_retriever.get_related_tables(
-                    table,
-                    max_distance=max_related_distance
+                    table, max_distance=max_related_distance
                 )
                 all_related[table] = related
 
@@ -258,27 +258,33 @@ class GraphRAGManager:
                 if comm_id is not None:
                     result["communities"][table] = {
                         "community_id": comm_id,
-                        "tables_in_community": list(self.community_detector.get_community_tables(comm_id))
+                        "tables_in_community": list(
+                            self.community_detector.get_community_tables(comm_id)
+                        ),
                     }
 
         # Step 4: Find join paths between primary tables
         if len(primary_tables) > 1:
             for i, table_a in enumerate(primary_tables[:-1]):
-                for table_b in primary_tables[i+1:]:
+                for table_b in primary_tables[i + 1 :]:
                     join_path = self.graph_retriever.find_join_path(table_a, table_b)
                     if join_path:
-                        result["suggested_joins"].append({
-                            "from": table_a,
-                            "to": table_b,
-                            "path": join_path
-                        })
+                        result["suggested_joins"].append(
+                            {"from": table_a, "to": table_b, "path": join_path}
+                        )
 
         # Step 5: Check for fan-trap risks
-        all_tables = list(set(primary_tables + [
-            t for related in result["related_tables"].values()
-            for tables in related.values()
-            for t in tables
-        ]))
+        all_tables = list(
+            set(
+                primary_tables
+                + [
+                    t
+                    for related in result["related_tables"].values()
+                    for tables in related.values()
+                    for t in tables
+                ]
+            )
+        )
 
         fan_trap_warnings = self.graph_retriever.detect_fan_traps(all_tables)
         if fan_trap_warnings:
@@ -287,10 +293,7 @@ class GraphRAGManager:
         return result
 
     def get_query_context(
-        self,
-        query: str,
-        max_tables: int = 5,
-        max_columns: int = 20
+        self, query: str, max_tables: int = 5, max_columns: int = 20
     ) -> Dict[str, Any]:
         """
         Get optimized context for SQL query generation.
@@ -310,17 +313,12 @@ class GraphRAGManager:
 
         # Find relevant tables
         table_info = self.find_relevant_tables(
-            query,
-            top_k=max_tables,
-            include_related=True,
-            max_related_distance=1
+            query, top_k=max_tables, include_related=True, max_related_distance=1
         )
 
         # Find relevant columns
         column_results = self.search_schema(
-            query,
-            top_k=max_columns,
-            element_type="column"
+            query, top_k=max_columns, element_type="column"
         )
 
         # Build minimal context
@@ -330,7 +328,7 @@ class GraphRAGManager:
             "relevant_columns": [],
             "relationships": table_info.get("suggested_joins", []),
             "fan_trap_warnings": table_info.get("fan_trap_warnings", []),
-            "token_estimate": 0
+            "token_estimate": 0,
         }
 
         # Add primary tables with their metadata
@@ -339,28 +337,33 @@ class GraphRAGManager:
             table_meta = self.graph_retriever.get_table_metadata(table_name)
 
             if table_meta:
-                context["relevant_tables"].append({
-                    "name": table_name,
-                    "relevance_score": table_result["similarity_score"],
-                    "column_count": len(table_meta.get("columns", [])),
-                    "has_foreign_keys": bool(table_meta.get("foreign_keys")),
-                    "comment": table_meta.get("comment")
-                })
+                context["relevant_tables"].append(
+                    {
+                        "name": table_name,
+                        "relevance_score": table_result["similarity_score"],
+                        "column_count": len(table_meta.get("columns", [])),
+                        "has_foreign_keys": bool(table_meta.get("foreign_keys")),
+                        "comment": table_meta.get("comment"),
+                    }
+                )
 
         # Add relevant columns
         for col_result in column_results:
-            context["relevant_columns"].append({
-                "table": col_result["element"]["metadata"]["table"],
-                "column": col_result["element"]["name"],
-                "data_type": col_result["element"]["metadata"]["data_type"],
-                "relevance_score": col_result["similarity_score"]
-            })
+            context["relevant_columns"].append(
+                {
+                    "table": col_result["element"]["metadata"]["table"],
+                    "column": col_result["element"]["name"],
+                    "data_type": col_result["element"]["metadata"]["data_type"],
+                    "relevance_score": col_result["similarity_score"],
+                }
+            )
 
         # Estimate token usage (rough approximation)
         context["token_estimate"] = (
-            len(context["relevant_tables"]) * 200 +  # ~200 tokens per table summary
-            len(context["relevant_columns"]) * 50 +   # ~50 tokens per column
-            len(context["relationships"]) * 100       # ~100 tokens per join
+            len(context["relevant_tables"]) * 200
+            + len(context["relevant_columns"]) * 50  # ~200 tokens per table summary
+            + len(context["relationships"])  # ~50 tokens per column
+            * 100  # ~100 tokens per join
         )
 
         return context
@@ -378,12 +381,14 @@ class GraphRAGManager:
         overview = {
             "schema_name": self._schema_name,
             "vector_store_stats": self.vector_store.get_statistics(),
-            "graph_summary": self.graph_retriever.get_graph_summary()
+            "graph_summary": self.graph_retriever.get_graph_summary(),
         }
 
         if self.community_detector:
             overview["communities"] = self.community_detector.get_all_summaries()
-            overview["domain_suggestions"] = self.community_detector.suggest_domain_names()
+            overview[
+                "domain_suggestions"
+            ] = self.community_detector.suggest_domain_names()
 
         return overview
 
@@ -413,7 +418,7 @@ class GraphRAGManager:
             "tables_info": all_tables_info,
             "visualization": self.graph_retriever.export_graph_for_visualization(),
         }
-        with open(graph_path, 'w') as f:
+        with open(graph_path, "w") as f:
             json.dump(graph_data, f, indent=2)
 
         # Save combined communities
@@ -421,9 +426,9 @@ class GraphRAGManager:
             communities_path = connection_dir / "communities_combined.json"
             communities_data = {
                 "summaries": self.community_detector.get_all_summaries(),
-                "domain_names": self.community_detector.suggest_domain_names()
+                "domain_names": self.community_detector.suggest_domain_names(),
             }
-            with open(communities_path, 'w') as f:
+            with open(communities_path, "w") as f:
                 json.dump(communities_data, f, indent=2)
 
         # Also save per-schema files (backward compat with workspace metadata)
@@ -432,7 +437,9 @@ class GraphRAGManager:
             self.vector_store.save(vector_store_path)
 
             # Per-schema graph subset
-            schema_tables = [t for t in all_tables_info if t.get("schema") == schema_name]
+            schema_tables = [
+                t for t in all_tables_info if t.get("schema") == schema_name
+            ]
             if not schema_tables:
                 schema_tables = all_tables_info  # Fallback for single schema
             per_schema_graph_path = connection_dir / f"graph_{schema_name}.json"
@@ -440,16 +447,16 @@ class GraphRAGManager:
                 "tables_info": schema_tables,
                 "visualization": self.graph_retriever.export_graph_for_visualization(),
             }
-            with open(per_schema_graph_path, 'w') as f:
+            with open(per_schema_graph_path, "w") as f:
                 json.dump(per_schema_data, f, indent=2)
 
             if self.community_detector:
                 communities_path = connection_dir / f"communities_{schema_name}.json"
                 communities_data = {
                     "summaries": self.community_detector.get_all_summaries(),
-                    "domain_names": self.community_detector.suggest_domain_names()
+                    "domain_names": self.community_detector.suggest_domain_names(),
                 }
-                with open(communities_path, 'w') as f:
+                with open(communities_path, "w") as f:
                     json.dump(communities_data, f, indent=2)
 
         logger.info(
@@ -487,7 +494,9 @@ class GraphRAGManager:
             if vector_count > 0:
                 restored_components.append(f"vectors ({vector_count})")
             else:
-                logger.warning("ChromaDB collection is empty — vector search will not work")
+                logger.warning(
+                    "ChromaDB collection is empty — vector search will not work"
+                )
         except Exception as e:
             logger.warning(f"Failed to verify ChromaDB: {e}")
 
@@ -495,11 +504,15 @@ class GraphRAGManager:
         combined_graph_path = connection_dir / "graph_combined.json"
         per_schema_graph_path = connection_dir / f"graph_{schema_name}.json"
 
-        graph_path = combined_graph_path if combined_graph_path.exists() else per_schema_graph_path
+        graph_path = (
+            combined_graph_path
+            if combined_graph_path.exists()
+            else per_schema_graph_path
+        )
 
         if graph_path.exists():
             try:
-                with open(graph_path, 'r') as f:
+                with open(graph_path, "r") as f:
                     graph_data = json.load(f)
 
                 tables_info = graph_data.get("tables_info")
@@ -515,7 +528,9 @@ class GraphRAGManager:
                     elif schema_name not in self._schema_names:
                         self._schema_names.append(schema_name)
                 else:
-                    logger.warning("Graph file missing tables_info — graph not restored")
+                    logger.warning(
+                        "Graph file missing tables_info — graph not restored"
+                    )
             except Exception as e:
                 logger.error(f"Failed to load graph: {e}")
         else:
@@ -524,11 +539,15 @@ class GraphRAGManager:
         # 3. Load communities — prefer combined, fallback to per-schema
         combined_communities_path = connection_dir / "communities_combined.json"
         per_schema_communities_path = connection_dir / f"communities_{schema_name}.json"
-        communities_path = combined_communities_path if combined_communities_path.exists() else per_schema_communities_path
+        communities_path = (
+            combined_communities_path
+            if combined_communities_path.exists()
+            else per_schema_communities_path
+        )
 
         if communities_path.exists():
             try:
-                with open(communities_path, 'r') as f:
+                with open(communities_path, "r") as f:
                     communities_data = json.load(f)
 
                 self.community_detector = CommunityDetector(self.graph_retriever.graph)

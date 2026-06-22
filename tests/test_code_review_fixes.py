@@ -7,13 +7,13 @@ Covers:
 4. Dremio PAT auth in the main connect_database handler
 """
 
-import unittest
-from unittest.mock import Mock, patch, AsyncMock
 import os
+import unittest
+from unittest.mock import AsyncMock, Mock, patch
 
-from src.session import SessionData
-from src.handler_context import HandlerContext
 from src.database_manager import DatabaseManager
+from src.handler_context import HandlerContext
+from src.session import SessionData
 
 
 class TestClearSessionStateResetsValidator(unittest.TestCase):
@@ -84,7 +84,10 @@ class TestReconnectAllBackends(unittest.TestCase):
         with patch.object(self.db_manager, "connect_bigquery", return_value=True) as m:
             self.db_manager._reconnect()
             m.assert_called_once_with(
-                "my-project", "my_dataset", "/path/to/creds.json", None,
+                "my-project",
+                "my_dataset",
+                "/path/to/creds.json",
+                None,
             )
 
     def test_reconnect_duckdb(self):
@@ -107,11 +110,16 @@ class TestReconnectAllBackends(unittest.TestCase):
             "catalog": "main",
             "schema": "default",
         }
-        with patch.object(self.db_manager, "connect_databricks", return_value=True) as m:
+        with patch.object(
+            self.db_manager, "connect_databricks", return_value=True
+        ) as m:
             self.db_manager._reconnect()
             m.assert_called_once_with(
-                "host.databricks.com", "/sql/1.0/warehouses/abc",
-                "dapi123", "main", "default",
+                "host.databricks.com",
+                "/sql/1.0/warehouses/abc",
+                "dapi123",
+                "main",
+                "default",
             )
 
     def test_reconnect_mysql(self):
@@ -127,7 +135,12 @@ class TestReconnectAllBackends(unittest.TestCase):
         with patch.object(self.db_manager, "connect_mysql", return_value=True) as m:
             self.db_manager._reconnect()
             m.assert_called_once_with(
-                "localhost", 3306, "testdb", "root", "secret", "utf8mb4",
+                "localhost",
+                3306,
+                "testdb",
+                "root",
+                "secret",
+                "utf8mb4",
             )
 
     def test_reconnect_unsupported_type_raises(self):
@@ -192,7 +205,8 @@ class TestDremioPATHandler(unittest.IsolatedAsyncioTestCase):
             )
 
         mock_db_manager.connect_dremio.assert_called_once_with(
-            uri="https://dremio.example.com", pat="my-secret-pat",
+            uri="https://dremio.example.com",
+            pat="my-secret-pat",
         )
 
     async def test_dremio_falls_back_to_legacy(self):
@@ -221,8 +235,9 @@ class TestDremioPATHandler(unittest.IsolatedAsyncioTestCase):
             "DREMIO_PASSWORD": "pass123",
         }
         # Ensure PAT vars are absent
-        cleaned = {k: v for k, v in os.environ.items()
-                   if k not in ("DREMIO_URI", "DREMIO_PAT")}
+        cleaned = {
+            k: v for k, v in os.environ.items() if k not in ("DREMIO_URI", "DREMIO_PAT")
+        }
         cleaned.update(env)
         with patch.dict(os.environ, cleaned, clear=True):
             await connect_database(

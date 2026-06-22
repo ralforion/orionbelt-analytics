@@ -8,9 +8,10 @@ Uses a lightweight embedding model to create semantic representations of:
 """
 
 import logging
-from typing import List, Dict, Any, Optional
-import numpy as np
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SchemaElement:
     """Represents a schema element with its embedding."""
+
     element_type: str  # "table", "column", "relationship"
     element_id: str
     name: str
@@ -43,19 +45,23 @@ class SchemaEmbedder:
         """Initialize the embedding model."""
         if self.embedding_model == "tfidf":
             from sklearn.feature_extraction.text import TfidfVectorizer
+
             self.vectorizer = TfidfVectorizer(
                 max_features=384,  # Standard embedding size
                 ngram_range=(1, 2),
-                stop_words='english'
+                stop_words="english",
             )
             self._is_fitted = False
         elif self.embedding_model == "sentence-transformers":
             try:
                 from sentence_transformers import SentenceTransformer
-                self.model = SentenceTransformer('all-MiniLM-L6-v2')
+
+                self.model = SentenceTransformer("all-MiniLM-L6-v2")
                 logger.info("Loaded sentence-transformers model: all-MiniLM-L6-v2")
             except ImportError:
-                logger.warning("sentence-transformers not available, falling back to TF-IDF")
+                logger.warning(
+                    "sentence-transformers not available, falling back to TF-IDF"
+                )
                 self.embedding_model = "tfidf"
                 self._initialize_model()
 
@@ -64,7 +70,7 @@ class SchemaEmbedder:
         table_name: str,
         columns: List[Dict[str, Any]],
         comment: Optional[str] = None,
-        foreign_keys: Optional[List[Dict[str, Any]]] = None
+        foreign_keys: Optional[List[Dict[str, Any]]] = None,
     ) -> SchemaElement:
         """
         Create embedding for a table.
@@ -79,7 +85,7 @@ class SchemaEmbedder:
             SchemaElement with embedding
         """
         # Build text representation
-        text_parts = [table_name.replace('_', ' ')]
+        text_parts = [table_name.replace("_", " ")]
 
         if comment:
             text_parts.append(comment)
@@ -87,7 +93,7 @@ class SchemaEmbedder:
         # Add column names and types
         for col in columns:
             col_text = f"{col['name']} {col['data_type']}"
-            if col.get('comment'):
+            if col.get("comment"):
                 col_text += f" {col['comment']}"
             text_parts.append(col_text)
 
@@ -108,12 +114,12 @@ class SchemaEmbedder:
             name=table_name,
             description=description,
             metadata={
-                "columns": [col['name'] for col in columns],
+                "columns": [col["name"] for col in columns],
                 "column_count": len(columns),
                 "has_foreign_keys": bool(foreign_keys),
-                "comment": comment
+                "comment": comment,
             },
-            embedding=embedding
+            embedding=embedding,
         )
 
     def create_column_embedding(
@@ -124,7 +130,7 @@ class SchemaEmbedder:
         is_primary_key: bool = False,
         is_foreign_key: bool = False,
         foreign_key_table: Optional[str] = None,
-        comment: Optional[str] = None
+        comment: Optional[str] = None,
     ) -> SchemaElement:
         """
         Create embedding for a column.
@@ -143,9 +149,9 @@ class SchemaEmbedder:
         """
         # Build text representation
         text_parts = [
-            table_name.replace('_', ' '),
-            column_name.replace('_', ' '),
-            data_type
+            table_name.replace("_", " "),
+            column_name.replace("_", " "),
+            data_type,
         ]
 
         if comment:
@@ -172,9 +178,9 @@ class SchemaEmbedder:
                 "data_type": data_type,
                 "is_primary_key": is_primary_key,
                 "is_foreign_key": is_foreign_key,
-                "foreign_key_table": foreign_key_table
+                "foreign_key_table": foreign_key_table,
             },
-            embedding=embedding
+            embedding=embedding,
         )
 
     def create_relationship_embedding(
@@ -182,7 +188,7 @@ class SchemaEmbedder:
         from_table: str,
         to_table: str,
         join_columns: List[tuple],
-        relationship_type: str = "one_to_many"
+        relationship_type: str = "one_to_many",
     ) -> SchemaElement:
         """
         Create embedding for a relationship/join path.
@@ -198,7 +204,9 @@ class SchemaEmbedder:
         """
         # Build text representation
         join_desc = ", ".join([f"{fc} to {tc}" for fc, tc in join_columns])
-        description = f"{from_table} joins {to_table} on {join_desc} ({relationship_type})"
+        description = (
+            f"{from_table} joins {to_table} on {join_desc} ({relationship_type})"
+        )
 
         # Generate embedding
         embedding = self._embed_text(description)
@@ -212,9 +220,9 @@ class SchemaEmbedder:
                 "from_table": from_table,
                 "to_table": to_table,
                 "join_columns": join_columns,
-                "relationship_type": relationship_type
+                "relationship_type": relationship_type,
             },
-            embedding=embedding
+            embedding=embedding,
         )
 
     def _embed_text(self, text: str) -> np.ndarray:
@@ -240,7 +248,9 @@ class SchemaEmbedder:
             embedding = self.vectorizer.transform([text]).toarray()[0]
             return embedding
 
-    def batch_embed_tables(self, tables_info: List[Dict[str, Any]]) -> List[SchemaElement]:
+    def batch_embed_tables(
+        self, tables_info: List[Dict[str, Any]]
+    ) -> List[SchemaElement]:
         """
         Create embeddings for multiple tables in batch.
 
@@ -254,17 +264,19 @@ class SchemaEmbedder:
 
         for table in tables_info:
             element = self.create_table_embedding(
-                table_name=table['name'],
-                columns=table.get('columns', []),
-                comment=table.get('comment'),
-                foreign_keys=table.get('foreign_keys', [])
+                table_name=table["name"],
+                columns=table.get("columns", []),
+                comment=table.get("comment"),
+                foreign_keys=table.get("foreign_keys", []),
             )
             elements.append(element)
 
         logger.info(f"Created embeddings for {len(elements)} tables")
         return elements
 
-    def batch_embed_schema(self, tables_info: List[Dict[str, Any]]) -> Dict[str, List[SchemaElement]]:
+    def batch_embed_schema(
+        self, tables_info: List[Dict[str, Any]]
+    ) -> Dict[str, List[SchemaElement]]:
         """
         Create embeddings for entire schema (tables, columns, relationships).
 
@@ -274,20 +286,16 @@ class SchemaEmbedder:
         Returns:
             Dictionary with 'tables', 'columns', 'relationships' lists
         """
-        result = {
-            "tables": [],
-            "columns": [],
-            "relationships": []
-        }
+        result = {"tables": [], "columns": [], "relationships": []}
 
         # Collect all text for TF-IDF fitting if needed
         if self.embedding_model == "tfidf" and not self._is_fitted:
             all_texts = []
             for table in tables_info:
-                text_parts = [table['name']]
-                if table.get('comment'):
-                    text_parts.append(table['comment'])
-                for col in table.get('columns', []):
+                text_parts = [table["name"]]
+                if table.get("comment"):
+                    text_parts.append(table["comment"])
+                for col in table.get("columns", []):
                     text_parts.append(f"{col['name']} {col['data_type']}")
                 all_texts.append(" ".join(text_parts))
 
@@ -299,33 +307,33 @@ class SchemaEmbedder:
         for table in tables_info:
             # Table embedding
             table_element = self.create_table_embedding(
-                table_name=table['name'],
-                columns=table.get('columns', []),
-                comment=table.get('comment'),
-                foreign_keys=table.get('foreign_keys', [])
+                table_name=table["name"],
+                columns=table.get("columns", []),
+                comment=table.get("comment"),
+                foreign_keys=table.get("foreign_keys", []),
             )
             result["tables"].append(table_element)
 
             # Column embeddings
-            for col in table.get('columns', []):
+            for col in table.get("columns", []):
                 col_element = self.create_column_embedding(
-                    table_name=table['name'],
-                    column_name=col['name'],
-                    data_type=col['data_type'],
-                    is_primary_key=col.get('is_primary_key', False),
-                    is_foreign_key=col.get('is_foreign_key', False),
-                    foreign_key_table=col.get('foreign_key_table'),
-                    comment=col.get('comment')
+                    table_name=table["name"],
+                    column_name=col["name"],
+                    data_type=col["data_type"],
+                    is_primary_key=col.get("is_primary_key", False),
+                    is_foreign_key=col.get("is_foreign_key", False),
+                    foreign_key_table=col.get("foreign_key_table"),
+                    comment=col.get("comment"),
                 )
                 result["columns"].append(col_element)
 
             # Relationship embeddings
-            for fk in table.get('foreign_keys', []):
+            for fk in table.get("foreign_keys", []):
                 rel_element = self.create_relationship_embedding(
-                    from_table=table['name'],
-                    to_table=fk['referenced_table'],
-                    join_columns=[(fk['column'], fk['referenced_column'])],
-                    relationship_type="many_to_one"
+                    from_table=table["name"],
+                    to_table=fk["referenced_table"],
+                    join_columns=[(fk["column"], fk["referenced_column"])],
+                    relationship_type="many_to_one",
                 )
                 result["relationships"].append(rel_element)
 

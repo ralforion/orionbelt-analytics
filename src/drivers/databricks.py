@@ -4,26 +4,26 @@ import logging
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
-from sqlalchemy import create_engine, text, MetaData, inspect
+from sqlalchemy import MetaData, create_engine, inspect, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError
+from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import NullPool
 
 from ..constants import (
     CONNECTION_TIMEOUT,
     DATABRICKS_SYSTEM_SCHEMAS,
-    MIN_SAMPLE_LIMIT,
-    MAX_SAMPLE_LIMIT,
     DEFAULT_SAMPLE_LIMIT,
-)
-from ..serialization import serialize_rows
-from ..security import (
-    SecureCredentialManager,
-    identifier_validator,
-    audit_log_security_event,
-    SecurityLevel,
+    MAX_SAMPLE_LIMIT,
+    MIN_SAMPLE_LIMIT,
 )
 from ..database_manager import ColumnInfo, TableInfo
+from ..security import (
+    SecureCredentialManager,
+    SecurityLevel,
+    audit_log_security_event,
+    identifier_validator,
+)
+from ..serialization import serialize_rows
 from .base import DatabaseDriver
 
 logger = logging.getLogger(__name__)
@@ -170,20 +170,21 @@ class DatabricksDriver(DatabaseDriver):
         """
         try:
             # Query to get schemas in the current catalog
-            query = text("""
+            query = text(
+                """
                 SELECT schema_name
                 FROM information_schema.schemata
                 WHERE catalog_name = :catalog
                 ORDER BY schema_name
-            """)
+            """
+            )
             with self.engine.connect() as conn:
                 result = conn.execute(query, {"catalog": self._catalog})
                 schemas = [row[0] for row in result.fetchall()]
 
                 # Filter out system schemas
                 filtered_schemas = [
-                    s for s in schemas
-                    if s not in DATABRICKS_SYSTEM_SCHEMAS
+                    s for s in schemas if s not in DATABRICKS_SYSTEM_SCHEMAS
                 ]
                 return filtered_schemas
         except SQLAlchemyError as e:
@@ -193,10 +194,7 @@ class DatabricksDriver(DatabaseDriver):
                 with self.engine.connect() as conn:
                     result = conn.execute(text(f"SHOW SCHEMAS IN {self._catalog}"))
                     schemas = [row[0] for row in result.fetchall()]
-                    return [
-                        s for s in schemas
-                        if s not in DATABRICKS_SYSTEM_SCHEMAS
-                    ]
+                    return [s for s in schemas if s not in DATABRICKS_SYSTEM_SCHEMAS]
             except Exception as fallback_error:
                 logger.error(f"Fallback schema query also failed: {fallback_error}")
                 return []
@@ -210,17 +208,18 @@ class DatabricksDriver(DatabaseDriver):
                 return []
 
             with self.engine.connect() as conn:
-                query = text("""
+                query = text(
+                    """
                     SELECT table_name
                     FROM information_schema.tables
                     WHERE table_catalog = :catalog
                     AND table_schema = :schema
                     AND table_type = 'BASE TABLE'
                     ORDER BY table_name
-                """)
+                """
+                )
                 result = conn.execute(
-                    query,
-                    {"catalog": self._catalog, "schema": schema}
+                    query, {"catalog": self._catalog, "schema": schema}
                 )
                 return [row[0] for row in result.fetchall()]
         except SQLAlchemyError as e:
@@ -232,7 +231,9 @@ class DatabricksDriver(DatabaseDriver):
                     result = conn.execute(
                         text(f"SHOW TABLES IN {self._catalog}.{schema}")
                     )
-                    return [row[1] for row in result.fetchall()]  # Table name is in second column
+                    return [
+                        row[1] for row in result.fetchall()
+                    ]  # Table name is in second column
             except Exception as fallback_error:
                 logger.error(f"Fallback table query also failed: {fallback_error}")
                 return []
@@ -256,14 +257,18 @@ class DatabricksDriver(DatabaseDriver):
 
                 # Check if table exists
                 if not inspector.has_table(table_name, schema=schema):
-                    logger.error(f"Table {self._catalog}.{schema}.{table_name} not found")
+                    logger.error(
+                        f"Table {self._catalog}.{schema}.{table_name} not found"
+                    )
                     return None
 
                 table_columns = inspector.get_columns(table_name, schema=schema)
                 table_pk = inspector.get_pk_constraint(table_name, schema=schema)
                 table_fks = inspector.get_foreign_keys(table_name, schema=schema)
 
-                primary_keys = table_pk.get("constrained_columns", []) if table_pk else []
+                primary_keys = (
+                    table_pk.get("constrained_columns", []) if table_pk else []
+                )
                 primary_keys_upper = [pk.upper() for pk in primary_keys]
 
                 logger.info(
@@ -355,7 +360,10 @@ class DatabricksDriver(DatabaseDriver):
                     validation_result["error"] = f"Databricks syntax error: {error_msg}"
                     validation_result["error_type"] = "syntax_error"
 
-                    if "not found" in error_msg.lower() or "does not exist" in error_msg.lower():
+                    if (
+                        "not found" in error_msg.lower()
+                        or "does not exist" in error_msg.lower()
+                    ):
                         validation_result["suggestions"].append(
                             "Check table names - use three-part names (catalog.schema.table) in Unity Catalog"
                         )
@@ -363,14 +371,17 @@ class DatabricksDriver(DatabaseDriver):
                         validation_result["suggestions"].append(
                             "Review Databricks SQL syntax - it's based on Spark SQL"
                         )
-                    elif "permission" in error_msg.lower() or "denied" in error_msg.lower():
+                    elif (
+                        "permission" in error_msg.lower()
+                        or "denied" in error_msg.lower()
+                    ):
                         validation_result["suggestions"].append(
                             "Insufficient permissions to access the specified tables/catalogs"
                         )
         except Exception as conn_error:
-            validation_result["error"] = (
-                f"Database connection error during validation: {conn_error}"
-            )
+            validation_result[
+                "error"
+            ] = f"Database connection error during validation: {conn_error}"
             validation_result["error_type"] = "connection_error"
 
         return validation_result

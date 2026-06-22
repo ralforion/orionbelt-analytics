@@ -9,10 +9,10 @@ Also manages workspace state for session restore across reconnections.
 import asyncio
 import json
 import logging
-from pathlib import Path
-from typing import Dict, List, Any, Optional
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ _metadata_locks: Dict[str, asyncio.Lock] = {}
 @dataclass
 class VersionInfo:
     """Information about a specific version."""
+
     version: int
     created_at: str  # ISO format
     schema_hash: str
@@ -49,6 +50,7 @@ class VersionInfo:
 @dataclass
 class RetentionPolicy:
     """Retention policy for cleanup."""
+
     graphrag_keep_versions: int = 3
     graphrag_max_age_days: int = 30
     ontology_keep_versions: int = 5
@@ -85,7 +87,7 @@ class VersionMetadataManager:
         """Load metadata from disk or create new."""
         if self.metadata_file.exists():
             try:
-                with open(self.metadata_file, 'r') as f:
+                with open(self.metadata_file, "r") as f:
                     metadata = json.load(f)
                 logger.debug(f"Loaded metadata for connection {self.connection_id}")
                 return metadata
@@ -102,13 +104,13 @@ class VersionMetadataManager:
             "connection_id": self.connection_id,
             "connection": {},  # Will be filled with connection details
             "schemas": {},
-            "retention_policy": asdict(RetentionPolicy())
+            "retention_policy": asdict(RetentionPolicy()),
         }
 
     def _save_metadata(self):
         """Save metadata to disk."""
         try:
-            with open(self.metadata_file, 'w') as f:
+            with open(self.metadata_file, "w") as f:
                 json.dump(self.metadata, f, indent=2)
             logger.debug(f"Saved metadata for connection {self.connection_id}")
         except Exception as e:
@@ -139,7 +141,7 @@ class VersionMetadataManager:
     def get_versions_to_cleanup(
         self,
         schema_name: str,
-        data_type: str = "all"  # "graphrag", "ontology", or "all"
+        data_type: str = "all",  # "graphrag", "ontology", or "all"
     ) -> List[VersionInfo]:
         """
         Get versions that should be cleaned up based on retention policy.
@@ -168,7 +170,7 @@ class VersionMetadataManager:
                 policy.graphrag_keep_versions,
                 policy.graphrag_max_age_days,
                 policy.min_versions,
-                "graphrag_status"
+                "graphrag_status",
             )
         elif data_type == "ontology":
             return self._get_cleanup_list(
@@ -176,7 +178,7 @@ class VersionMetadataManager:
                 policy.ontology_keep_versions,
                 policy.ontology_max_age_days,
                 policy.min_versions,
-                "ontology_status"
+                "ontology_status",
             )
         else:  # "all"
             # For "all", only delete if BOTH are eligible
@@ -185,14 +187,14 @@ class VersionMetadataManager:
                 policy.graphrag_keep_versions,
                 policy.graphrag_max_age_days,
                 policy.min_versions,
-                "graphrag_status"
+                "graphrag_status",
             )
             ontology_cleanup = self._get_cleanup_list(
                 versions,
                 policy.ontology_keep_versions,
                 policy.ontology_max_age_days,
                 policy.min_versions,
-                "ontology_status"
+                "ontology_status",
             )
 
             # Intersection - only delete if both agree
@@ -208,7 +210,7 @@ class VersionMetadataManager:
         keep_count: int,
         max_age_days: int,
         min_versions: int,
-        status_field: str
+        status_field: str,
     ) -> List[VersionInfo]:
         """
         Get versions to cleanup based on policy.
@@ -260,10 +262,7 @@ class VersionMetadataManager:
         return to_delete
 
     def mark_version_deleted(
-        self,
-        schema_name: str,
-        version: int,
-        data_type: str = "all"
+        self, schema_name: str, version: int, data_type: str = "all"
     ):
         """
         Mark a version as deleted in metadata.

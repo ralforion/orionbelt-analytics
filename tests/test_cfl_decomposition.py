@@ -3,13 +3,18 @@
 from types import SimpleNamespace
 
 from src.graphrag.retriever import GraphRetriever
-from src.handlers import graphrag as h
 from src.handler_context import HandlerContext
+from src.handlers import graphrag as h
 
 
 def _tbl(name, fks=None):
-    return {"name": name, "schema": "public", "columns": [], "primary_keys": ["id"],
-            "foreign_keys": fks or []}
+    return {
+        "name": name,
+        "schema": "public",
+        "columns": [],
+        "primary_keys": ["id"],
+        "foreign_keys": fks or [],
+    }
 
 
 def _session():
@@ -17,16 +22,41 @@ def _session():
     tables = [
         _tbl("customers"),
         _tbl("products"),
-        _tbl("orders", [
-            {"column": "customer_id", "referenced_table": "customers", "referenced_column": "id"},
-        ]),
-        _tbl("order_items", [
-            {"column": "order_id", "referenced_table": "orders", "referenced_column": "id"},
-            {"column": "product_id", "referenced_table": "products", "referenced_column": "id"},
-        ]),
-        _tbl("returns", [
-            {"column": "customer_id", "referenced_table": "customers", "referenced_column": "id"},
-        ]),
+        _tbl(
+            "orders",
+            [
+                {
+                    "column": "customer_id",
+                    "referenced_table": "customers",
+                    "referenced_column": "id",
+                },
+            ],
+        ),
+        _tbl(
+            "order_items",
+            [
+                {
+                    "column": "order_id",
+                    "referenced_table": "orders",
+                    "referenced_column": "id",
+                },
+                {
+                    "column": "product_id",
+                    "referenced_table": "products",
+                    "referenced_column": "id",
+                },
+            ],
+        ),
+        _tbl(
+            "returns",
+            [
+                {
+                    "column": "customer_id",
+                    "referenced_table": "customers",
+                    "referenced_column": "id",
+                },
+            ],
+        ),
     ]
     retriever = GraphRetriever()
     retriever.build_graph(tables)
@@ -46,7 +76,9 @@ def _err(message, code):
 async def _call(facts, dimensions=None, session=None):
     sess = session or _session()
     return await h.plan_composite_query(
-        _Ctx(), facts, dimensions,
+        _Ctx(),
+        facts,
+        dimensions,
         services=HandlerContext(
             get_session_data=lambda _ctx: sess,
             create_error_response=_err,

@@ -4,18 +4,17 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 from fastmcp import Context
 
 from ..exceptions import ConnectionError
 from ..graphrag import GraphRAGManager
+from ..handler_context import HandlerContext
+from ..lifecycle.metadata import update_workspace_section
 from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
-from ..lifecycle.metadata import update_workspace_section
-from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
-
-from ..handler_context import HandlerContext
+from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +74,11 @@ async def _auto_generate_ontology_background(
         ontology_generator = OntologyGenerator(base_uri=base_uri)
         ontology_ttl = ontology_generator.generate_from_schema(tables_info)
 
-        conn_dir = get_connection_dir(session.connection_id) if session.connection_id else ensure_output_dir()
+        conn_dir = (
+            get_connection_dir(session.connection_id)
+            if session.connection_id
+            else ensure_output_dir()
+        )
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         ontology_file = conn_dir / f"ontology_{schema_name}_{timestamp}.ttl"
@@ -93,7 +96,9 @@ async def _auto_generate_ontology_background(
                     triple_count = session.oxigraph_store.load_ontology(
                         ontology_ttl, graph_uri, schema_name
                     )
-                    logger.info(f"Stored {triple_count} triples in RDF store (graph: {graph_uri})")
+                    logger.info(
+                        f"Stored {triple_count} triples in RDF store (graph: {graph_uri})"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to store in RDF: {e}")
 
@@ -134,7 +139,9 @@ async def _auto_initialize_graphrag_background(
             )
         else:
             # Additional schema — accumulate into existing graph
-            logger.info(f"Accumulating schema '{schema_name}' into existing GraphRAG...")
+            logger.info(
+                f"Accumulating schema '{schema_name}' into existing GraphRAG..."
+            )
             session.graphrag_manager.accumulate_schema(
                 tables_info=tables_dict, schema_name=schema_name
             )
@@ -184,7 +191,10 @@ async def _auto_initialize_graphrag_background(
             )
 
     except Exception as e:
-        logger.error(f"GraphRAG auto-initialization failed: {type(e).__name__}: {e}", exc_info=True)
+        logger.error(
+            f"GraphRAG auto-initialization failed: {type(e).__name__}: {e}",
+            exc_info=True,
+        )
         session.graphrag_initialized = False
 
 
@@ -217,7 +227,9 @@ async def initialize_graphrag(
     if not tables_info:
         try:
             tables = db_manager.get_tables(effective_schema)
-            logger.info(f"Found {len(tables)} tables in schema '{effective_schema or 'default'}'")
+            logger.info(
+                f"Found {len(tables)} tables in schema '{effective_schema or 'default'}'"
+            )
 
             if effective_schema:
                 db_manager.prefetch_schema_constraints(effective_schema)
@@ -234,7 +246,9 @@ async def initialize_graphrag(
             session.cache_schema_analysis(effective_schema or "", tables_info)
 
         except Exception as e:
-            return services.create_error_response(f"Failed to fetch schema: {str(e)}", "database_error")
+            return services.create_error_response(
+                f"Failed to fetch schema: {str(e)}", "database_error"
+            )
 
     if not tables_info:
         return services.create_error_response(
@@ -340,11 +354,18 @@ async def graphrag_search(
 
         await ctx.info(f"Found {len(results)} results for query: {query}")
 
-        return {"success": True, "query": query, "result_count": len(results), "results": results}
+        return {
+            "success": True,
+            "query": query,
+            "result_count": len(results),
+            "results": results,
+        }
 
     except Exception as e:
         logger.error(f"GraphRAG search failed: {e}", exc_info=True)
-        return services.create_error_response(f"GraphRAG search failed: {str(e)}", "graphrag_error")
+        return services.create_error_response(
+            f"GraphRAG search failed: {str(e)}", "graphrag_error"
+        )
 
 
 async def graphrag_query_context(
@@ -425,7 +446,9 @@ async def graphrag_find_join_path(
             if join["to_table"] not in path:
                 path.append(join["to_table"])
 
-        await ctx.info(f"Found {len(join_path)}-hop path from {from_table} to {to_table}")
+        await ctx.info(
+            f"Found {len(join_path)}-hop path from {from_table} to {to_table}"
+        )
 
         return {
             "success": True,
@@ -486,7 +509,9 @@ async def reachable_from(
 
     except Exception as e:
         logger.error(f"reachable_from failed: {e}", exc_info=True)
-        return services.create_error_response(f"reachable_from failed: {str(e)}", "graphrag_error")
+        return services.create_error_response(
+            f"reachable_from failed: {str(e)}", "graphrag_error"
+        )
 
 
 async def measurable_from(
@@ -532,7 +557,9 @@ async def measurable_from(
 
     except Exception as e:
         logger.error(f"measurable_from failed: {e}", exc_info=True)
-        return services.create_error_response(f"measurable_from failed: {str(e)}", "graphrag_error")
+        return services.create_error_response(
+            f"measurable_from failed: {str(e)}", "graphrag_error"
+        )
 
 
 async def plan_composite_query(
@@ -588,9 +615,7 @@ async def plan_composite_query(
     # Leg-root facts = facts that are NOT reachable from another fact. A fact
     # reachable from another sits on that fact's grain chain (a coarser table),
     # so it is a dimension of it, not an independent leg.
-    leg_roots = [
-        f for f in facts if not any(f in reach[g] for g in facts if g != f)
-    ]
+    leg_roots = [f for f in facts if not any(f in reach[g] for g in facts if g != f)]
     leg_roots = list(dict.fromkeys(leg_roots))
 
     cfl_required = len(leg_roots) >= 2
@@ -674,4 +699,6 @@ async def graphrag_overview(
 
     except Exception as e:
         logger.error(f"GraphRAG overview failed: {e}", exc_info=True)
-        return services.create_error_response(f"GraphRAG overview failed: {str(e)}", "graphrag_error")
+        return services.create_error_response(
+            f"GraphRAG overview failed: {str(e)}", "graphrag_error"
+        )

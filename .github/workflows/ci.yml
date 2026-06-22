@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Blocking gates: these currently pass and must stay green on every PR.
+  # Blocking gates: these pass and must stay green on every PR.
   quality:
     runs-on: ubuntu-latest
     steps:
@@ -27,12 +27,18 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check src/ tests/
 
+      - name: Format check (black)
+        run: uv run black --check src/ tests/
+
+      - name: Import order (isort)
+        run: uv run isort --check-only src/ tests/
+
       - name: Tests
         run: uv run pytest
 
-  # Advisory gates: known baselines (the repo is not yet black/isort/mypy clean).
-  # They run on every PR so the debt is visible and trends down, but do not block
-  # merges. Flip continue-on-error to false per check once it is clean.
+  # Advisory gate: mypy is not yet clean (known strict-mode baseline). It runs on
+  # every PR so the count is visible and trends down, but does not block merges.
+  # Flip continue-on-error to false once src/ type-checks clean.
   baseline:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -47,14 +53,5 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Format check (black, advisory)
-        if: always()
-        run: uv run black --check src/ tests/
-
-      - name: Import order (isort, advisory)
-        if: always()
-        run: uv run isort --check-only src/ tests/
-
       - name: Type check (mypy, advisory)
-        if: always()
         run: uv run mypy src

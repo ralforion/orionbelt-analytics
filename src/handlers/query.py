@@ -2,12 +2,11 @@
 
 import logging
 import re
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from fastmcp import Context
 
 from ..exceptions import ConnectionError, ParameterError, ValidationError
-
 from ..handler_context import HandlerContext
 
 logger = logging.getLogger(__name__)
@@ -45,11 +44,15 @@ def _extract_query_intent(sql: str) -> str:
     aggs = list(set([a.upper() for a in aggs]))
 
     # Extract WHERE conditions
-    where_match = re.search(r"WHERE\s+(.+?)(?:GROUP BY|ORDER BY|LIMIT|$)", sql, re.IGNORECASE)
+    where_match = re.search(
+        r"WHERE\s+(.+?)(?:GROUP BY|ORDER BY|LIMIT|$)", sql, re.IGNORECASE
+    )
     conditions = []
     if where_match:
         where_clause = where_match.group(1)
-        cond_cols = re.findall(r"\b(\w+)\s*(?:=|>|<|LIKE|IN)", where_clause, re.IGNORECASE)
+        cond_cols = re.findall(
+            r"\b(\w+)\s*(?:=|>|<|LIKE|IN)", where_clause, re.IGNORECASE
+        )
         conditions = list(set(cond_cols[:3]))
 
     # Build intent string
@@ -91,7 +94,9 @@ async def validate_sql_syntax(
                     "Use connect_database tool first to enable comprehensive validation",
                     "Basic syntax validation can still be performed, but schema validation requires a connection",
                 ],
-                "warnings": ["Schema-level validation disabled without database connection"],
+                "warnings": [
+                    "Schema-level validation disabled without database connection"
+                ],
                 "database_dialect": "unknown",
             }
 
@@ -100,7 +105,9 @@ async def validate_sql_syntax(
                 "is_valid": False,
                 "error": "SQL query cannot be empty.",
                 "error_type": "parameter_error",
-                "suggestions": ["Provide a valid SELECT statement or schema introspection query"],
+                "suggestions": [
+                    "Provide a valid SELECT statement or schema introspection query"
+                ],
                 "database_dialect": "unknown",
             }
 
@@ -122,8 +129,12 @@ async def validate_sql_syntax(
             if not obqc_result.is_valid:
                 validation_result["is_valid"] = False
                 if not validation_result.get("error"):
-                    validation_result["error"] = "OBQC validation failed - see obqc_issues for details"
-                validation_result["error_type"] = validation_result.get("error_type") or "obqc_error"
+                    validation_result[
+                        "error"
+                    ] = "OBQC validation failed - see obqc_issues for details"
+                validation_result["error_type"] = (
+                    validation_result.get("error_type") or "obqc_error"
+                )
 
             for issue in obqc_result.issues:
                 if issue.severity.value == "warning":
@@ -132,7 +143,9 @@ async def validate_sql_syntax(
                         msg += f" - {issue.suggestion}"
                     validation_result["warnings"].append(msg)
                 elif issue.severity.value == "error" and issue.suggestion:
-                    validation_result["suggestions"].append(f"[OBQC] {issue.suggestion}")
+                    validation_result["suggestions"].append(
+                        f"[OBQC] {issue.suggestion}"
+                    )
 
             if obqc_result.fan_trap_risk:
                 validation_result["warnings"].append(
@@ -142,7 +155,9 @@ async def validate_sql_syntax(
                     "Consider UNION ALL pattern: aggregate each fact table separately, then combine"
                 )
 
-            logger.debug(f"OBQC validation: valid={obqc_result.is_valid}, issues={len(obqc_result.issues)}")
+            logger.debug(
+                f"OBQC validation: valid={obqc_result.is_valid}, issues={len(obqc_result.issues)}"
+            )
         else:
             validation_result["obqc_valid"] = None
             validation_result["obqc_issues"] = []
@@ -156,12 +171,16 @@ async def validate_sql_syntax(
                 f"SQL validation successful: {sql_query[:100]}{'...' if len(sql_query) > 100 else ''}"
             )
             validation_result["next_tool"] = "execute_sql_query"
-            await ctx.info("SQL validation passed; next call should be execute_sql_query")
+            await ctx.info(
+                "SQL validation passed; next call should be execute_sql_query"
+            )
         else:
             logger.info(
                 f"SQL validation failed: {validation_result.get('error', 'Unknown validation error')}"
             )
-            await ctx.info("SQL validation failed; fix the query and try validate_sql_syntax again")
+            await ctx.info(
+                "SQL validation failed; fix the query and try validate_sql_syntax again"
+            )
 
         return validation_result
 
@@ -295,7 +314,9 @@ async def execute_sql_query(
 
                 if context and "relevant_tables" in context:
                     table_count = len(context["relevant_tables"])
-                    logger.info(f"Auto-retrieved context: {table_count} relevant tables")
+                    logger.info(
+                        f"Auto-retrieved context: {table_count} relevant tables"
+                    )
             except Exception as e:
                 logger.debug(f"Context auto-retrieval failed (non-critical): {e}")
 
@@ -319,7 +340,9 @@ async def execute_sql_query(
             else:
                 await ctx.info("SQL query executed successfully but returned no rows")
         else:
-            logger.warning(f"SQL query execution failed: {result.get('error', 'Unknown error')}")
+            logger.warning(
+                f"SQL query execution failed: {result.get('error', 'Unknown error')}"
+            )
             await ctx.info("SQL query execution failed; review error and try again")
 
         return result

@@ -31,7 +31,7 @@ def is_client_disconnect(exc: BaseException) -> bool:
     crashed task group.
     """
     try:
-        from anyio import ClosedResourceError, BrokenResourceError, EndOfStream
+        from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
     except ImportError:
         return False
     return isinstance(exc, (ClosedResourceError, BrokenResourceError, EndOfStream))
@@ -60,7 +60,7 @@ def setup_logging(log_level: str = "INFO", structured: bool = False) -> logging.
     else:
         # Simple format for development and startup
         formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
 
     # Get root logger
@@ -94,14 +94,23 @@ def sanitize_for_logging(data: Any) -> Any:
     if isinstance(data, dict):
         sanitized = {}
         sensitive_keys = {
-            'password', 'passwd', 'pwd', 'secret', 'api_key', 'apikey',
-            'token', 'auth', 'authorization', 'credentials', 'private_key'
+            "password",
+            "passwd",
+            "pwd",
+            "secret",
+            "api_key",
+            "apikey",
+            "token",
+            "auth",
+            "authorization",
+            "credentials",
+            "private_key",
         }
 
         for key, value in data.items():
             # Check if key name suggests sensitive data
             if any(sensitive in key.lower() for sensitive in sensitive_keys):
-                sanitized[key] = '***REDACTED***'
+                sanitized[key] = "***REDACTED***"
             elif isinstance(value, (dict, list)):
                 # Recursively sanitize nested structures
                 sanitized[key] = sanitize_for_logging(value)
@@ -132,7 +141,7 @@ def validate_uri(uri: str) -> bool:
     try:
         parsed = urlparse(uri)
         # Check scheme is http or https and has a netloc (domain)
-        return parsed.scheme in ('http', 'https') and bool(parsed.netloc)
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
     except Exception:
         return False
 
@@ -150,7 +159,7 @@ def format_bytes(num_bytes: int) -> str:
     if num_bytes == 0:
         return "0 B"
 
-    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
     unit_index = 0
     size = float(num_bytes)
 

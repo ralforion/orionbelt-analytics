@@ -1,16 +1,16 @@
 """Security tests for OrionBelt Analytics."""
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+from src.database_manager import DatabaseManager
 from src.security import (
-    SQLInjectionValidator,
     IdentifierValidator,
     SecureCredentialManager,
     SecurityLevel,
-    audit_log_security_event
+    SQLInjectionValidator,
+    audit_log_security_event,
 )
-from src.database_manager import DatabaseManager
 
 
 class TestSQLInjectionValidator(unittest.TestCase):
@@ -25,15 +25,15 @@ class TestSQLInjectionValidator(unittest.TestCase):
             "SELECT * FROM users",
             "SELECT id, name FROM users WHERE active = true",
             "SELECT COUNT(*) FROM orders ORDER BY created_at LIMIT 10",
-            ("SELECT u.name, o.total FROM users u JOIN orders o ON "
-             "u.id = o.user_id"),
+            (
+                "SELECT u.name, o.total FROM users u JOIN orders o ON "
+                "u.id = o.user_id"
+            ),
         ]
 
         for query in safe_queries:
             result = self.validator.validate_query(query)
-            self.assertTrue(
-                result["is_safe"], f"Safe query marked as unsafe: {query}"
-            )
+            self.assertTrue(result["is_safe"], f"Safe query marked as unsafe: {query}")
             self.assertEqual(result["risk_level"], "low")
 
     def test_sql_injection_attempts(self) -> None:
@@ -45,15 +45,12 @@ class TestSQLInjectionValidator(unittest.TestCase):
             "SELECT * FROM users WHERE name = 'admin'--",
             "SELECT * FROM users; DELETE FROM users WHERE 1=1",
             "SELECT /*comment*/ * FROM users",
-            ("SELECT * FROM users WHERE id = 1; INSERT INTO logs "
-             "VALUES ('hacked')"),
+            ("SELECT * FROM users WHERE id = 1; INSERT INTO logs " "VALUES ('hacked')"),
         ]
 
         for query in malicious_queries:
             result = self.validator.validate_query(query)
-            self.assertFalse(
-                result["is_safe"], f"Malicious query not blocked: {query}"
-            )
+            self.assertFalse(result["is_safe"], f"Malicious query not blocked: {query}")
             self.assertIn(result["risk_level"], ["medium", "high", "critical"])
             self.assertTrue(len(result["issues"]) > 0)
 
@@ -70,9 +67,7 @@ class TestSQLInjectionValidator(unittest.TestCase):
             self.assertFalse(
                 result["is_safe"], f"Multiple statements not blocked: {query}"
             )
-            self.assertIn(
-                "Multiple SQL statements not allowed", result["issues"]
-            )
+            self.assertIn("Multiple SQL statements not allowed", result["issues"])
 
     def test_empty_queries(self) -> None:
         """Test handling of empty or whitespace-only queries."""
@@ -111,13 +106,13 @@ class TestIdentifierValidator(unittest.TestCase):
             "_private_table",
             "table123",
             "a",
-            "TABLE_WITH_UNDERSCORES"
+            "TABLE_WITH_UNDERSCORES",
         ]
 
         for identifier in valid_identifiers:
             self.assertTrue(
                 IdentifierValidator.validate_identifier(identifier),
-                f"Valid identifier rejected: {identifier}"
+                f"Valid identifier rejected: {identifier}",
             )
 
     def test_invalid_identifiers(self) -> None:
@@ -137,7 +132,7 @@ class TestIdentifierValidator(unittest.TestCase):
         for identifier in invalid_identifiers:
             self.assertFalse(
                 IdentifierValidator.validate_identifier(identifier),
-                f"Invalid identifier accepted: {identifier}"
+                f"Invalid identifier accepted: {identifier}",
             )
 
     def test_qualified_identifiers(self) -> None:
@@ -146,7 +141,7 @@ class TestIdentifierValidator(unittest.TestCase):
             "schema.table",
             "database.schema.table",
             "public.users",
-            "_schema._table"
+            "_schema._table",
         ]
 
         invalid_qualified = [
@@ -159,13 +154,13 @@ class TestIdentifierValidator(unittest.TestCase):
         for identifier in valid_qualified:
             self.assertTrue(
                 IdentifierValidator.validate_qualified_identifier(identifier),
-                f"Valid qualified identifier rejected: {identifier}"
+                f"Valid qualified identifier rejected: {identifier}",
             )
 
         for identifier in invalid_qualified:
             self.assertFalse(
                 IdentifierValidator.validate_qualified_identifier(identifier),
-                f"Invalid qualified identifier accepted: {identifier}"
+                f"Invalid qualified identifier accepted: {identifier}",
             )
 
     def test_identifier_sanitization(self) -> None:
@@ -197,7 +192,7 @@ class TestSecureCredentialManager(unittest.TestCase):
             "port": 5432,
             "database": "testdb",
             "username": "testuser",
-            "password": "secret123"
+            "password": "secret123",
         }
 
         # Encrypt credentials
@@ -216,7 +211,7 @@ class TestSecureCredentialManager(unittest.TestCase):
             "username": "testuser",
             "password": "secret123",
             "api_key": "key123",
-            "token": "token456"
+            "token": "token456",
         }
 
         sanitized = self.manager._sanitize_credentials(test_credentials)
@@ -233,8 +228,9 @@ class TestSecureCredentialManager(unittest.TestCase):
     def test_encryption_without_master_password(self) -> None:
         """Test that encryption fails without master password."""
         # Patch load_dotenv and os.getenv to prevent loading from .env file
-        with patch('src.security.load_dotenv'), \
-             patch('src.security.os.getenv', return_value=None):
+        with patch("src.security.load_dotenv"), patch(
+            "src.security.os.getenv", return_value=None
+        ):
             manager = SecureCredentialManager()
 
             with self.assertRaises(ValueError):
@@ -252,10 +248,8 @@ class TestDatabaseManagerSecurity(unittest.TestCase):
     def setUp(self) -> None:
         self.db_manager = DatabaseManager()
 
-    @patch('src.drivers.postgresql.create_engine')
-    def test_secure_postgresql_connection(
-        self, mock_create_engine: MagicMock
-    ) -> None:
+    @patch("src.drivers.postgresql.create_engine")
+    def test_secure_postgresql_connection(self, mock_create_engine: MagicMock) -> None:
         """Test that PostgreSQL connections use secure practices."""
         mock_engine = MagicMock()
         mock_create_engine.return_value = mock_engine
@@ -269,7 +263,7 @@ class TestDatabaseManagerSecurity(unittest.TestCase):
             port=5432,
             database="testdb",
             username="testuser",
-            password="testpass"
+            password="testpass",
         )
 
         self.assertTrue(result)
@@ -292,14 +286,10 @@ class TestDatabaseManagerSecurity(unittest.TestCase):
 
         # Test with invalid schema name (contains semicolon)
         with self.assertRaises(ValueError):
-            self.db_manager.sample_table_data(
-                "valid_table", "invalid;schema", limit=10
-            )
+            self.db_manager.sample_table_data("valid_table", "invalid;schema", limit=10)
 
-    @patch('src.database_manager.sql_validator')
-    def test_sql_validation_integration(
-        self, mock_validator: MagicMock
-    ) -> None:
+    @patch("src.database_manager.sql_validator")
+    def test_sql_validation_integration(self, mock_validator: MagicMock) -> None:
         """Test that SQL validation is integrated into query execution."""
         # Set up engine mock to pass the connection check
         self.db_manager.engine = MagicMock()
@@ -308,7 +298,7 @@ class TestDatabaseManagerSecurity(unittest.TestCase):
         mock_validator.validate_query.return_value = {
             "is_safe": False,
             "issues": ["Potential SQL injection"],
-            "risk_level": "critical"
+            "risk_level": "critical",
         }
 
         result = self.db_manager.validate_sql_syntax(
@@ -323,13 +313,13 @@ class TestDatabaseManagerSecurity(unittest.TestCase):
 class TestSecurityAuditing(unittest.TestCase):
     """Test security auditing functionality."""
 
-    @patch('src.security.logger')
+    @patch("src.security.logger")
     def test_security_event_logging(self, mock_logger: MagicMock) -> None:
         """Test that security events are properly logged."""
         audit_log_security_event(
             "test_security_event",
             {"user": "testuser", "action": "attempted_injection"},
-            SecurityLevel.HIGH
+            SecurityLevel.HIGH,
         )
 
         # Verify that warning was logged
@@ -340,19 +330,13 @@ class TestSecurityAuditing(unittest.TestCase):
         self.assertIn("test_security_event", log_message)
         self.assertIn("high", log_message)
 
-    @patch('src.security.logger')
-    def test_sensitive_data_redaction_in_audit(
-        self, mock_logger: MagicMock
-    ) -> None:
+    @patch("src.security.logger")
+    def test_sensitive_data_redaction_in_audit(self, mock_logger: MagicMock) -> None:
         """Test that sensitive data is redacted in audit logs."""
         audit_log_security_event(
             "credential_test",
-            {
-                "username": "testuser",
-                "password": "secret123",
-                "host": "localhost"
-            },
-            SecurityLevel.MEDIUM
+            {"username": "testuser", "password": "secret123", "host": "localhost"},
+            SecurityLevel.MEDIUM,
         )
 
         log_message = mock_logger.warning.call_args[0][0]
@@ -366,5 +350,5 @@ class TestSecurityAuditing(unittest.TestCase):
         self.assertIn("localhost", log_message)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -11,24 +11,20 @@ import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import OperationalError, DatabaseError
+from sqlalchemy.exc import DatabaseError, OperationalError
 
-from .constants import (
-    IDENTIFIER_PATTERN,
-    DEFAULT_SAMPLE_LIMIT,
-    DB_SQLGLOT_DIALECTS,
-)
+from .constants import DB_SQLGLOT_DIALECTS, DEFAULT_SAMPLE_LIMIT, IDENTIFIER_PATTERN
 from .security import (
     SecureCredentialManager,
-    sql_validator,
-    analyze_sql_statement,
-    identifier_validator,
-    audit_log_security_event,
     SecurityLevel,
+    analyze_sql_statement,
+    audit_log_security_event,
+    identifier_validator,
+    sql_validator,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,9 +34,11 @@ logger = logging.getLogger(__name__)
 # Data classes (imported by many modules - must stay here)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ColumnInfo:
     """Information about a database column."""
+
     name: str
     data_type: str
     is_nullable: bool
@@ -54,6 +52,7 @@ class ColumnInfo:
 @dataclass
 class TableInfo:
     """Information about a database table."""
+
     name: str
     schema: str
     columns: List[ColumnInfo]
@@ -97,6 +96,7 @@ class TableInfo:
 # DatabaseManager - orchestrator
 # ---------------------------------------------------------------------------
 
+
 class DatabaseManager:
     """Manages database connections and schema analysis with enhanced reliability and security.
 
@@ -127,7 +127,6 @@ class DatabaseManager:
         self._cache_ttl = 300  # 5 minutes
         self._connection_id: Optional[str] = None
 
-
     # ------------------------------------------------------------------
     # Cache helpers
     # ------------------------------------------------------------------
@@ -138,7 +137,7 @@ class DatabaseManager:
 
     def _is_cache_valid(self, cache_entry: Dict) -> bool:
         """Check if cache entry is still valid."""
-        return time.time() - cache_entry.get('timestamp', 0) < self._cache_ttl
+        return time.time() - cache_entry.get("timestamp", 0) < self._cache_ttl
 
     def _get_from_cache(self, cache_key: str) -> Optional[Any]:
         """Get value from cache if valid."""
@@ -146,32 +145,33 @@ class DatabaseManager:
             entry = self._metadata_cache[cache_key]
             if self._is_cache_valid(entry):
                 logger.debug(f"Cache hit for {cache_key}")
-                return entry['data']
+                return entry["data"]
             else:
                 del self._metadata_cache[cache_key]
         return None
 
     def _store_in_cache(self, cache_key: str, data: Any) -> None:
         """Store data in cache with timestamp."""
-        self._metadata_cache[cache_key] = {
-            'data': data,
-            'timestamp': time.time()
-        }
+        self._metadata_cache[cache_key] = {"data": data, "timestamp": time.time()}
         logger.debug(f"Cached data for {cache_key}")
 
     # ------------------------------------------------------------------
     # SQL / identifier helpers
     # ------------------------------------------------------------------
 
-    def _log_sql_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> None:
+    def _log_sql_query(
+        self, query: str, params: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Log SQL query with parameters for debugging."""
         db_type = self.connection_info.get("type", "unknown")
         if params:
             safe_params = {
-                k: '***' if 'password' in k.lower() or 'secret' in k.lower() else v
+                k: "***" if "password" in k.lower() or "secret" in k.lower() else v
                 for k, v in params.items()
             }
-            logger.info(f"\U0001f50d {db_type.upper()} SQL QUERY: {query} | PARAMS: {safe_params}")
+            logger.info(
+                f"\U0001f50d {db_type.upper()} SQL QUERY: {query} | PARAMS: {safe_params}"
+            )
         else:
             logger.info(f"\U0001f50d {db_type.upper()} SQL QUERY: {query}")
 
@@ -198,7 +198,7 @@ class DatabaseManager:
         Handles both -- (line comments) and /* */ (block comments) at the
         beginning of queries.
         """
-        lines = sql_query.split('\n')
+        lines = sql_query.split("\n")
         result_lines = []
         in_block_comment = False
 
@@ -206,8 +206,8 @@ class DatabaseManager:
             line = original_line.strip()
 
             if in_block_comment:
-                if '*/' in line:
-                    after_comment = line.split('*/', 1)[1].strip()
+                if "*/" in line:
+                    after_comment = line.split("*/", 1)[1].strip()
                     in_block_comment = False
                     if after_comment:
                         result_lines.append(after_comment)
@@ -216,12 +216,12 @@ class DatabaseManager:
             if not line:
                 continue
 
-            if line.startswith('--'):
+            if line.startswith("--"):
                 continue
 
-            if line.startswith('/*'):
-                if '*/' in line:
-                    after_comment = line.split('*/', 1)[1].strip()
+            if line.startswith("/*"):
+                if "*/" in line:
+                    after_comment = line.split("*/", 1)[1].strip()
                     if after_comment:
                         result_lines.append(after_comment)
                         break
@@ -235,7 +235,7 @@ class DatabaseManager:
                 result_lines.extend(lines[remaining_index:])
             break
 
-        return '\n'.join(result_lines).strip()
+        return "\n".join(result_lines).strip()
 
     def _escape_sql_literal(self, value: str) -> str:
         """Escape a value for safe use inside a single-quoted SQL literal."""
@@ -245,7 +245,7 @@ class DatabaseManager:
         """Quote and escape a Dremio identifier or path safely."""
         if identifier is None:
             return ""
-        parts = [p for p in str(identifier).split('.') if p != ""]
+        parts = [p for p in str(identifier).split(".") if p != ""]
         if not parts:
             return ""
         escaped_parts = [part.replace('"', '""') for part in parts]
@@ -257,9 +257,9 @@ class DatabaseManager:
 
     def _sync_engine_from_driver(self):
         """Keep legacy ``self.engine`` attribute in sync with the active driver."""
-        if self._driver and hasattr(self._driver, 'engine'):
+        if self._driver and hasattr(self._driver, "engine"):
             self.engine = self._driver.engine
-            self.metadata = getattr(self._driver, 'metadata', None)
+            self.metadata = getattr(self._driver, "metadata", None)
         else:
             self.engine = None
             self.metadata = None
@@ -291,23 +291,35 @@ class DatabaseManager:
             return
 
         logger.debug(f"_ensure_connection: engine exists: {self.engine is not None}")
-        logger.debug(f"_ensure_connection: last_params available: {self._last_connection_params is not None}")
+        logger.debug(
+            f"_ensure_connection: last_params available: {self._last_connection_params is not None}"
+        )
 
         if not self.engine:
             if self._last_connection_params:
-                logger.info("No engine found, reconnecting to database using stored parameters")
+                logger.info(
+                    "No engine found, reconnecting to database using stored parameters"
+                )
                 self._reconnect()
             else:
-                raise RuntimeError("No database connection established and no connection parameters available")
+                raise RuntimeError(
+                    "No database connection established and no connection parameters available"
+                )
         elif not self._test_connection():
             if self._last_connection_params:
                 logger.info("Connection health check failed, reconnecting to database")
                 self._reconnect()
             else:
-                logger.error("Connection unhealthy but no reconnection parameters available")
-                raise RuntimeError("Database connection is unhealthy and cannot be restored")
+                logger.error(
+                    "Connection unhealthy but no reconnection parameters available"
+                )
+                raise RuntimeError(
+                    "Database connection is unhealthy and cannot be restored"
+                )
 
-        logger.debug(f"_ensure_connection: final engine state: {self.engine is not None}")
+        logger.debug(
+            f"_ensure_connection: final engine state: {self.engine is not None}"
+        )
 
     def _reconnect(self):
         """Reconnect to the database using stored parameters."""
@@ -317,33 +329,48 @@ class DatabaseManager:
         params = self._last_connection_params
         if params["type"] == "postgresql":
             success = self.connect_postgresql(
-                params["host"], params["port"], params["database"],
-                params["username"], params["password"],
+                params["host"],
+                params["port"],
+                params["database"],
+                params["username"],
+                params["password"],
             )
         elif params["type"] == "snowflake":
             success = self.connect_snowflake(
-                params["account"], params["username"], params["password"],
-                params["warehouse"], params["database"], params.get("schema", "PUBLIC"),
+                params["account"],
+                params["username"],
+                params["password"],
+                params["warehouse"],
+                params["database"],
+                params.get("schema", "PUBLIC"),
             )
         elif params["type"] == "clickhouse":
             success = self.connect_clickhouse(
-                params["host"], params["port"], params["database"],
-                params.get("username", "default"), params.get("password", ""),
-                params.get("protocol", "http"), params.get("secure", False),
+                params["host"],
+                params["port"],
+                params["database"],
+                params.get("username", "default"),
+                params.get("password", ""),
+                params.get("protocol", "http"),
+                params.get("secure", False),
             )
         elif params["type"] == "dremio":
             if params.get("uri") and params.get("pat"):
                 success = self.connect_dremio(uri=params["uri"], pat=params["pat"])
             else:
                 success = self.connect_dremio(
-                    params.get("host"), params.get("port"),
-                    params.get("username"), params.get("password"),
+                    params.get("host"),
+                    params.get("port"),
+                    params.get("username"),
+                    params.get("password"),
                     params.get("ssl", True),
                 )
         elif params["type"] == "bigquery":
             success = self.connect_bigquery(
-                params["project_id"], params.get("dataset", ""),
-                params.get("credentials_path"), params.get("credentials_json"),
+                params["project_id"],
+                params.get("dataset", ""),
+                params.get("credentials_path"),
+                params.get("credentials_json"),
             )
         elif params["type"] == "duckdb":
             success = self.connect_duckdb(
@@ -353,18 +380,25 @@ class DatabaseManager:
             )
         elif params["type"] == "databricks":
             success = self.connect_databricks(
-                params["server_hostname"], params["http_path"],
-                params["access_token"], params.get("catalog", "hive_metastore"),
+                params["server_hostname"],
+                params["http_path"],
+                params["access_token"],
+                params.get("catalog", "hive_metastore"),
                 params.get("schema", "default"),
             )
         elif params["type"] == "mysql":
             success = self.connect_mysql(
-                params["host"], params["port"], params["database"],
-                params["username"], params["password"],
+                params["host"],
+                params["port"],
+                params["database"],
+                params["username"],
+                params["password"],
                 params.get("charset", "utf8mb4"),
             )
         else:
-            raise RuntimeError(f"Unsupported database type for reconnection: {params['type']}")
+            raise RuntimeError(
+                f"Unsupported database type for reconnection: {params['type']}"
+            )
 
         if not success:
             raise RuntimeError(f"Failed to reconnect to {params['type']} database")
@@ -399,18 +433,23 @@ class DatabaseManager:
                         except Exception as reconnect_error:
                             logger.error(f"Reconnection failed: {reconnect_error}")
                     else:
-                        logger.error("No connection parameters available for reconnection")
+                        logger.error(
+                            "No connection parameters available for reconnection"
+                        )
                         break
 
         logger.error(f"All connection attempts failed. Last error: {last_exception}")
-        raise RuntimeError(f"Database connection failed after {max_retries} attempts: {last_exception}")
+        raise RuntimeError(
+            f"Database connection failed after {max_retries} attempts: {last_exception}"
+        )
 
     # ------------------------------------------------------------------
     # connect_* methods - instantiate the appropriate driver
     # ------------------------------------------------------------------
 
-    def connect_postgresql(self, host: str, port: int, database: str,
-                           username: str, password: str) -> bool:
+    def connect_postgresql(
+        self, host: str, port: int, database: str, username: str, password: str
+    ) -> bool:
         """Connect to PostgreSQL database with enhanced security and reliability."""
         from .drivers.postgresql import PostgreSQLDriver
 
@@ -419,8 +458,11 @@ class DatabaseManager:
             max_overflow=self._max_overflow,
         )
         success = driver.connect(
-            host=host, port=port, database=database,
-            username=username, password=password,
+            host=host,
+            port=port,
+            database=database,
+            username=username,
+            password=password,
         )
         if success:
             self._driver = driver
@@ -448,9 +490,16 @@ class DatabaseManager:
             }
         return success
 
-    def connect_snowflake(self, account: str, username: str, password: str,
-                          warehouse: str, database: str, schema: str = "PUBLIC",
-                          role: str = "PUBLIC") -> bool:
+    def connect_snowflake(
+        self,
+        account: str,
+        username: str,
+        password: str,
+        warehouse: str,
+        database: str,
+        schema: str = "PUBLIC",
+        role: str = "PUBLIC",
+    ) -> bool:
         """Connect to Snowflake database with enhanced security and reliability."""
         from .drivers.snowflake import SnowflakeDriver
 
@@ -459,8 +508,13 @@ class DatabaseManager:
             max_overflow=self._max_overflow,
         )
         success = driver.connect(
-            account=account, username=username, password=password,
-            warehouse=warehouse, database=database, schema=schema, role=role,
+            account=account,
+            username=username,
+            password=password,
+            warehouse=warehouse,
+            database=database,
+            schema=schema,
+            role=role,
         )
         if success:
             self._driver = driver
@@ -488,10 +542,16 @@ class DatabaseManager:
             }
         return success
 
-    def connect_clickhouse(self, host: str, port: int = 8123,
-                           database: str = "default", username: str = "default",
-                           password: str = "", protocol: str = "http",
-                           secure: bool = False) -> bool:
+    def connect_clickhouse(
+        self,
+        host: str,
+        port: int = 8123,
+        database: str = "default",
+        username: str = "default",
+        password: str = "",
+        protocol: str = "http",
+        secure: bool = False,
+    ) -> bool:
         """Connect to ClickHouse database via SQLAlchemy."""
         from .drivers.clickhouse import ClickHouseDriver
 
@@ -500,9 +560,13 @@ class DatabaseManager:
             max_overflow=self._max_overflow,
         )
         success = driver.connect(
-            host=host, port=port, database=database,
-            username=username, password=password,
-            protocol=protocol, secure=secure,
+            host=host,
+            port=port,
+            database=database,
+            username=username,
+            password=password,
+            protocol=protocol,
+            secure=secure,
         )
         if success:
             self._driver = driver
@@ -532,10 +596,16 @@ class DatabaseManager:
             }
         return success
 
-    def connect_dremio(self, host: str = None, port: int = None,
-                       username: str = None, password: str = None,
-                       ssl: bool = False, uri: str = None,
-                       pat: str = None) -> bool:
+    def connect_dremio(
+        self,
+        host: str = None,
+        port: int = None,
+        username: str = None,
+        password: str = None,
+        ssl: bool = False,
+        uri: str = None,
+        pat: str = None,
+    ) -> bool:
         """Connect to Dremio using REST API instead of PostgreSQL protocol."""
         from .drivers.dremio import DremioDriver
 
@@ -547,8 +617,13 @@ class DatabaseManager:
 
         driver = DremioDriver()
         success = driver.connect(
-            host=host, port=port, username=username,
-            password=password, ssl=ssl, uri=uri, pat=pat,
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            ssl=ssl,
+            uri=uri,
+            pat=pat,
         )
         if success:
             self._driver = driver
@@ -596,8 +671,13 @@ class DatabaseManager:
                 }
         return success
 
-    def connect_bigquery(self, project_id: str, dataset: str = "",
-                        credentials_path: str = None, credentials_json: str = None) -> bool:
+    def connect_bigquery(
+        self,
+        project_id: str,
+        dataset: str = "",
+        credentials_path: str = None,
+        credentials_json: str = None,
+    ) -> bool:
         """Connect to Google BigQuery."""
         from .drivers.bigquery import BigQueryDriver
 
@@ -634,8 +714,12 @@ class DatabaseManager:
             }
         return success
 
-    def connect_duckdb(self, database_path: str = ":memory:",
-                      motherduck_token: str = None, read_only: bool = False) -> bool:
+    def connect_duckdb(
+        self,
+        database_path: str = ":memory:",
+        motherduck_token: str = None,
+        read_only: bool = False,
+    ) -> bool:
         """Connect to DuckDB or MotherDuck."""
         from .drivers.duckdb import DuckDBDriver
 
@@ -672,9 +756,14 @@ class DatabaseManager:
             }
         return success
 
-    def connect_databricks(self, server_hostname: str, http_path: str,
-                          access_token: str, catalog: str = "hive_metastore",
-                          schema: str = "default") -> bool:
+    def connect_databricks(
+        self,
+        server_hostname: str,
+        http_path: str,
+        access_token: str,
+        catalog: str = "hive_metastore",
+        schema: str = "default",
+    ) -> bool:
         """Connect to Databricks SQL."""
         from .drivers.databricks import DatabricksDriver
 
@@ -715,8 +804,15 @@ class DatabaseManager:
             }
         return success
 
-    def connect_mysql(self, host: str, port: int, database: str,
-                      username: str, password: str, charset: str = "utf8mb4") -> bool:
+    def connect_mysql(
+        self,
+        host: str,
+        port: int,
+        database: str,
+        username: str,
+        password: str,
+        charset: str = "utf8mb4",
+    ) -> bool:
         """Connect to MySQL 8.0+ or MariaDB 10.5+ database.
 
         Args:
@@ -842,8 +938,9 @@ class DatabaseManager:
                 log_sql=self._log_sql_query,
             )
 
-    def analyze_table(self, table_name: str,
-                      schema_name: Optional[str] = None) -> Optional[TableInfo]:
+    def analyze_table(
+        self, table_name: str, schema_name: Optional[str] = None
+    ) -> Optional[TableInfo]:
         """Analyze a specific table and return detailed information."""
         logger.debug(
             f"analyze_table: Starting analysis of {table_name}, "
@@ -881,9 +978,12 @@ class DatabaseManager:
     # Sample & query (delegated to driver with validation layer)
     # ------------------------------------------------------------------
 
-    def sample_table_data(self, table_name: str,
-                          schema_name: Optional[str] = None,
-                          limit: int = DEFAULT_SAMPLE_LIMIT) -> List[Dict[str, Any]]:
+    def sample_table_data(
+        self,
+        table_name: str,
+        schema_name: Optional[str] = None,
+        limit: int = DEFAULT_SAMPLE_LIMIT,
+    ) -> List[Dict[str, Any]]:
         """Sample data from a table for analysis with enhanced validation."""
         # Dremio REST bypasses engine check
         if not self._dremio_rest_connection:
@@ -927,9 +1027,9 @@ class DatabaseManager:
         }
 
         if not security_validation.get("is_safe", False):
-            validation_result["error"] = (
-                f"Security validation failed: {'; '.join(security_validation['issues'])}"
-            )
+            validation_result[
+                "error"
+            ] = f"Security validation failed: {'; '.join(security_validation['issues'])}"
             validation_result["error_type"] = "security_error"
             audit_log_security_event(
                 "sql_injection_attempt",
@@ -963,25 +1063,27 @@ class DatabaseManager:
 
             if parsed["parsed"]:
                 if not parsed["single_statement"]:
-                    validation_result["error"] = "Multiple SQL statements not allowed for security"
+                    validation_result[
+                        "error"
+                    ] = "Multiple SQL statements not allowed for security"
                     validation_result["error_type"] = "security_error"
                     validation_result["suggestions"].append(
                         "Split multiple statements into separate requests"
                     )
                     return validation_result
                 if parsed["query_type"] == "WRITE":
-                    validation_result["error"] = (
-                        f"Destructive operations not allowed: {', '.join(parsed['write_operations'])}"
-                    )
+                    validation_result[
+                        "error"
+                    ] = f"Destructive operations not allowed: {', '.join(parsed['write_operations'])}"
                     validation_result["error_type"] = "forbidden_operation"
                     validation_result["suggestions"].append(
                         "Use SELECT queries for data retrieval only"
                     )
                     return validation_result
                 if parsed["query_type"] == "UNKNOWN":
-                    validation_result["error"] = (
-                        "Only SELECT, CTE, and metadata queries are allowed"
-                    )
+                    validation_result[
+                        "error"
+                    ] = "Only SELECT, CTE, and metadata queries are allowed"
                     validation_result["error_type"] = "query_type_error"
                     validation_result["suggestions"].append(
                         "Start your query with SELECT, WITH, EXPLAIN, or SHOW"
@@ -991,46 +1093,58 @@ class DatabaseManager:
             else:
                 # Fallback: parser could not handle this SQL (dialect quirk) —
                 # use the legacy string heuristics so valid queries still pass.
-                query_without_comments = self._strip_leading_sql_comments(query_stripped)
+                query_without_comments = self._strip_leading_sql_comments(
+                    query_stripped
+                )
                 query_upper = query_without_comments.upper()
 
-                if ';' in query_stripped[:-1]:
-                    validation_result["error"] = "Multiple SQL statements not allowed for security"
+                if ";" in query_stripped[:-1]:
+                    validation_result[
+                        "error"
+                    ] = "Multiple SQL statements not allowed for security"
                     validation_result["error_type"] = "security_error"
                     validation_result["suggestions"].append(
                         "Split multiple statements into separate requests"
                     )
                     return validation_result
 
-                if query_upper.startswith('SELECT'):
+                if query_upper.startswith("SELECT"):
                     validation_result["query_type"] = "SELECT"
-                elif query_upper.startswith('WITH'):
+                elif query_upper.startswith("WITH"):
                     validation_result["query_type"] = "CTE_SELECT"
-                    if 'SELECT' not in query_upper:
+                    if "SELECT" not in query_upper:
                         validation_result["warnings"].append(
                             "CTE should end with SELECT statement"
                         )
-                elif query_upper.startswith(('EXPLAIN', 'DESCRIBE', 'DESC', 'SHOW')):
+                elif query_upper.startswith(("EXPLAIN", "DESCRIBE", "DESC", "SHOW")):
                     validation_result["query_type"] = "METADATA"
                 else:
                     dangerous_ops = [
-                        'DROP', 'DELETE', 'TRUNCATE', 'ALTER',
-                        'CREATE', 'INSERT', 'UPDATE', 'MERGE',
+                        "DROP",
+                        "DELETE",
+                        "TRUNCATE",
+                        "ALTER",
+                        "CREATE",
+                        "INSERT",
+                        "UPDATE",
+                        "MERGE",
                     ]
-                    detected_ops = [op for op in dangerous_ops if query_upper.startswith(op)]
+                    detected_ops = [
+                        op for op in dangerous_ops if query_upper.startswith(op)
+                    ]
                     if detected_ops:
-                        validation_result["error"] = (
-                            f"Destructive operations not allowed: {', '.join(detected_ops)}"
-                        )
+                        validation_result[
+                            "error"
+                        ] = f"Destructive operations not allowed: {', '.join(detected_ops)}"
                         validation_result["error_type"] = "forbidden_operation"
                         validation_result["suggestions"].append(
                             "Use SELECT queries for data retrieval only"
                         )
                         return validation_result
                     else:
-                        validation_result["error"] = (
-                            "Only SELECT, CTE, and metadata queries are allowed"
-                        )
+                        validation_result[
+                            "error"
+                        ] = "Only SELECT, CTE, and metadata queries are allowed"
                         validation_result["error_type"] = "query_type_error"
                         validation_result["suggestions"].append(
                             "Start your query with SELECT, WITH, EXPLAIN, or SHOW"
@@ -1056,7 +1170,7 @@ class DatabaseManager:
                 tables = set()
                 for pattern in table_patterns:
                     matches = re.findall(pattern, query_stripped, re.IGNORECASE)
-                    tables.update(match.strip('"\'`[]') for match in matches)
+                    tables.update(match.strip("\"'`[]") for match in matches)
 
                 validation_result["affected_tables"] = list(tables)
 
@@ -1102,7 +1216,7 @@ class DatabaseManager:
             return result_data
 
         # Apply safety limits
-        query_to_execute = sql_query.strip().rstrip(';')
+        query_to_execute = sql_query.strip().rstrip(";")
         query_upper = query_to_execute.upper()
 
         needs_limit = (
@@ -1116,7 +1230,9 @@ class DatabaseManager:
         if needs_limit:
             query_to_execute = f"{query_to_execute} LIMIT {limit}"
             limit_applied = True
-            warnings.append(f"Safety LIMIT {limit} applied to prevent large result sets")
+            warnings.append(
+                f"Safety LIMIT {limit} applied to prevent large result sets"
+            )
 
         # Delegate execution to driver
         result_data = self._driver.execute_sql_query(query_to_execute, limit)
@@ -1126,9 +1242,8 @@ class DatabaseManager:
         result_data["warnings"] = warnings + result_data["warnings"]
         if limit_applied:
             result_data["limit_applied"] = True
-            if (
-                result_data.get("row_count", 0) == limit
-                and result_data.get("limit_applied")
+            if result_data.get("row_count", 0) == limit and result_data.get(
+                "limit_applied"
             ):
                 result_data["warnings"].append(
                     f"Result set may be truncated at {limit} rows"
@@ -1155,7 +1270,7 @@ class DatabaseManager:
     def disconnect(self):
         """Close the database connection and clear stored parameters."""
         # Clear metadata cache
-        if hasattr(self, '_metadata_cache'):
+        if hasattr(self, "_metadata_cache"):
             self._metadata_cache.clear()
 
         # Disconnect driver

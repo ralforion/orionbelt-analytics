@@ -31,7 +31,7 @@ DEFAULT_R2RML_BASE_IRI = "http://mycompany.com/"
 DEFAULT_OUTPUT_DIR = "tmp"
 
 # Identifier validation pattern
-IDENTIFIER_PATTERN = r'^[a-zA-Z_][a-zA-Z0-9_-]*$'
+IDENTIFIER_PATTERN = r"^[a-zA-Z_][a-zA-Z0-9_-]*$"
 
 # Canonical database metadata: maps each supported db_type to its sqlglot
 # dialect. This is the single source of truth — add a database here once and

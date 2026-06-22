@@ -1,16 +1,17 @@
 """Tests for ontology quality improvements."""
 
 import unittest
-from rdflib import Literal
-from rdflib.namespace import RDF, OWL, XSD
 
+from rdflib import Literal
+from rdflib.namespace import OWL, RDF, XSD
+
+from src.database_manager import ColumnInfo, TableInfo
 from src.ontology_generator import (
+    DenormalizedField,
+    InferredRelationship,
     OntologyGenerator,
     OntologyQualityReport,
-    InferredRelationship,
-    DenormalizedField
 )
-from src.database_manager import TableInfo, ColumnInfo
 
 
 class TestInferredRelationships(unittest.TestCase):
@@ -31,18 +32,18 @@ class TestInferredRelationships(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="countryname",
                     data_type="VARCHAR(100)",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
-                )
+                    is_foreign_key=False,
+                ),
             ],
             primary_keys=["countryid"],
-            foreign_keys=[]
+            foreign_keys=[],
         )
 
         # Suppliers table (has implicit FK to countries)
@@ -55,14 +56,14 @@ class TestInferredRelationships(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="suppliername",
                     data_type="VARCHAR(100)",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 # This should be inferred as FK to countries
                 ColumnInfo(
@@ -70,11 +71,11 @@ class TestInferredRelationships(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=True,
                     is_primary_key=False,
-                    is_foreign_key=False  # Not declared as FK
-                )
+                    is_foreign_key=False,  # Not declared as FK
+                ),
             ],
             primary_keys=["supplierid"],
-            foreign_keys=[]  # No declared FKs
+            foreign_keys=[],  # No declared FKs
         )
 
         # Orders table with declared FK
@@ -87,7 +88,7 @@ class TestInferredRelationships(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="supplierid",
@@ -96,15 +97,17 @@ class TestInferredRelationships(unittest.TestCase):
                     is_primary_key=False,
                     is_foreign_key=True,
                     foreign_key_table="suppliers",
-                    foreign_key_column="supplierid"
-                )
+                    foreign_key_column="supplierid",
+                ),
             ],
             primary_keys=["orderid"],
-            foreign_keys=[{
-                "column": "supplierid",
-                "referenced_table": "suppliers",
-                "referenced_column": "supplierid"
-            }]
+            foreign_keys=[
+                {
+                    "column": "supplierid",
+                    "referenced_table": "suppliers",
+                    "referenced_column": "supplierid",
+                }
+            ],
         )
 
         return [countries, suppliers, orders]
@@ -132,7 +135,8 @@ class TestInferredRelationships(unittest.TestCase):
 
         # Should NOT find orders.supplierid -> suppliers (already declared)
         supplier_rels = [
-            r for r in inferred
+            r
+            for r in inferred
             if r.source_table == "orders" and r.target_table == "suppliers"
         ]
         self.assertEqual(len(supplier_rels), 0)
@@ -174,15 +178,12 @@ class TestInferredRelationships(unittest.TestCase):
         rel_uri = base["suppliers_has_countries"]
 
         # Should be an ObjectProperty
-        self.assertIn(
-            (rel_uri, RDF.type, OWL.ObjectProperty),
-            self.generator.graph
-        )
+        self.assertIn((rel_uri, RDF.type, OWL.ObjectProperty), self.generator.graph)
 
         # Should be marked as inferred
         self.assertIn(
             (rel_uri, oba_ns.isInferredRelationship, Literal(True)),
-            self.generator.graph
+            self.generator.graph,
         )
 
 
@@ -251,11 +252,11 @@ class TestSemanticTypeMapping(unittest.TestCase):
                     data_type="DOUBLE PRECISION",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 )
             ],
             primary_keys=[],
-            foreign_keys=[]
+            foreign_keys=[],
         )
 
         self.generator.generate_from_schema([table])
@@ -284,18 +285,18 @@ class TestDenormalizedFieldDetection(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="clientname",
                     data_type="VARCHAR(100)",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
-                )
+                    is_foreign_key=False,
+                ),
             ],
             primary_keys=["clientid"],
-            foreign_keys=[]
+            foreign_keys=[],
         )
 
         # Shipments with denormalized client name
@@ -308,7 +309,7 @@ class TestDenormalizedFieldDetection(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="clientid",
@@ -317,7 +318,7 @@ class TestDenormalizedFieldDetection(unittest.TestCase):
                     is_primary_key=False,
                     is_foreign_key=True,
                     foreign_key_table="clients",
-                    foreign_key_column="clientid"
+                    foreign_key_column="clientid",
                 ),
                 # Denormalized field - stores client name redundantly
                 ColumnInfo(
@@ -325,15 +326,17 @@ class TestDenormalizedFieldDetection(unittest.TestCase):
                     data_type="VARCHAR(100)",
                     is_nullable=True,
                     is_primary_key=False,
-                    is_foreign_key=False
-                )
+                    is_foreign_key=False,
+                ),
             ],
             primary_keys=["shipmentid"],
-            foreign_keys=[{
-                "column": "clientid",
-                "referenced_table": "clients",
-                "referenced_column": "clientid"
-            }]
+            foreign_keys=[
+                {
+                    "column": "clientid",
+                    "referenced_table": "clients",
+                    "referenced_column": "clientid",
+                }
+            ],
         )
 
         return [clients, shipments]
@@ -361,11 +364,11 @@ class TestDenormalizedFieldDetection(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 )
             ],
             primary_keys=[],
-            foreign_keys=[]
+            foreign_keys=[],
         )
 
         clients = TableInfo(
@@ -373,7 +376,7 @@ class TestDenormalizedFieldDetection(unittest.TestCase):
             schema="public",
             columns=[],
             primary_keys=[],
-            foreign_keys=[]
+            foreign_keys=[],
         )
 
         denormalized = self.generator._detect_denormalized_fields([tables, clients])
@@ -394,12 +397,11 @@ class TestDenormalizedFieldDetection(unittest.TestCase):
         prop_uri = base["shipments_shipmentclient"]
 
         self.assertIn(
-            (prop_uri, oba_ns.isDenormalized, Literal(True)),
-            self.generator.graph
+            (prop_uri, oba_ns.isDenormalized, Literal(True)), self.generator.graph
         )
         self.assertIn(
             (prop_uri, oba_ns.likelySourceTable, Literal("clients")),
-            self.generator.graph
+            self.generator.graph,
         )
 
 
@@ -420,18 +422,18 @@ class TestEnrichmentCompleteness(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="username",
                     data_type="VARCHAR(50)",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
-                )
+                    is_foreign_key=False,
+                ),
             ],
             primary_keys=["userid"],
-            foreign_keys=[]
+            foreign_keys=[],
         )
 
         self.generator.generate_from_schema([table])
@@ -456,12 +458,12 @@ class TestEnrichmentCompleteness(unittest.TestCase):
                     is_nullable=False,
                     is_primary_key=True,
                     is_foreign_key=False,
-                    comment="Unique user identifier"
+                    comment="Unique user identifier",
                 )
             ],
             primary_keys=["userid"],
             foreign_keys=[],
-            comment="Table storing user information"
+            comment="Table storing user information",
         )
 
         self.generator.generate_from_schema([table])
@@ -487,7 +489,7 @@ class TestQualityReport(unittest.TestCase):
                     target_table="countries",
                     target_column="id",
                     confidence="high",
-                    pattern_matched="suffix_id"
+                    pattern_matched="suffix_id",
                 )
             ],
             denormalized_fields=[
@@ -496,13 +498,13 @@ class TestQualityReport(unittest.TestCase):
                     column="clientname",
                     likely_source_table="clients",
                     data_type="VARCHAR(100)",
-                    warning="Test warning"
+                    warning="Test warning",
                 )
             ],
             type_overrides=[
                 {"column": "quantity", "overridden_xsd_type": "xsd:integer"}
             ],
-            warnings=["Test warning"]
+            warnings=["Test warning"],
         )
 
         result = report.to_dict()
@@ -538,18 +540,18 @@ class TestTPCDSPatterns(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="c_customer_id",
                     data_type="VARCHAR(16)",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
-                )
+                    is_foreign_key=False,
+                ),
             ],
             primary_keys=["c_customer_sk"],
-            foreign_keys=[]
+            foreign_keys=[],
         )
 
         item = TableInfo(
@@ -561,18 +563,18 @@ class TestTPCDSPatterns(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="i_item_id",
                     data_type="VARCHAR(16)",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
-                )
+                    is_foreign_key=False,
+                ),
             ],
             primary_keys=["i_item_sk"],
-            foreign_keys=[]
+            foreign_keys=[],
         )
 
         store_sales = TableInfo(
@@ -584,25 +586,25 @@ class TestTPCDSPatterns(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=True,
                     is_primary_key=False,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="ss_customer_sk",
                     data_type="INTEGER",
                     is_nullable=True,
                     is_primary_key=False,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="ss_item_sk",
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
-                )
+                    is_foreign_key=False,
+                ),
             ],
             primary_keys=[],
-            foreign_keys=[]
+            foreign_keys=[],
         )
 
         return [customer, item, store_sales]
@@ -636,10 +638,7 @@ class TestTPCDSPatterns(unittest.TestCase):
 
         # Check STORE_SALES -> CUSTOMER relationship
         rel_uri = base["STORE_SALES_has_CUSTOMER"]
-        self.assertIn(
-            (rel_uri, RDF.type, OWL.ObjectProperty),
-            self.generator.graph
-        )
+        self.assertIn((rel_uri, RDF.type, OWL.ObjectProperty), self.generator.graph)
 
 
 class TestTableLookup(unittest.TestCase):
@@ -651,7 +650,13 @@ class TestTableLookup(unittest.TestCase):
     def test_singular_to_plural(self):
         """Test finding plural table from singular name."""
         tables = [
-            TableInfo(name="countries", schema="public", columns=[], primary_keys=[], foreign_keys=[])
+            TableInfo(
+                name="countries",
+                schema="public",
+                columns=[],
+                primary_keys=[],
+                foreign_keys=[],
+            )
         ]
         self.generator._build_table_lookup(tables)
 
@@ -663,7 +668,13 @@ class TestTableLookup(unittest.TestCase):
     def test_plural_to_singular(self):
         """Test finding singular table from plural name."""
         tables = [
-            TableInfo(name="user", schema="public", columns=[], primary_keys=[], foreign_keys=[])
+            TableInfo(
+                name="user",
+                schema="public",
+                columns=[],
+                primary_keys=[],
+                foreign_keys=[],
+            )
         ]
         self.generator._build_table_lookup(tables)
 
@@ -675,7 +686,13 @@ class TestTableLookup(unittest.TestCase):
     def test_direct_match(self):
         """Test direct name matching."""
         tables = [
-            TableInfo(name="products", schema="public", columns=[], primary_keys=[], foreign_keys=[])
+            TableInfo(
+                name="products",
+                schema="public",
+                columns=[],
+                primary_keys=[],
+                foreign_keys=[],
+            )
         ]
         self.generator._build_table_lookup(tables)
 
@@ -686,7 +703,13 @@ class TestTableLookup(unittest.TestCase):
     def test_no_match(self):
         """Test when no matching table exists."""
         tables = [
-            TableInfo(name="orders", schema="public", columns=[], primary_keys=[], foreign_keys=[])
+            TableInfo(
+                name="orders",
+                schema="public",
+                columns=[],
+                primary_keys=[],
+                foreign_keys=[],
+            )
         ]
         self.generator._build_table_lookup(tables)
 
@@ -694,5 +717,5 @@ class TestTableLookup(unittest.TestCase):
         self.assertIsNone(result)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

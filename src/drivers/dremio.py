@@ -6,11 +6,11 @@ from typing import Any, Dict, List, Optional
 from ..async_utils import run_async
 from ..constants import (
     CONNECTION_TIMEOUT,
-    QUERY_TIMEOUT,
-    DREMIO_SYSTEM_SCHEMAS,
-    MIN_SAMPLE_LIMIT,
-    MAX_SAMPLE_LIMIT,
     DEFAULT_SAMPLE_LIMIT,
+    DREMIO_SYSTEM_SCHEMAS,
+    MAX_SAMPLE_LIMIT,
+    MIN_SAMPLE_LIMIT,
+    QUERY_TIMEOUT,
 )
 from ..database_manager import ColumnInfo, TableInfo
 from .base import DatabaseDriver
@@ -165,10 +165,9 @@ class DremioDriver(DatabaseDriver):
             return True
 
         except Exception as e:
-            logger.error(
-                f"\u274c Failed to connect to Dremio: {type(e).__name__}: {e}"
-            )
+            logger.error(f"\u274c Failed to connect to Dremio: {type(e).__name__}: {e}")
             import traceback
+
             logger.error(f"Full traceback: {traceback.format_exc()}")
             self._rest_connection = None
             return False
@@ -200,21 +199,14 @@ class DremioDriver(DatabaseDriver):
                             top_level = path[0]
                             full_path = ".".join(path)
 
-                            if (
-                                top_level
-                                and top_level not in DREMIO_SYSTEM_SCHEMAS
-                            ):
+                            if top_level and top_level not in DREMIO_SYSTEM_SCHEMAS:
                                 schemas.add(top_level)
 
-                            if (
-                                len(path) > 1
-                                and full_path not in DREMIO_SYSTEM_SCHEMAS
-                            ):
+                            if len(path) > 1 and full_path not in DREMIO_SYSTEM_SCHEMAS:
                                 schemas.add(full_path)
 
                             if (
-                                catalog_type
-                                in ("CONTAINER", "SPACE", "SOURCE")
+                                catalog_type in ("CONTAINER", "SPACE", "SOURCE")
                                 and catalog_id
                             ):
                                 await self._add_dremio_children_recursive(
@@ -233,9 +225,7 @@ class DremioDriver(DatabaseDriver):
                     schema_list = sorted(list(schemas))
 
                     if not schema_list:
-                        logger.info(
-                            "No catalogs found, using default Dremio spaces"
-                        )
+                        logger.info("No catalogs found, using default Dremio spaces")
                         schema_list = ["@dremio", "Samples"]
 
                     logger.info(
@@ -260,9 +250,7 @@ class DremioDriver(DatabaseDriver):
     ):
         """Recursively add children of Dremio containers to the schemas set."""
         if current_depth >= max_depth:
-            logger.debug(
-                f"Max depth {max_depth} reached for path: {'.'.join(path)}"
-            )
+            logger.debug(f"Max depth {max_depth} reached for path: {'.'.join(path)}")
             return
 
         try:
@@ -289,10 +277,7 @@ class DremioDriver(DatabaseDriver):
                     "HOME",
                 ):
                     full_child_path = ".".join(child_path)
-                    if (
-                        full_child_path
-                        and full_child_path not in DREMIO_SYSTEM_SCHEMAS
-                    ):
+                    if full_child_path and full_child_path not in DREMIO_SYSTEM_SCHEMAS:
                         schemas.add(full_child_path)
                         logger.debug(
                             f"Added child schema (type: {child_type}): "
@@ -314,9 +299,7 @@ class DremioDriver(DatabaseDriver):
                     )
 
         except Exception as e:
-            logger.warning(
-                f"Failed to get children for path {'.'.join(path)}: {e}"
-            )
+            logger.warning(f"Failed to get children for path {'.'.join(path)}: {e}")
 
     def get_tables(self, schema_name: Optional[str] = None) -> List[str]:
         async def fetch_tables():
@@ -325,14 +308,14 @@ class DremioDriver(DatabaseDriver):
                     if not schema_name:
                         query = (
                             "SELECT TABLE_SCHEMA, TABLE_NAME "
-                            "FROM INFORMATION_SCHEMA.\"TABLES\" "
+                            'FROM INFORMATION_SCHEMA."TABLES" '
                             "WHERE TABLE_TYPE = 'TABLE'"
                         )
                     else:
                         safe_schema = self._escape_sql_literal(schema_name)
                         query = (
                             f"SELECT TABLE_NAME "
-                            f"FROM INFORMATION_SCHEMA.\"TABLES\" "
+                            f'FROM INFORMATION_SCHEMA."TABLES" '
                             f"WHERE TABLE_SCHEMA = '{safe_schema}' "
                             f"AND TABLE_TYPE = 'TABLE'"
                         )
@@ -349,9 +332,7 @@ class DremioDriver(DatabaseDriver):
                                 table_name = row.get("TABLE_NAME", "")
                                 if schema and schema != "INFORMATION_SCHEMA":
                                     table_name = (
-                                        f"{schema}.{table_name}"
-                                        if table_name
-                                        else ""
+                                        f"{schema}.{table_name}" if table_name else ""
                                     )
                             if table_name:
                                 tables.append(table_name)
@@ -378,9 +359,7 @@ class DremioDriver(DatabaseDriver):
                     # If schema_name isn't provided but table_name is qualified
                     if not schema_name and "." in str(table_name):
                         parts = str(table_name).split(".")
-                        schema_name = (
-                            ".".join(parts[:-1]) if len(parts) > 1 else None
-                        )
+                        schema_name = ".".join(parts[:-1]) if len(parts) > 1 else None
                         table_name = parts[-1]
 
                     if schema_name:
@@ -437,9 +416,7 @@ class DremioDriver(DatabaseDriver):
                     )
 
             except Exception as e:
-                logger.error(
-                    f"Failed to analyze Dremio table {table_name}: {e}"
-                )
+                logger.error(f"Failed to analyze Dremio table {table_name}: {e}")
                 return None
 
         return run_async(fetch_table_info(), timeout=CONNECTION_TIMEOUT)
@@ -470,9 +447,7 @@ class DremioDriver(DatabaseDriver):
                     "error", "Unknown Dremio validation error"
                 )
                 validation_result["database_error"] = error_msg
-                validation_result["error"] = (
-                    f"Dremio syntax error: {error_msg}"
-                )
+                validation_result["error"] = f"Dremio syntax error: {error_msg}"
                 validation_result["error_type"] = "syntax_error"
 
                 if (
@@ -535,9 +510,7 @@ class DremioDriver(DatabaseDriver):
                 result_data["columns"] = query_result.get("columns", [])
                 result_data["row_count"] = query_result.get("row_count", 0)
 
-                total_rows = query_result.get(
-                    "total_rows", result_data["row_count"]
-                )
+                total_rows = query_result.get("total_rows", result_data["row_count"])
                 if total_rows > limit:
                     result_data["limit_applied"] = True
                     result_data["warnings"].append(
@@ -550,15 +523,11 @@ class DremioDriver(DatabaseDriver):
                     f"{execution_time:.2f}ms"
                 )
             else:
-                result_data["error"] = query_result.get(
-                    "error", "Unknown Dremio error"
-                )
+                result_data["error"] = query_result.get("error", "Unknown Dremio error")
                 result_data["error_type"] = query_result.get(
                     "error_type", "dremio_error"
                 )
-                logger.error(
-                    f"Dremio query failed: {result_data['error']}"
-                )
+                logger.error(f"Dremio query failed: {result_data['error']}")
 
         except Exception as e:
             result_data["error"] = f"Dremio execution error: {str(e)}"
@@ -588,9 +557,7 @@ class DremioDriver(DatabaseDriver):
                             f".{self._quote_dremio_identifier(table_name)}"
                         )
                     else:
-                        full_table_name = self._quote_dremio_identifier(
-                            table_name
-                        )
+                        full_table_name = self._quote_dremio_identifier(table_name)
 
                     query = f"SELECT * FROM {full_table_name} LIMIT {limit}"
                     result = await client.execute_query(query, limit)
@@ -608,12 +575,8 @@ class DremioDriver(DatabaseDriver):
                         )
 
             except Exception as e:
-                logger.error(
-                    f"Error sampling Dremio table {table_name}: {e}"
-                )
-                raise RuntimeError(
-                    f"Error sampling Dremio table: {str(e)}"
-                )
+                logger.error(f"Error sampling Dremio table {table_name}: {e}")
+                raise RuntimeError(f"Error sampling Dremio table: {str(e)}")
 
         return run_async(fetch_sample(), timeout=CONNECTION_TIMEOUT)
 

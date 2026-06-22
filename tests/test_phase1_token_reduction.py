@@ -8,8 +8,9 @@ Verifies that:
 4. No functionality regression
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 import src.main as main_module
 from src.main import mcp
@@ -23,7 +24,7 @@ def _get_tool_fn(name):
     This helper normalizes access.
     """
     obj = getattr(main_module, name)
-    return getattr(obj, 'fn', obj)
+    return getattr(obj, "fn", obj)
 
 
 def _get_tool_docstring(name):
@@ -48,7 +49,7 @@ class TestPhase1TokenReduction:
         expected_skills = [
             "fan-trap-prevention.md",
             "sql-best-practices.md",
-            "chart-examples.md"
+            "chart-examples.md",
         ]
 
         for skill in expected_skills:
@@ -111,7 +112,9 @@ class TestPhase1TokenReduction:
 
         # Should be much shorter than original 2,427 tokens (~9,708 chars)
         # Current condensed version is ~2,100 chars which is well under the original
-        assert len(instructions) < 3000, f"Instructions not condensed: {len(instructions)} chars"
+        assert (
+            len(instructions) < 3000
+        ), f"Instructions not condensed: {len(instructions)} chars"
 
         # Should contain skill references
         assert "/fan-trap-prevention" in instructions
@@ -120,33 +123,39 @@ class TestPhase1TokenReduction:
 
     def test_execute_sql_query_docstring_condensed(self):
         """Verify execute_sql_query docstring is condensed."""
-        docstring = _get_tool_docstring('execute_sql_query')
+        docstring = _get_tool_docstring("execute_sql_query")
         assert docstring is not None, "execute_sql_query has no docstring"
 
         # Original was ~12,804 chars, should be much smaller now
-        assert len(docstring) < 4000, f"execute_sql_query docstring not condensed: {len(docstring)} chars"
+        assert (
+            len(docstring) < 4000
+        ), f"execute_sql_query docstring not condensed: {len(docstring)} chars"
 
         # Should mention fan-trap or validation
         assert "fan-trap" in docstring.lower() or "validation" in docstring.lower()
 
     def test_generate_chart_docstring_condensed(self):
         """Verify generate_chart docstring is condensed."""
-        docstring = _get_tool_docstring('generate_chart')
+        docstring = _get_tool_docstring("generate_chart")
         assert docstring is not None, "generate_chart has no docstring"
 
         # Original was ~8,502 chars, should be much smaller now
-        assert len(docstring) < 3000, f"generate_chart docstring not condensed: {len(docstring)} chars"
+        assert (
+            len(docstring) < 3000
+        ), f"generate_chart docstring not condensed: {len(docstring)} chars"
 
         # Should mention chart-related content
         assert "chart" in docstring.lower()
 
     def test_discover_schema_docstring_condensed(self):
         """Verify discover_schema docstring is condensed."""
-        docstring = _get_tool_docstring('discover_schema')
+        docstring = _get_tool_docstring("discover_schema")
         assert docstring is not None, "discover_schema has no docstring"
 
         # Original was ~3,775 chars, should be much smaller now
-        assert len(docstring) < 3000, f"discover_schema docstring not condensed: {len(docstring)} chars"
+        assert (
+            len(docstring) < 3000
+        ), f"discover_schema docstring not condensed: {len(docstring)} chars"
 
     @pytest.mark.asyncio
     async def test_all_tools_still_registered(self):
@@ -167,7 +176,7 @@ class TestPhase1TokenReduction:
             "load_my_ontology",
             "sample_table_data",
             "execute_sql_query",
-            "generate_chart"
+            "generate_chart",
         ]
 
         for tool in expected_tools:
@@ -186,7 +195,6 @@ class TestPhase1TokenReduction:
         assert new_lines < 5000, f"main.py seems too large: {new_lines} lines"
 
 
-
 class TestFunctionalityPreserved:
     """Test that all functionality still works after changes."""
 
@@ -194,6 +202,7 @@ class TestFunctionalityPreserved:
         """Verify MCP server imports successfully."""
         try:
             from src.main import mcp
+
             assert mcp is not None
         except ImportError as e:
             pytest.fail(f"Failed to import MCP server: {e}")
@@ -202,6 +211,7 @@ class TestFunctionalityPreserved:
         """Verify DatabaseManager imports successfully."""
         try:
             from src.database_manager import DatabaseManager
+
             assert DatabaseManager is not None
         except ImportError as e:
             pytest.fail(f"Failed to import DatabaseManager: {e}")
@@ -210,6 +220,7 @@ class TestFunctionalityPreserved:
         """Verify OntologyGenerator imports successfully."""
         try:
             from src.ontology_generator import OntologyGenerator
+
             assert OntologyGenerator is not None
         except ImportError as e:
             pytest.fail(f"Failed to import OntologyGenerator: {e}")
@@ -224,7 +235,7 @@ class TestFunctionalityPreserved:
             "discover_schema",
             "generate_ontology",
             "execute_sql_query",
-            "generate_chart"
+            "generate_chart",
         ]
 
         # All should be async functions (accessed via the underlying .fn when needed)

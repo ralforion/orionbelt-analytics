@@ -7,7 +7,7 @@ import os
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 class SecurityLevel(Enum):
     """Security levels for different operations."""
+
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -31,12 +32,12 @@ class SecureCredentialManager:
     def __init__(self, master_password: Optional[str] = None):
         """Initialize with optional master password for encryption."""
         self._cipher: Optional[Fernet] = None
-        self._salt_file = Path.home() / '.mcp_credential_salt'
+        self._salt_file = Path.home() / ".mcp_credential_salt"
 
         # Try to get master password from environment if not provided
         if not master_password:
             load_dotenv()
-            master_password = os.getenv('MCP_MASTER_PASSWORD')
+            master_password = os.getenv("MCP_MASTER_PASSWORD")
 
         if master_password:
             self._initialize_encryption(master_password)
@@ -60,12 +61,10 @@ class SecureCredentialManager:
         """Get existing salt or create a new one with secure permissions."""
         try:
             if self._salt_file.exists():
-                with open(self._salt_file, 'rb') as f:
+                with open(self._salt_file, "rb") as f:
                     salt = f.read()
                     if len(salt) == 16:  # Validate salt length
-                        logger.debug(
-                            "Using existing salt for credential encryption"
-                        )
+                        logger.debug("Using existing salt for credential encryption")
                         return salt
                     else:
                         logger.warning("Invalid salt file, creating new salt")
@@ -74,7 +73,7 @@ class SecureCredentialManager:
             salt = os.urandom(16)
 
             # Write salt with secure permissions
-            with open(self._salt_file, 'wb') as f:
+            with open(self._salt_file, "wb") as f:
                 f.write(salt)
 
             # Set restrictive permissions (owner read/write only)
@@ -101,7 +100,7 @@ class SecureCredentialManager:
         safe_creds = self._sanitize_credentials(credentials)
         logger.debug(
             "Encrypting credentials for %s connection",
-            safe_creds.get('type', 'unknown')
+            safe_creds.get("type", "unknown"),
         )
 
         json_data = json.dumps(credentials).encode()
@@ -116,24 +115,29 @@ class SecureCredentialManager:
         try:
             decoded_data = base64.urlsafe_b64decode(encrypted_data.encode())
             decrypted_data = self._cipher.decrypt(decoded_data)
-            credentials_dict: Dict[str, Any] = json.loads(
-                decrypted_data.decode()
-            )
+            credentials_dict: Dict[str, Any] = json.loads(decrypted_data.decode())
             return credentials_dict
         except Exception as e:
             logger.error("Failed to decrypt credentials: %s", e)
             raise ValueError("Invalid or corrupted credential data") from e
 
-    def _sanitize_credentials(
-        self, credentials: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _sanitize_credentials(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
         """Remove sensitive information for logging."""
         sensitive_keys = {
-            'password', 'passwd', 'pwd', 'secret', 'token', 'key', 'pat', 'api_key'
+            "password",
+            "passwd",
+            "pwd",
+            "secret",
+            "token",
+            "key",
+            "pat",
+            "api_key",
         }
         # Check if key contains any sensitive substrings
         return {
-            k: '***REDACTED***' if any(sens in k.lower() for sens in sensitive_keys) and v else v
+            k: "***REDACTED***"
+            if any(sens in k.lower() for sens in sensitive_keys) and v
+            else v
             for k, v in credentials.items()
         }
 
@@ -144,48 +148,49 @@ class SQLInjectionValidator:
     # Dangerous SQL patterns that should be blocked
     DANGEROUS_PATTERNS = [
         # Multiple statements with DDL/DML
-        r';.*(?:DROP|DELETE|INSERT|UPDATE|CREATE|ALTER|TRUNCATE)',
+        r";.*(?:DROP|DELETE|INSERT|UPDATE|CREATE|ALTER|TRUNCATE)",
         # Classic injection patterns (but NOT blocking UNION/UNION ALL)
-        r'OR\s+1\s*=\s*1',  # Always true conditions
-        r'AND\s+1\s*=\s*1',  # Always true conditions
+        r"OR\s+1\s*=\s*1",  # Always true conditions
+        r"AND\s+1\s*=\s*1",  # Always true conditions
         r"OR\s+'[^']*'\s*=\s*'[^']*'",  # String-based always true
         # SQL comment injection patterns
         r"'[^']*'\s*--",  # String literal followed by SQL comment (injection pattern)
-        r'/\*.*\*/',  # Block comments (can be used to obfuscate or inject)
+        r"/\*.*\*/",  # Block comments (can be used to obfuscate or inject)
         # Multiple semicolons or semicolon with dangerous operations
-        r';\s*;',  # Multiple semicolons
-        r';\s*(?:DROP|DELETE|INSERT|UPDATE|CREATE|ALTER|TRUNCATE)',  # Semicolon followed by DDL/DML
+        r";\s*;",  # Multiple semicolons
+        r";\s*(?:DROP|DELETE|INSERT|UPDATE|CREATE|ALTER|TRUNCATE)",  # Semicolon followed by DDL/DML
         # SQL Server command execution
-        r'xp_cmdshell|sp_executesql|exec\s*\(',
+        r"xp_cmdshell|sp_executesql|exec\s*\(",
         # MySQL file operations
-        r'load_file|into\s+outfile|into\s+dumpfile',
+        r"load_file|into\s+outfile|into\s+dumpfile",
         # PostgreSQL file operations
-        r'pg_read_file|copy.*from|copy.*to',
+        r"pg_read_file|copy.*from|copy.*to",
         # System tables that shouldn't be accessed directly in normal queries
-        r'information_schema\.(?:user_privileges|schema_privileges|table_privileges)',
-        r'pg_catalog\.pg_authid|pg_catalog\.pg_user_mapping',
+        r"information_schema\.(?:user_privileges|schema_privileges|table_privileges)",
+        r"pg_catalog\.pg_authid|pg_catalog\.pg_user_mapping",
         # Dangerous UNION queries attempting to extract sensitive data
-        r'UNION\s+(?:ALL\s+)?SELECT\s+.*(?:password|pwd|secret|token|key|admin)',
+        r"UNION\s+(?:ALL\s+)?SELECT\s+.*(?:password|pwd|secret|token|key|admin)",
     ]
 
     # Safe SQL patterns that are allowed
     # Optional comment prefix: allows -- comments and /* */ comments at start of query
     # Note: After _clean_query(), newlines become spaces, so -- comment ends at next SQL keyword
     # Pattern matches: optional (-- followed by non-SQL text, or /* ... */) followed by whitespace
-    _OPT_COMMENT = r'^(?:--[^;]*?\s+)?'
+    _OPT_COMMENT = r"^(?:--[^;]*?\s+)?"
 
     SAFE_PATTERNS = [
         # Basic SELECT queries with JOINs (with optional leading comments)
-        _OPT_COMMENT + r'SELECT\s+.+\s+FROM\s+.+$',
+        _OPT_COMMENT + r"SELECT\s+.+\s+FROM\s+.+$",
         # CTEs (WITH clauses) - now more permissive for complex queries
-        _OPT_COMMENT + r'WITH\s+.+\s+SELECT\s+.+$',
+        _OPT_COMMENT + r"WITH\s+.+\s+SELECT\s+.+$",
         # Metadata queries
         _OPT_COMMENT + r'DESCRIBE\s+[\w\."]+$',
         _OPT_COMMENT + r'DESC\s+[\w\."]+$',
-        _OPT_COMMENT + r'SHOW\s+(?:TABLES|COLUMNS|DATABASES|SCHEMAS)(?:\s+FROM\s+[\w\."]+)?$',
-        _OPT_COMMENT + r'EXPLAIN\s+.+$',
+        _OPT_COMMENT
+        + r'SHOW\s+(?:TABLES|COLUMNS|DATABASES|SCHEMAS)(?:\s+FROM\s+[\w\."]+)?$',
+        _OPT_COMMENT + r"EXPLAIN\s+.+$",
         # UNION queries (both UNION and UNION ALL) - Note: Will still be blocked if dangerous patterns match
-        r'.+\s+UNION\s+(?:ALL\s+)?SELECT\s+.+',
+        r".+\s+UNION\s+(?:ALL\s+)?SELECT\s+.+",
     ]
 
     def __init__(self) -> None:
@@ -205,7 +210,7 @@ class SQLInjectionValidator:
                 "is_safe": False,
                 "risk_level": SecurityLevel.HIGH.value,
                 "issues": ["Empty query"],
-                "sanitized_query": ""
+                "sanitized_query": "",
             }
 
         # Clean up query for analysis
@@ -217,8 +222,7 @@ class SQLInjectionValidator:
         for pattern in self.compiled_dangerous:
             if pattern.search(cleaned_query):
                 issues.append(
-                    f"Potentially dangerous SQL pattern detected: "
-                    f"{pattern.pattern}"
+                    f"Potentially dangerous SQL pattern detected: " f"{pattern.pattern}"
                 )
                 risk_level = SecurityLevel.CRITICAL
 
@@ -228,7 +232,7 @@ class SQLInjectionValidator:
         # detection is the parser-based analyze_sql_statement() gate; this is a
         # coarse first filter.
         literal_stripped = re.sub(r"'(?:[^']|'')*'", "''", cleaned_query)
-        statements = [s.strip() for s in literal_stripped.split(';') if s.strip()]
+        statements = [s.strip() for s in literal_stripped.split(";") if s.strip()]
         if len(statements) > 1:
             issues.append("Multiple SQL statements not allowed")
             risk_level = SecurityLevel.CRITICAL
@@ -249,7 +253,7 @@ class SQLInjectionValidator:
             "is_safe": is_safe,
             "risk_level": risk_level.value,
             "issues": issues,
-            "sanitized_query": self._sanitize_query_for_logging(cleaned_query)
+            "sanitized_query": self._sanitize_query_for_logging(cleaned_query),
         }
 
     def _clean_query(self, sql_query: str) -> str:
@@ -258,13 +262,11 @@ class SQLInjectionValidator:
         cleaned = sql_query.strip()
 
         # Normalize whitespace
-        cleaned = re.sub(r'\s+', ' ', cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned)
 
         return cleaned
 
-    def _sanitize_query_for_logging(
-        self, sql_query: str, max_length: int = 200
-    ) -> str:
+    def _sanitize_query_for_logging(self, sql_query: str, max_length: int = 200) -> str:
         """Sanitize SQL query for safe logging."""
         # Remove potential sensitive data patterns
         sanitized = re.sub(r"'[^']*'", "'***'", sql_query)  # String literals
@@ -282,7 +284,7 @@ class IdentifierValidator:
     """Validates database identifiers to prevent injection."""
 
     # Valid identifier pattern (letters, numbers, underscores only - no hyphens)
-    VALID_IDENTIFIER = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+    VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
     @classmethod
     def validate_identifier(cls, identifier: str) -> bool:
@@ -302,7 +304,7 @@ class IdentifierValidator:
         if not identifier:
             return False
 
-        parts = identifier.split('.')
+        parts = identifier.split(".")
         if len(parts) > 3:  # database.schema.table max
             return False
 
@@ -315,11 +317,11 @@ class IdentifierValidator:
             return ""
 
         # Remove invalid characters (including hyphens)
-        sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', identifier)
+        sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", identifier)
 
         # Ensure starts with letter or underscore
-        if sanitized and not sanitized[0].isalpha() and sanitized[0] != '_':
-            sanitized = '_' + sanitized
+        if sanitized and not sanitized[0].isalpha() and sanitized[0] != "_":
+            sanitized = "_" + sanitized
 
         # Limit length
         return sanitized[:128]
@@ -328,19 +330,26 @@ class IdentifierValidator:
 def audit_log_security_event(
     event_type: str,
     details: Dict[str, Any],
-    risk_level: SecurityLevel = SecurityLevel.MEDIUM
+    risk_level: SecurityLevel = SecurityLevel.MEDIUM,
 ) -> None:
     """Log security-related events for auditing."""
     # Sanitize details before logging
     safe_details = {}
     sensitive_keys = {
-        'password', 'passwd', 'pwd', 'secret', 'token', 'key', 'pat', 'api_key'
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "token",
+        "key",
+        "pat",
+        "api_key",
     }
 
     for key, value in details.items():
         # Check if key contains any sensitive substring
         if any(sens in key.lower() for sens in sensitive_keys):
-            safe_details[key] = '***REDACTED***'
+            safe_details[key] = "***REDACTED***"
         else:
             safe_details[key] = value
 
@@ -352,8 +361,14 @@ def audit_log_security_event(
 
 #: AST node types that mutate data or schema — never allowed for analytics SQL.
 _WRITE_EXPRESSIONS = (
-    "Insert", "Update", "Delete", "Merge",
-    "Create", "Drop", "Alter", "TruncateTable",
+    "Insert",
+    "Update",
+    "Delete",
+    "Merge",
+    "Create",
+    "Drop",
+    "Alter",
+    "TruncateTable",
 )
 
 
@@ -391,7 +406,9 @@ def analyze_sql_statement(sql_query: str, dialect: str = "postgres") -> Dict[str
     }
 
     try:
-        statements = [s for s in sqlglot.parse(sql_query, dialect=dialect) if s is not None]
+        statements = [
+            s for s in sqlglot.parse(sql_query, dialect=dialect) if s is not None
+        ]
     except Exception as e:  # sqlglot.errors.ParseError and friends
         result["error"] = f"SQL parse error: {e}"
         return result
@@ -406,7 +423,9 @@ def analyze_sql_statement(sql_query: str, dialect: str = "postgres") -> Dict[str
         return result
 
     stmt = statements[0]
-    write_types = tuple(getattr(exp, name) for name in _WRITE_EXPRESSIONS if hasattr(exp, name))
+    write_types = tuple(
+        getattr(exp, name) for name in _WRITE_EXPRESSIONS if hasattr(exp, name)
+    )
 
     # Detect write/DDL nodes anywhere in the tree (including nested in CTEs).
     writes = sorted({type(n).__name__ for n in stmt.find_all(*write_types)})
@@ -417,7 +436,9 @@ def analyze_sql_statement(sql_query: str, dialect: str = "postgres") -> Dict[str
         return result
 
     if isinstance(stmt, (exp.Select, exp.Union)):
-        result["query_type"] = "CTE_SELECT" if stmt.find(exp.With) is not None else "SELECT"
+        result["query_type"] = (
+            "CTE_SELECT" if stmt.find(exp.With) is not None else "SELECT"
+        )
         result["is_read_only"] = True
     elif isinstance(stmt, (exp.Describe, exp.Show, exp.Command)):
         # EXPLAIN parses to Command in sqlglot; DESCRIBE/SHOW are metadata.
@@ -427,7 +448,9 @@ def analyze_sql_statement(sql_query: str, dialect: str = "postgres") -> Dict[str
         result["error"] = "Only SELECT, CTE, and metadata queries are allowed"
         return result
 
-    result["affected_tables"] = sorted({t.name for t in stmt.find_all(exp.Table) if t.name})
+    result["affected_tables"] = sorted(
+        {t.name for t in stmt.find_all(exp.Table) if t.name}
+    )
     return result
 
 

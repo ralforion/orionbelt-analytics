@@ -96,8 +96,25 @@ from .resources import register_resources  # noqa: E402
 register_resources(mcp)
 
 
+from .handler_context import HandlerContext  # noqa: E402
+
+# --- Handler imports (Task 7: C1/S2) ---
+# Imported here to keep the handler layer decoupled from server setup.
+from .handlers import chart as _h_chart  # noqa: E402
+from .handlers import connection as _h_connection  # noqa: E402
+from .handlers import graphrag as _h_graphrag  # noqa: E402
+from .handlers import ontology as _h_ontology  # noqa: E402
+from .handlers import query as _h_query  # noqa: E402
+from .handlers import rdf as _h_rdf  # noqa: E402
+from .handlers import schema as _h_schema  # noqa: E402
+from .handlers import workspace as _h_workspace  # noqa: E402
+
 # --- Session state and per-request helpers (extracted to server_state) ---
-from .server_state import (  # noqa: E402
+# ServerState and _calculate_schema_hash are re-exported for tests that import
+# them from main; F401 is suppressed for this re-export block.
+from .server_state import (  # noqa: E402, F401
+    ServerState,
+    _calculate_schema_hash,
     _clear_session_state,
     _get_connection_fingerprint,
     _server_state,
@@ -109,9 +126,6 @@ from .server_state import (  # noqa: E402
     get_session_safe_filename,
     load_ontology_from_session,
 )
-
-# Re-exported for backward compatibility with tests that import these from main.
-from .server_state import ServerState, _calculate_schema_hash  # noqa: E402,F401
 
 # --- Constrained MCP parameter types (extracted to tool_types) ---
 from .tool_types import (  # noqa: E402
@@ -125,19 +139,6 @@ from .tool_types import (  # noqa: E402
     _ShortText,
     _Uri,
 )
-
-from .handler_context import HandlerContext  # noqa: E402
-
-# --- Handler imports (Task 7: C1/S2) ---
-# Imported here to keep the handler layer decoupled from server setup.
-from .handlers import chart as _h_chart  # noqa: E402
-from .handlers import connection as _h_connection  # noqa: E402
-from .handlers import graphrag as _h_graphrag  # noqa: E402
-from .handlers import ontology as _h_ontology  # noqa: E402
-from .handlers import query as _h_query  # noqa: E402
-from .handlers import rdf as _h_rdf  # noqa: E402
-from .handlers import schema as _h_schema  # noqa: E402
-from .handlers import workspace as _h_workspace  # noqa: E402
 
 
 def _services() -> HandlerContext:
@@ -185,7 +186,8 @@ async def connect_database(ctx: Context, db_type: _DbType) -> str:
         Connection status with auto-restored workspace summary if available
     """
     return await _h_connection.connect_database(
-        ctx, db_type,
+        ctx,
+        db_type,
         services=_services(),
     )
 
@@ -231,7 +233,9 @@ async def discover_schema(
                      If False, return full schema with all column details.
     """
     return await _h_schema.discover_schema(
-        ctx, schema_name, lightweight,
+        ctx,
+        schema_name,
+        lightweight,
         services=_services(),
     )
 
@@ -254,7 +258,9 @@ async def get_table_details(
         schema_name: Schema containing the table (optional, auto-detected)
     """
     return await _h_schema.get_table_details(
-        ctx, table_name, schema_name,
+        ctx,
+        table_name,
+        schema_name,
         services=_services(),
     )
 
@@ -281,7 +287,12 @@ async def generate_ontology(
         Ontology TTL or status message
     """
     return await _h_ontology.generate_ontology(
-        ctx, schema_info, schema_name, base_uri, auto_persist, graph_uri,
+        ctx,
+        schema_info,
+        schema_name,
+        base_uri,
+        auto_persist,
+        graph_uri,
         services=_services(),
     )
 
@@ -305,7 +316,8 @@ async def suggest_semantic_names(
         Dictionary containing extracted names, analysis results, and instructions
     """
     return await _h_ontology.suggest_semantic_names(
-        ctx, ontology_file,
+        ctx,
+        ontology_file,
         services=_services(),
     )
 
@@ -342,7 +354,10 @@ async def apply_semantic_names(
         save_to_file: Whether to save the updated ontology to a file
     """
     return await _h_ontology.apply_semantic_names(
-        ctx, suggestions, ontology_file, save_to_file,
+        ctx,
+        suggestions,
+        ontology_file,
+        save_to_file,
         services=_services(),
     )
 
@@ -372,7 +387,10 @@ async def load_my_ontology(
         Dictionary with ontology information and status
     """
     return await _h_ontology.load_my_ontology(
-        ctx, import_folder, auto_persist, graph_uri,
+        ctx,
+        import_folder,
+        auto_persist,
+        graph_uri,
         ontology_content=ontology_content,
         file_name=file_name,
         services=_services(),
@@ -398,13 +416,13 @@ async def download_artifact(
     """
     if artifact_type == "ontology":
         return await _h_ontology.download_ontology(
-            ctx, schema_name, source,
+            ctx,
+            schema_name,
+            source,
             services=_services(),
         )
     elif artifact_type == "r2rml":
-        return await _h_ontology.download_r2rml(
-            ctx, schema_name, services=_services()
-        )
+        return await _h_ontology.download_r2rml(ctx, schema_name, services=_services())
     else:
         return create_error_response(
             f"Invalid artifact_type: {artifact_type}. Must be 'ontology' or 'r2rml'.",
@@ -429,7 +447,10 @@ async def sample_table_data(
         limit: Maximum number of rows to return (default: 10, max: 100)
     """
     return await _h_schema.sample_table_data(
-        ctx, table_name, schema_name, limit,
+        ctx,
+        table_name,
+        schema_name,
+        limit,
         services=_services(),
     )
 
@@ -463,7 +484,11 @@ async def execute_sql_query(
         query_intent: Optional natural language description of query intent
     """
     return await _h_query.execute_sql_query(
-        ctx, sql_query, limit, checklist_completed, query_intent,
+        ctx,
+        sql_query,
+        limit,
+        checklist_completed,
+        query_intent,
         services=_services(),
     )
 
@@ -471,7 +496,9 @@ async def execute_sql_query(
 @mcp.tool()
 async def generate_chart(
     ctx: Context,
-    data_source: Union[List[Dict[str, Any]], Annotated[str, Field(max_length=5_000_000)]],
+    data_source: Union[
+        List[Dict[str, Any]], Annotated[str, Field(max_length=5_000_000)]
+    ],
     chart_type: Literal["bar", "line", "scatter", "heatmap"],
     x_column: _Identifier,
     y_column: Optional[Union[_Identifier, List[_Identifier]]] = None,
@@ -497,9 +524,17 @@ async def generate_chart(
         output_format: "interactive" (default, responsive MCP Apps widget) or "image" (saves PNG file)
     """
     return await _h_chart.generate_chart(
-        ctx, data_source, chart_type, x_column, y_column,
-        color_column, title, chart_style,
-        sort_by, sort_order, output_format,
+        ctx,
+        data_source,
+        chart_type,
+        x_column,
+        y_column,
+        color_column,
+        title,
+        chart_style,
+        sort_by,
+        sort_order,
+        output_format,
         services=_services(),
     )
 
@@ -541,7 +576,10 @@ async def save_semantic_model(
         schema_name: Database schema this model is based on (auto-detected if omitted)
     """
     return await _h_workspace.save_semantic_model(
-        ctx, model_yaml, model_name, schema_name,
+        ctx,
+        model_yaml,
+        model_name,
+        schema_name,
         services=_services(),
     )
 
@@ -560,7 +598,8 @@ async def get_semantic_model(
         model_name: Name of the model to retrieve
     """
     return await _h_workspace.get_semantic_model(
-        ctx, model_name,
+        ctx,
+        model_name,
         services=_services(),
     )
 
@@ -579,6 +618,7 @@ async def list_semantic_models(ctx: Context) -> Dict[str, Any]:
 
 
 # --- GraphRAG Tools ---
+
 
 @mcp.tool()
 async def graphrag_search(
@@ -603,16 +643,17 @@ async def graphrag_search(
         Dictionary with search results or schema overview
     """
     if overview:
-        return await _h_graphrag.graphrag_overview(
-            ctx, services=_services()
-        )
+        return await _h_graphrag.graphrag_overview(ctx, services=_services())
     if not query:
         return create_error_response(
             "query parameter is required when overview=False",
             "parameter_error",
         )
     return await _h_graphrag.graphrag_search(
-        ctx, query, top_k, element_type,
+        ctx,
+        query,
+        top_k,
+        element_type,
         services=_services(),
     )
 
@@ -635,7 +676,10 @@ async def graphrag_query_context(
         Optimized context with relevant tables, columns, relationships
     """
     return await _h_graphrag.graphrag_query_context(
-        ctx, query, max_tables, max_columns,
+        ctx,
+        query,
+        max_tables,
+        max_columns,
         services=_services(),
     )
 
@@ -658,7 +702,10 @@ async def graphrag_find_join_path(
         Dictionary with join path specifications
     """
     return await _h_graphrag.graphrag_find_join_path(
-        ctx, from_table, to_table, max_hops,
+        ctx,
+        from_table,
+        to_table,
+        max_hops,
         services=_services(),
     )
 
@@ -686,7 +733,9 @@ async def reachable_from(
         Dictionary with reachable (dimension-capable) tables and per-hop breakdown
     """
     return await _h_graphrag.reachable_from(
-        ctx, table, max_hops,
+        ctx,
+        table,
+        max_hops,
         services=_services(),
     )
 
@@ -712,7 +761,9 @@ async def measurable_from(
         Dictionary with measure-capable tables and per-hop breakdown
     """
     return await _h_graphrag.measurable_from(
-        ctx, table, max_hops,
+        ctx,
+        table,
+        max_hops,
         services=_services(),
     )
 
@@ -744,12 +795,15 @@ async def plan_composite_query(
         per-leg dimension/NULL-pad decomposition
     """
     return await _h_graphrag.plan_composite_query(
-        ctx, facts, dimensions,
+        ctx,
+        facts,
+        dimensions,
         services=_services(),
     )
 
 
 # --- Oxigraph RDF Store & SPARQL Tools ---
+
 
 @mcp.tool()
 async def store_ontology_in_rdf(
@@ -767,7 +821,9 @@ async def store_ontology_in_rdf(
         Status message with triple count
     """
     return await _h_rdf.store_ontology_in_rdf(
-        ctx, schema_name, graph_uri,
+        ctx,
+        schema_name,
+        graph_uri,
         services=_services(),
     )
 
@@ -794,7 +850,9 @@ async def query_sparql(
         Query results (bindings for SELECT, boolean for ASK, Turtle string for CONSTRUCT)
     """
     return await _h_rdf.query_sparql(
-        ctx, sparql_query, timeout_seconds,
+        ctx,
+        sparql_query,
+        timeout_seconds,
         services=_services(),
     )
 
@@ -819,12 +877,17 @@ async def add_rdf_knowledge(
         Confirmation message
     """
     return await _h_rdf.add_rdf_knowledge(
-        ctx, subject, predicate, object, metadata,
+        ctx,
+        subject,
+        predicate,
+        object,
+        metadata,
         services=_services(),
     )
 
 
 # --- Cleanup on shutdown ---
+
 
 def cleanup_server():
     """Clean up server resources."""

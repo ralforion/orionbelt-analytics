@@ -34,9 +34,7 @@ def _read_skill(filename: str) -> str:
     skills_path = get_skills_dir() / filename
     if skills_path.exists():
         return skills_path.read_text()
-    return (
-        f"Skill not found. Please ensure .claude/skills/{filename} exists."
-    )
+    return f"Skill not found. Please ensure .claude/skills/{filename} exists."
 
 
 def _make_skill_loader(filename: str, title: str):

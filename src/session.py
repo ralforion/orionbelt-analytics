@@ -11,7 +11,7 @@ Each MCP session gets its own SessionData instance containing:
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,9 @@ class OntologyState:
         self.r2rml_file: Optional[str] = None
         self.loaded_ontology: Optional[str] = None  # TTL content
         self.loaded_ontology_path: Optional[str] = None  # File path
-        self.obqc_validator: Optional[Any] = None  # OBQCValidator (avoid circular import)
+        self.obqc_validator: Optional[
+            Any
+        ] = None  # OBQCValidator (avoid circular import)
         self.ontology_enriched: bool = False  # True after semantic names applied
 
 
@@ -41,7 +43,9 @@ class SchemaCache:
     """Cached schema analysis results (multi-schema capable)."""
 
     def __init__(self):
-        self._cached_schema: Optional[Dict[str, List[Any]]] = None  # schema_name -> List[TableInfo]
+        self._cached_schema: Optional[
+            Dict[str, List[Any]]
+        ] = None  # schema_name -> List[TableInfo]
         self._last_analyzed_schema: Optional[str] = None
 
     def cache_schema_analysis(self, schema_name: str, tables_info: List[Any]) -> None:
@@ -51,7 +55,9 @@ class SchemaCache:
         cache_key = schema_name or "_default_"
         self._cached_schema[cache_key] = tables_info
         self._last_analyzed_schema = schema_name
-        logger.debug(f"Cached schema analysis for '{cache_key}': {len(tables_info)} tables")
+        logger.debug(
+            f"Cached schema analysis for '{cache_key}': {len(tables_info)} tables"
+        )
 
     def get_cached_schema(self, schema_name: str) -> Optional[List[Any]]:
         """Get cached schema analysis results if available."""
@@ -174,7 +180,9 @@ class SessionData:
         logger.debug(f"Current schema set to '{key}'")
         return self._schema_states[key]
 
-    def get_schema_state(self, schema_name: Optional[str] = None) -> Optional["SchemaState"]:
+    def get_schema_state(
+        self, schema_name: Optional[str] = None
+    ) -> Optional["SchemaState"]:
         """Get SchemaState for a specific or the current schema.
 
         Args:
@@ -189,7 +197,9 @@ class SessionData:
         key = key or "default"
         return self._schema_states.get(key)
 
-    def get_or_create_schema_state(self, schema_name: Optional[str] = None) -> "SchemaState":
+    def get_or_create_schema_state(
+        self, schema_name: Optional[str] = None
+    ) -> "SchemaState":
         """Get or create SchemaState for a specific or the current schema.
 
         If schema_name is None and no current schema is set, uses "default".

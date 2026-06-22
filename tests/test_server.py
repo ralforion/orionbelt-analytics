@@ -1,14 +1,15 @@
 """Comprehensive tests for the OrionBelt Analytics MCP server."""
 
 import json
-import pytest
 import unittest
-from unittest.mock import patch, MagicMock, Mock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
 
 import src.main as main_module
-from src.database_manager import TableInfo, ColumnInfo
-from src.ontology_generator import OntologyGenerator
 from src.config import ConfigManager
+from src.database_manager import ColumnInfo, TableInfo
+from src.ontology_generator import OntologyGenerator
 
 
 def create_mock_context(session_id: str = "test-session-123"):
@@ -40,7 +41,7 @@ class TestMCPTools(unittest.TestCase):
                     is_nullable=False,
                     is_primary_key=True,
                     is_foreign_key=False,
-                    comment="User unique identifier"
+                    comment="User unique identifier",
                 ),
                 ColumnInfo(
                     name="name",
@@ -48,7 +49,7 @@ class TestMCPTools(unittest.TestCase):
                     is_nullable=False,
                     is_primary_key=False,
                     is_foreign_key=False,
-                    comment="User full name"
+                    comment="User full name",
                 ),
                 ColumnInfo(
                     name="email",
@@ -56,13 +57,13 @@ class TestMCPTools(unittest.TestCase):
                     is_nullable=True,
                     is_primary_key=False,
                     is_foreign_key=False,
-                    comment="User email address"
-                )
+                    comment="User email address",
+                ),
             ],
             primary_keys=["id"],
             foreign_keys=[],
             comment="User accounts table",
-            row_count=150
+            row_count=150,
         )
 
         # Sample table info for orders table with foreign key
@@ -75,7 +76,7 @@ class TestMCPTools(unittest.TestCase):
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="user_id",
@@ -84,25 +85,25 @@ class TestMCPTools(unittest.TestCase):
                     is_primary_key=False,
                     is_foreign_key=True,
                     foreign_key_table="users",
-                    foreign_key_column="id"
+                    foreign_key_column="id",
                 ),
                 ColumnInfo(
                     name="total_amount",
                     data_type="DECIMAL(10,2)",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
-                )
+                    is_foreign_key=False,
+                ),
             ],
             primary_keys=["id"],
             foreign_keys=[
                 {
                     "column": "user_id",
                     "referenced_table": "users",
-                    "referenced_column": "id"
+                    "referenced_column": "id",
                 }
             ],
-            row_count=500
+            row_count=500,
         )
 
         # Mock context
@@ -126,7 +127,7 @@ class TestMCPToolsAsync:
                     is_nullable=False,
                     is_primary_key=True,
                     is_foreign_key=False,
-                    comment="User unique identifier"
+                    comment="User unique identifier",
                 ),
                 ColumnInfo(
                     name="name",
@@ -134,7 +135,7 @@ class TestMCPToolsAsync:
                     is_nullable=False,
                     is_primary_key=False,
                     is_foreign_key=False,
-                    comment="User full name"
+                    comment="User full name",
                 ),
                 ColumnInfo(
                     name="email",
@@ -142,13 +143,13 @@ class TestMCPToolsAsync:
                     is_nullable=True,
                     is_primary_key=False,
                     is_foreign_key=False,
-                    comment="User email address"
-                )
+                    comment="User email address",
+                ),
             ],
             primary_keys=["id"],
             foreign_keys=[],
             comment="User accounts table",
-            row_count=150
+            row_count=150,
         )
 
     @pytest.fixture
@@ -163,7 +164,7 @@ class TestMCPToolsAsync:
                     data_type="INTEGER",
                     is_nullable=False,
                     is_primary_key=True,
-                    is_foreign_key=False
+                    is_foreign_key=False,
                 ),
                 ColumnInfo(
                     name="user_id",
@@ -172,25 +173,25 @@ class TestMCPToolsAsync:
                     is_primary_key=False,
                     is_foreign_key=True,
                     foreign_key_table="users",
-                    foreign_key_column="id"
+                    foreign_key_column="id",
                 ),
                 ColumnInfo(
                     name="total_amount",
                     data_type="DECIMAL(10,2)",
                     is_nullable=False,
                     is_primary_key=False,
-                    is_foreign_key=False
-                )
+                    is_foreign_key=False,
+                ),
             ],
             primary_keys=["id"],
             foreign_keys=[
                 {
                     "column": "user_id",
                     "referenced_table": "users",
-                    "referenced_column": "id"
+                    "referenced_column": "id",
                 }
             ],
-            row_count=500
+            row_count=500,
         )
 
     @pytest.fixture
@@ -220,27 +221,29 @@ class TestMCPToolsAsync:
         session.get_last_analyzed_schema = Mock(return_value=None)
         return session
 
-    async def test_connect_database_postgresql_success(self, mock_ctx, mock_session_data):
+    async def test_connect_database_postgresql_success(
+        self, mock_ctx, mock_session_data
+    ):
         """Test successful PostgreSQL connection with session isolation."""
         mock_db_manager = Mock()
         mock_db_manager.connect_postgresql.return_value = True
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-             patch('src.main._get_connection_fingerprint', return_value="test1234abcd"), \
-             patch.dict('os.environ', {
-                 'POSTGRES_HOST': 'localhost',
-                 'POSTGRES_PORT': '5432',
-                 'POSTGRES_DATABASE': 'testdb',
-                 'POSTGRES_USERNAME': 'testuser',
-                 'POSTGRES_PASSWORD': 'testpass'
-             }):
-
-            result = await main_module.connect_database(
-                mock_ctx,
-                db_type="postgresql"
-            )
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ), patch(
+            "src.main._get_connection_fingerprint", return_value="test1234abcd"
+        ), patch.dict(
+            "os.environ",
+            {
+                "POSTGRES_HOST": "localhost",
+                "POSTGRES_PORT": "5432",
+                "POSTGRES_DATABASE": "testdb",
+                "POSTGRES_USERNAME": "testuser",
+                "POSTGRES_PASSWORD": "testpass",
+            },
+        ):
+            result = await main_module.connect_database(mock_ctx, db_type="postgresql")
 
         assert "Successfully connected" in result
         assert "postgresql" in result
@@ -250,57 +253,60 @@ class TestMCPToolsAsync:
             port=5432,
             database="testdb",
             username="testuser",
-            password="testpass"
+            password="testpass",
         )
 
-    async def test_connect_database_postgresql_failure(self, mock_ctx, mock_session_data):
+    async def test_connect_database_postgresql_failure(
+        self, mock_ctx, mock_session_data
+    ):
         """Test PostgreSQL connection failure with proper error handling."""
         mock_db_manager = Mock()
         mock_db_manager.connect_postgresql.return_value = False
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-             patch.dict('os.environ', {
-                 'POSTGRES_HOST': 'localhost',
-                 'POSTGRES_PORT': '5432',
-                 'POSTGRES_DATABASE': 'testdb',
-                 'POSTGRES_USERNAME': 'testuser',
-                 'POSTGRES_PASSWORD': 'wrongpass'
-             }):
-
-            result = await main_module.connect_database(
-                mock_ctx,
-                db_type="postgresql"
-            )
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ), patch.dict(
+            "os.environ",
+            {
+                "POSTGRES_HOST": "localhost",
+                "POSTGRES_PORT": "5432",
+                "POSTGRES_DATABASE": "testdb",
+                "POSTGRES_USERNAME": "testuser",
+                "POSTGRES_PASSWORD": "wrongpass",
+            },
+        ):
+            result = await main_module.connect_database(mock_ctx, db_type="postgresql")
 
         # Error responses are dicts from .to_response()
         error_data = json.loads(result) if isinstance(result, str) else result
         assert error_data["error_type"] == "connection_error"
         assert "Failed to connect" in error_data["error"]
 
-    async def test_connect_database_snowflake_success(self, mock_ctx, mock_session_data):
+    async def test_connect_database_snowflake_success(
+        self, mock_ctx, mock_session_data
+    ):
         """Test successful Snowflake connection."""
         mock_db_manager = Mock()
         mock_db_manager.connect_snowflake.return_value = True
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-             patch('src.main._get_connection_fingerprint', return_value="test5678efgh"), \
-             patch.dict('os.environ', {
-                 'SNOWFLAKE_ACCOUNT': 'test-account',
-                 'SNOWFLAKE_USERNAME': 'testuser',
-                 'SNOWFLAKE_PASSWORD': 'testpass',
-                 'SNOWFLAKE_WAREHOUSE': 'COMPUTE_WH',
-                 'SNOWFLAKE_DATABASE': 'TESTDB',
-                 'SNOWFLAKE_SCHEMA': 'PUBLIC'
-             }):
-
-            result = await main_module.connect_database(
-                mock_ctx,
-                db_type="snowflake"
-            )
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ), patch(
+            "src.main._get_connection_fingerprint", return_value="test5678efgh"
+        ), patch.dict(
+            "os.environ",
+            {
+                "SNOWFLAKE_ACCOUNT": "test-account",
+                "SNOWFLAKE_USERNAME": "testuser",
+                "SNOWFLAKE_PASSWORD": "testpass",
+                "SNOWFLAKE_WAREHOUSE": "COMPUTE_WH",
+                "SNOWFLAKE_DATABASE": "TESTDB",
+                "SNOWFLAKE_SCHEMA": "PUBLIC",
+            },
+        ):
+            result = await main_module.connect_database(mock_ctx, db_type="snowflake")
 
         assert "Successfully connected" in result
         assert "snowflake" in result
@@ -314,27 +320,28 @@ class TestMCPToolsAsync:
         assert "Invalid database type" in error_data["error"]
         assert "oracle" in error_data["error"]
 
-    async def test_connect_database_missing_parameters(self, mock_ctx, mock_session_data):
+    async def test_connect_database_missing_parameters(
+        self, mock_ctx, mock_session_data
+    ):
         """Test connection with missing required environment variables."""
         # Use os.environ.get patching to simulate missing env vars
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('os.getenv') as mock_getenv:
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "os.getenv"
+        ) as mock_getenv:
             # Only return value for POSTGRES_HOST, return None for others
             def getenv_side_effect(key, default=None):
                 env_map = {
-                    'POSTGRES_HOST': 'localhost',
-                    'POSTGRES_PORT': None,
-                    'POSTGRES_DATABASE': None,
-                    'POSTGRES_USERNAME': None,
-                    'POSTGRES_PASSWORD': None,
+                    "POSTGRES_HOST": "localhost",
+                    "POSTGRES_PORT": None,
+                    "POSTGRES_DATABASE": None,
+                    "POSTGRES_USERNAME": None,
+                    "POSTGRES_PASSWORD": None,
                 }
                 return env_map.get(key, default)
+
             mock_getenv.side_effect = getenv_side_effect
 
-            result = await main_module.connect_database(
-                mock_ctx,
-                db_type="postgresql"
-            )
+            result = await main_module.connect_database(mock_ctx, db_type="postgresql")
 
         error_data = json.loads(result) if isinstance(result, str) else result
         assert error_data["error_type"] == "validation_error"
@@ -346,22 +353,21 @@ class TestMCPToolsAsync:
         mock_db_manager.connect_postgresql.side_effect = Exception("Connection error")
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-             patch.dict('os.environ', {
-                 'POSTGRES_HOST': 'localhost',
-                 'POSTGRES_PORT': '5432',
-                 'POSTGRES_DATABASE': 'testdb',
-                 'POSTGRES_USERNAME': 'testuser',
-                 'POSTGRES_PASSWORD': 'testpass'
-             }):
-
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ), patch.dict(
+            "os.environ",
+            {
+                "POSTGRES_HOST": "localhost",
+                "POSTGRES_PORT": "5432",
+                "POSTGRES_DATABASE": "testdb",
+                "POSTGRES_USERNAME": "testuser",
+                "POSTGRES_PASSWORD": "testpass",
+            },
+        ):
             # The function raises exception (no internal error handling)
             with pytest.raises(Exception, match="Connection error"):
-                await main_module.connect_database(
-                    mock_ctx,
-                    db_type="postgresql"
-                )
+                await main_module.connect_database(mock_ctx, db_type="postgresql")
 
     async def test_list_schemas_success(self, mock_ctx, mock_session_data):
         """Test successful schema listing with session isolation."""
@@ -369,9 +375,9 @@ class TestMCPToolsAsync:
         mock_db_manager.get_schemas.return_value = ["public", "private", "analytics"]
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager):
-
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ):
             result = await main_module.list_schemas(mock_ctx)
 
         assert isinstance(result, list)
@@ -386,31 +392,37 @@ class TestMCPToolsAsync:
         mock_db_manager.get_schemas.side_effect = RuntimeError("No database connection")
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager):
-
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ):
             # The function raises exception (no internal error handling)
             with pytest.raises(RuntimeError, match="No database connection"):
                 await main_module.list_schemas(mock_ctx)
 
-    async def test_discover_schema_success(self, mock_ctx, mock_session_data, sample_users_table, sample_orders_table):
+    async def test_discover_schema_success(
+        self, mock_ctx, mock_session_data, sample_users_table, sample_orders_table
+    ):
         """Test successful schema analysis with session isolation."""
         mock_db_manager = Mock()
         mock_db_manager.get_tables.return_value = ["users", "orders"]
         mock_db_manager.analyze_table.side_effect = [
             sample_users_table,
-            sample_orders_table
+            sample_orders_table,
         ]
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-             patch('src.server_state.get_session_id', return_value="test-session"), \
-             patch('src.main.get_session_safe_filename', return_value="test_schema.json"), \
-             patch('builtins.open', MagicMock()), \
-             patch('json.dump'):
-
-            result = await main_module.discover_schema(mock_ctx, "public", lightweight=False)
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ), patch("src.server_state.get_session_id", return_value="test-session"), patch(
+            "src.main.get_session_safe_filename", return_value="test_schema.json"
+        ), patch(
+            "builtins.open", MagicMock()
+        ), patch(
+            "json.dump"
+        ):
+            result = await main_module.discover_schema(
+                mock_ctx, "public", lightweight=False
+            )
 
         assert isinstance(result, dict)
         assert result["schema"] == "public"
@@ -433,14 +445,16 @@ class TestMCPToolsAsync:
         mock_db_manager.get_tables.side_effect = RuntimeError("No database connection")
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager):
-
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ):
             # The function raises exception (no internal error handling)
             with pytest.raises(RuntimeError, match="No database connection"):
                 await main_module.discover_schema(mock_ctx, "public")
 
-    async def test_generate_ontology_success(self, mock_ctx, mock_session_data, sample_users_table):
+    async def test_generate_ontology_success(
+        self, mock_ctx, mock_session_data, sample_users_table
+    ):
         """Test successful ontology generation with session isolation."""
         mock_db_manager = Mock()
         mock_db_manager.get_tables.return_value = ["users"]
@@ -450,24 +464,33 @@ class TestMCPToolsAsync:
 
         # Mock the ontology generator
         mock_generator = Mock()
-        mock_generator.generate_from_schema.return_value = "@prefix ns: <http://example.com/ontology/> ."
-        mock_generator.serialize_ontology.return_value = "@prefix ns: <http://example.com/ontology/> ."
+        mock_generator.generate_from_schema.return_value = (
+            "@prefix ns: <http://example.com/ontology/> ."
+        )
+        mock_generator.serialize_ontology.return_value = (
+            "@prefix ns: <http://example.com/ontology/> ."
+        )
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager), \
-             patch('src.main.get_session_safe_filename', return_value="test_ontology.ttl"), \
-             patch('src.server_state.OntologyGenerator', return_value=mock_generator), \
-             patch('builtins.open', MagicMock()):
-
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ), patch(
+            "src.main.get_session_safe_filename", return_value="test_ontology.ttl"
+        ), patch(
+            "src.server_state.OntologyGenerator", return_value=mock_generator
+        ), patch(
+            "builtins.open", MagicMock()
+        ):
             result = await main_module.generate_ontology(
-                mock_ctx,
-                schema_name="public",
-                base_uri="http://example.com/ontology/"
+                mock_ctx, schema_name="public", base_uri="http://example.com/ontology/"
             )
 
         assert isinstance(result, str)
         # Result is now a minimal graph summary or Oxigraph persisted summary
-        assert "Minimal Graph Summary" in result or "Ontology generated" in result or "triples" in result.lower()
+        assert (
+            "Minimal Graph Summary" in result
+            or "Ontology generated" in result
+            or "triples" in result.lower()
+        )
 
     async def test_generate_ontology_no_tables(self, mock_ctx, mock_session_data):
         """Test ontology generation with no tables."""
@@ -475,13 +498,10 @@ class TestMCPToolsAsync:
         mock_db_manager.get_tables.return_value = []
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager):
-
-            result = await main_module.generate_ontology(
-                mock_ctx,
-                schema_name="public"
-            )
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ):
+            result = await main_module.generate_ontology(mock_ctx, schema_name="public")
 
         # Error responses are dicts from .to_response()
         error_data = json.loads(result) if isinstance(result, str) else result
@@ -493,15 +513,17 @@ class TestMCPToolsAsync:
         mock_db_manager = Mock()
         sample_data = [
             {"id": 1, "name": "John Doe", "email": "john@example.com"},
-            {"id": 2, "name": "Jane Smith", "email": "jane@example.com"}
+            {"id": 2, "name": "Jane Smith", "email": "jane@example.com"},
         ]
         mock_db_manager.sample_table_data.return_value = sample_data
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager):
-
-            result = await main_module.sample_table_data(mock_ctx, "users", "public", 10)
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ):
+            result = await main_module.sample_table_data(
+                mock_ctx, "users", "public", 10
+            )
 
         assert isinstance(result, list)
         assert len(result) == 2
@@ -511,9 +533,11 @@ class TestMCPToolsAsync:
         # Verify the call was made with correct parameters
         mock_db_manager.sample_table_data.assert_called_once_with("users", "public", 10)
 
-    async def test_sample_table_data_invalid_table_name(self, mock_ctx, mock_session_data):
+    async def test_sample_table_data_invalid_table_name(
+        self, mock_ctx, mock_session_data
+    ):
         """Test table data sampling with invalid table name returns error."""
-        with patch('src.main.get_session_data', return_value=mock_session_data):
+        with patch("src.main.get_session_data", return_value=mock_session_data):
             # Empty table name returns error list
             result = await main_module.sample_table_data(mock_ctx, "", "public", 10)
 
@@ -525,15 +549,19 @@ class TestMCPToolsAsync:
     async def test_sample_table_data_database_error(self, mock_ctx, mock_session_data):
         """Test table data sampling with database error raises exception."""
         mock_db_manager = Mock()
-        mock_db_manager.sample_table_data.side_effect = ValueError("Invalid table name format")
+        mock_db_manager.sample_table_data.side_effect = ValueError(
+            "Invalid table name format"
+        )
         mock_session_data.db_manager = mock_db_manager
 
-        with patch('src.main.get_session_data', return_value=mock_session_data), \
-             patch('src.main.get_session_db_manager', return_value=mock_db_manager):
-
+        with patch("src.main.get_session_data", return_value=mock_session_data), patch(
+            "src.main.get_session_db_manager", return_value=mock_db_manager
+        ):
             # The function raises exception (no internal error handling)
             with pytest.raises(ValueError, match="Invalid table name format"):
-                await main_module.sample_table_data(mock_ctx, "invalid-table", "public", 10)
+                await main_module.sample_table_data(
+                    mock_ctx, "invalid-table", "public", 10
+                )
 
 
 class TestOntologyGenerator(unittest.TestCase):
@@ -553,7 +581,7 @@ class TestOntologyGenerator(unittest.TestCase):
                     is_nullable=False,
                     is_primary_key=True,
                     is_foreign_key=False,
-                    comment="Primary key"
+                    comment="Primary key",
                 ),
                 ColumnInfo(
                     name="name",
@@ -561,7 +589,7 @@ class TestOntologyGenerator(unittest.TestCase):
                     is_nullable=False,
                     is_primary_key=False,
                     is_foreign_key=False,
-                    comment="Entity name"
+                    comment="Entity name",
                 ),
                 ColumnInfo(
                     name="created_at",
@@ -569,13 +597,13 @@ class TestOntologyGenerator(unittest.TestCase):
                     is_nullable=True,
                     is_primary_key=False,
                     is_foreign_key=False,
-                    comment="Creation timestamp"
-                )
+                    comment="Creation timestamp",
+                ),
             ],
             primary_keys=["id"],
             foreign_keys=[],
             comment="Test table for ontology generation",
-            row_count=10
+            row_count=10,
         )
 
     def test_generate_ontology_structure(self):
@@ -637,11 +665,13 @@ class TestOntologyGenerator(unittest.TestCase):
         sample_data = {
             "test_table": [
                 {"id": 1, "name": "Test Item 1", "created_at": "2023-01-01T00:00:00"},
-                {"id": 2, "name": "Test Item 2", "created_at": "2023-01-02T00:00:00"}
+                {"id": 2, "name": "Test Item 2", "created_at": "2023-01-02T00:00:00"},
             ]
         }
 
-        enrichment_data = self.generator.get_enrichment_data([self.sample_table], sample_data)
+        enrichment_data = self.generator.get_enrichment_data(
+            [self.sample_table], sample_data
+        )
 
         self.assertIn("schema_data", enrichment_data)
         self.assertIn("instructions", enrichment_data)
@@ -666,7 +696,7 @@ class TestOntologyGenerator(unittest.TestCase):
                 {
                     "original_name": "test_table",
                     "suggested_name": "TestEntity",
-                    "description": "A test entity for demonstration purposes"
+                    "description": "A test entity for demonstration purposes",
                 }
             ],
             "properties": [
@@ -674,10 +704,10 @@ class TestOntologyGenerator(unittest.TestCase):
                     "table_name": "test_table",
                     "original_name": "name",
                     "suggested_name": "entityName",
-                    "description": "The name of the test entity"
+                    "description": "The name of the test entity",
                 }
             ],
-            "relationships": []
+            "relationships": [],
         }
 
         # Apply enrichment
@@ -698,28 +728,31 @@ class TestConfigManager(unittest.TestCase):
 
     def test_validate_db_config_postgresql(self):
         """Test PostgreSQL configuration validation."""
-        with patch.dict('os.environ', {
-            'POSTGRES_HOST': 'localhost',
-            'POSTGRES_PORT': '5432',
-            'POSTGRES_DATABASE': 'testdb',
-            'POSTGRES_USERNAME': 'testuser',
-            'POSTGRES_PASSWORD': 'testpass'
-        }):
-            validation = self.config_manager.validate_db_config('postgresql')
-            self.assertTrue(validation['valid'])
-            self.assertEqual(len(validation['missing_params']), 0)
+        with patch.dict(
+            "os.environ",
+            {
+                "POSTGRES_HOST": "localhost",
+                "POSTGRES_PORT": "5432",
+                "POSTGRES_DATABASE": "testdb",
+                "POSTGRES_USERNAME": "testuser",
+                "POSTGRES_PASSWORD": "testpass",
+            },
+        ):
+            validation = self.config_manager.validate_db_config("postgresql")
+            self.assertTrue(validation["valid"])
+            self.assertEqual(len(validation["missing_params"]), 0)
 
     def test_validate_db_config_missing_params(self):
         """Test configuration validation with missing parameters."""
-        with patch.dict('os.environ', {}, clear=True):
-            validation = self.config_manager.validate_db_config('postgresql')
-            self.assertFalse(validation['valid'])
-            self.assertGreater(len(validation['missing_params']), 0)
+        with patch.dict("os.environ", {}, clear=True):
+            validation = self.config_manager.validate_db_config("postgresql")
+            self.assertFalse(validation["valid"])
+            self.assertGreater(len(validation["missing_params"]), 0)
 
     def test_validate_db_config_invalid_type(self):
         """Test configuration validation with invalid database type."""
         with self.assertRaises(ValueError):
-            self.config_manager.validate_db_config('invalid_db_type')
+            self.config_manager.validate_db_config("invalid_db_type")
 
 
 class TestUtilityFunctions(unittest.TestCase):
@@ -730,36 +763,33 @@ class TestUtilityFunctions(unittest.TestCase):
         from src.utils import sanitize_for_logging
 
         sensitive_data = {
-            'host': 'localhost',
-            'port': 5432,
-            'password': 'secret123',
-            'api_key': 'sk-1234567890',
-            'config': {
-                'username': 'user',
-                'secret': 'hidden'
-            }
+            "host": "localhost",
+            "port": 5432,
+            "password": "secret123",
+            "api_key": "sk-1234567890",
+            "config": {"username": "user", "secret": "hidden"},
         }
 
         sanitized = sanitize_for_logging(sensitive_data)
 
-        self.assertEqual(sanitized['host'], 'localhost')
-        self.assertEqual(sanitized['port'], 5432)
-        self.assertEqual(sanitized['password'], '***REDACTED***')
-        self.assertEqual(sanitized['api_key'], '***REDACTED***')
-        self.assertEqual(sanitized['config']['username'], 'user')
-        self.assertEqual(sanitized['config']['secret'], '***REDACTED***')
+        self.assertEqual(sanitized["host"], "localhost")
+        self.assertEqual(sanitized["port"], 5432)
+        self.assertEqual(sanitized["password"], "***REDACTED***")
+        self.assertEqual(sanitized["api_key"], "***REDACTED***")
+        self.assertEqual(sanitized["config"]["username"], "user")
+        self.assertEqual(sanitized["config"]["secret"], "***REDACTED***")
 
     def test_validate_uri(self):
         """Test URI validation function."""
         from src.utils import validate_uri
 
-        self.assertTrue(validate_uri('https://example.com/'))
-        self.assertTrue(validate_uri('http://localhost:8080/'))
-        self.assertTrue(validate_uri('https://api.example.com/v1/ontology/'))
+        self.assertTrue(validate_uri("https://example.com/"))
+        self.assertTrue(validate_uri("http://localhost:8080/"))
+        self.assertTrue(validate_uri("https://api.example.com/v1/ontology/"))
 
-        self.assertFalse(validate_uri(''))
-        self.assertFalse(validate_uri('not-a-uri'))
-        self.assertFalse(validate_uri('ftp://example.com/'))
+        self.assertFalse(validate_uri(""))
+        self.assertFalse(validate_uri("not-a-uri"))
+        self.assertFalse(validate_uri("ftp://example.com/"))
 
     def test_format_bytes(self):
         """Test bytes formatting function."""
@@ -771,10 +801,11 @@ class TestUtilityFunctions(unittest.TestCase):
         self.assertEqual(format_bytes(1536), "1.5 KB")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Use pytest for better test discovery and reporting if available
     try:
         import pytest
-        pytest.main([__file__, '-v'])
+
+        pytest.main([__file__, "-v"])
     except ImportError:
         unittest.main(verbosity=2)
