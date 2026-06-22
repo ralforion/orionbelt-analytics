@@ -20,10 +20,12 @@ from sqlalchemy.exc import OperationalError, DatabaseError
 from .constants import (
     IDENTIFIER_PATTERN,
     DEFAULT_SAMPLE_LIMIT,
+    DB_SQLGLOT_DIALECTS,
 )
 from .security import (
     SecureCredentialManager,
     sql_validator,
+    analyze_sql_statement,
     identifier_validator,
     audit_log_security_event,
     SecurityLevel,
@@ -949,45 +951,34 @@ class DatabaseManager:
                 validation_result["error_type"] = "empty_query"
                 return validation_result
 
-            query_without_comments = self._strip_leading_sql_comments(query_stripped)
-            query_upper = query_without_comments.upper()
+            # --- Primary safety gate: dialect-aware parsed validation ---
+            # sqlglot parsing is authoritative for multi-statement detection and
+            # read-only enforcement: it catches DML hidden after a CTE
+            # (WITH x AS (...) INSERT ...) and ignores semicolons inside string
+            # literals — both of which the legacy string heuristics get wrong.
+            # Those heuristics now run only when the parser cannot handle the SQL.
+            db_type = (self.connection_info or {}).get("type", "")
+            dialect = DB_SQLGLOT_DIALECTS.get(db_type, "postgres")
+            parsed = analyze_sql_statement(query_stripped, dialect=dialect)
 
-            # Multiple statement check
-            if ';' in query_stripped[:-1]:
-                validation_result["error"] = "Multiple SQL statements not allowed for security"
-                validation_result["error_type"] = "security_error"
-                validation_result["suggestions"].append(
-                    "Split multiple statements into separate requests"
-                )
-                return validation_result
-
-            # Determine query type
-            if query_upper.startswith('SELECT'):
-                validation_result["query_type"] = "SELECT"
-            elif query_upper.startswith('WITH'):
-                validation_result["query_type"] = "CTE_SELECT"
-                if 'SELECT' not in query_upper:
-                    validation_result["warnings"].append(
-                        "CTE should end with SELECT statement"
+            if parsed["parsed"]:
+                if not parsed["single_statement"]:
+                    validation_result["error"] = "Multiple SQL statements not allowed for security"
+                    validation_result["error_type"] = "security_error"
+                    validation_result["suggestions"].append(
+                        "Split multiple statements into separate requests"
                     )
-            elif query_upper.startswith(('EXPLAIN', 'DESCRIBE', 'DESC', 'SHOW')):
-                validation_result["query_type"] = "METADATA"
-            else:
-                dangerous_ops = [
-                    'DROP', 'DELETE', 'TRUNCATE', 'ALTER',
-                    'CREATE', 'INSERT', 'UPDATE', 'MERGE',
-                ]
-                detected_ops = [op for op in dangerous_ops if query_upper.startswith(op)]
-                if detected_ops:
+                    return validation_result
+                if parsed["query_type"] == "WRITE":
                     validation_result["error"] = (
-                        f"Destructive operations not allowed: {', '.join(detected_ops)}"
+                        f"Destructive operations not allowed: {', '.join(parsed['write_operations'])}"
                     )
                     validation_result["error_type"] = "forbidden_operation"
                     validation_result["suggestions"].append(
                         "Use SELECT queries for data retrieval only"
                     )
                     return validation_result
-                else:
+                if parsed["query_type"] == "UNKNOWN":
                     validation_result["error"] = (
                         "Only SELECT, CTE, and metadata queries are allowed"
                     )
@@ -996,6 +987,55 @@ class DatabaseManager:
                         "Start your query with SELECT, WITH, EXPLAIN, or SHOW"
                     )
                     return validation_result
+                validation_result["query_type"] = parsed["query_type"]
+            else:
+                # Fallback: parser could not handle this SQL (dialect quirk) —
+                # use the legacy string heuristics so valid queries still pass.
+                query_without_comments = self._strip_leading_sql_comments(query_stripped)
+                query_upper = query_without_comments.upper()
+
+                if ';' in query_stripped[:-1]:
+                    validation_result["error"] = "Multiple SQL statements not allowed for security"
+                    validation_result["error_type"] = "security_error"
+                    validation_result["suggestions"].append(
+                        "Split multiple statements into separate requests"
+                    )
+                    return validation_result
+
+                if query_upper.startswith('SELECT'):
+                    validation_result["query_type"] = "SELECT"
+                elif query_upper.startswith('WITH'):
+                    validation_result["query_type"] = "CTE_SELECT"
+                    if 'SELECT' not in query_upper:
+                        validation_result["warnings"].append(
+                            "CTE should end with SELECT statement"
+                        )
+                elif query_upper.startswith(('EXPLAIN', 'DESCRIBE', 'DESC', 'SHOW')):
+                    validation_result["query_type"] = "METADATA"
+                else:
+                    dangerous_ops = [
+                        'DROP', 'DELETE', 'TRUNCATE', 'ALTER',
+                        'CREATE', 'INSERT', 'UPDATE', 'MERGE',
+                    ]
+                    detected_ops = [op for op in dangerous_ops if query_upper.startswith(op)]
+                    if detected_ops:
+                        validation_result["error"] = (
+                            f"Destructive operations not allowed: {', '.join(detected_ops)}"
+                        )
+                        validation_result["error_type"] = "forbidden_operation"
+                        validation_result["suggestions"].append(
+                            "Use SELECT queries for data retrieval only"
+                        )
+                        return validation_result
+                    else:
+                        validation_result["error"] = (
+                            "Only SELECT, CTE, and metadata queries are allowed"
+                        )
+                        validation_result["error_type"] = "query_type_error"
+                        validation_result["suggestions"].append(
+                            "Start your query with SELECT, WITH, EXPLAIN, or SHOW"
+                        )
+                        return validation_result
 
             # Database-level syntax validation - delegate to driver
             if not self._driver:
