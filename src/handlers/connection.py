@@ -295,7 +295,7 @@ async def connect_database(
         # Detect and auto-restore existing workspace
         response = f"Successfully connected to {db_type} database: {db_name}"
         workspace = detect_workspace(new_conn_id)
-        if workspace and services.get_oxigraph_store:
+        if workspace and services.provides("get_oxigraph_store"):
             try:
                 restore_result = await _restore_workspace_core(
                     ctx, session, new_conn_id, None, services

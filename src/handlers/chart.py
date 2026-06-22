@@ -120,7 +120,7 @@ async def generate_chart(
             chart_id = uuid4()
             chart_uri = f"ui://orionbelt/chart/{chart_id}"
             chart_json_uri = f"ui://orionbelt/chart-json/{chart_id}"
-            if services.add_resource:
+            if services.provides("add_resource"):
                 from fastmcp.resources import TextResource
                 services.add_resource(TextResource(
                     uri=chart_uri,
