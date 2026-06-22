@@ -16,7 +16,7 @@ from sqlglot.errors import ParseError
 from rdflib import Graph, Namespace, URIRef
 from rdflib.namespace import RDF, RDFS, OWL, XSD
 
-from .constants import OBA_NAMESPACE
+from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
@@ -155,13 +155,10 @@ class OBQCValidator:
     - GROUP BY completeness
     """
 
-    # Dialect mapping for sqlglot
-    DIALECT_MAP = {
-        "postgresql": "postgres",
-        "snowflake": "snowflake",
-        "dremio": "trino",  # Dremio uses Trino-compatible syntax
-        "clickhouse": "clickhouse",
-    }
+    # Dialect mapping for sqlglot, sourced from the canonical metadata in
+    # constants so it always covers exactly SUPPORTED_DB_TYPES (no drift, no
+    # silent fallback to postgres for a supported database).
+    DIALECT_MAP = DB_SQLGLOT_DIALECTS
 
     def __init__(self) -> None:
         self._schema_cache: Optional[OntologySchema] = None

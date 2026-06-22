@@ -33,8 +33,23 @@ DEFAULT_OUTPUT_DIR = "tmp"
 # Identifier validation pattern
 IDENTIFIER_PATTERN = r'^[a-zA-Z_][a-zA-Z0-9_-]*$'
 
-# Supported database types
-SUPPORTED_DB_TYPES = ["postgresql", "snowflake", "dremio", "clickhouse", "bigquery", "duckdb", "databricks", "mysql"]
+# Canonical database metadata: maps each supported db_type to its sqlglot
+# dialect. This is the single source of truth — add a database here once and
+# SUPPORTED_DB_TYPES and OBQC's dialect-aware parsing both pick it up, so the
+# "supported list" and the "dialect list" can never drift apart.
+DB_SQLGLOT_DIALECTS = {
+    "postgresql": "postgres",
+    "snowflake": "snowflake",
+    "dremio": "trino",  # Dremio uses Trino-compatible syntax
+    "clickhouse": "clickhouse",
+    "bigquery": "bigquery",
+    "duckdb": "duckdb",
+    "databricks": "databricks",
+    "mysql": "mysql",
+}
+
+# Supported database types (order-preserving; derived from the canonical map)
+SUPPORTED_DB_TYPES = list(DB_SQLGLOT_DIALECTS)
 
 # System schemas to exclude
 POSTGRES_SYSTEM_SCHEMAS = ["information_schema", "pg_catalog", "pg_toast"]
