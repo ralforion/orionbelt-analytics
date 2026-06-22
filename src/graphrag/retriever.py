@@ -6,8 +6,9 @@ of foreign key relationships and semantic similarity.
 """
 
 import logging
-from typing import List, Dict, Any, Optional
 from collections import defaultdict, deque
+from typing import Any, Dict, List, Optional
+
 import networkx as nx
 
 logger = logging.getLogger(__name__)
@@ -33,31 +34,31 @@ class GraphRetriever:
 
         # Add nodes (tables)
         for table in tables_info:
-            table_name = table['name']
+            table_name = table["name"]
             self._tables_info[table_name] = table
 
             self.graph.add_node(
                 table_name,
-                node_type='table',
-                column_count=len(table.get('columns', [])),
-                has_comment=bool(table.get('comment')),
-                comment=table.get('comment', '')
+                node_type="table",
+                column_count=len(table.get("columns", [])),
+                has_comment=bool(table.get("comment")),
+                comment=table.get("comment", ""),
             )
 
         # Add edges (foreign key relationships)
         for table in tables_info:
-            table_name = table['name']
+            table_name = table["name"]
 
-            for fk in table.get('foreign_keys', []):
-                referenced_table = fk['referenced_table']
+            for fk in table.get("foreign_keys", []):
+                referenced_table = fk["referenced_table"]
 
                 if referenced_table in self.graph:
                     self.graph.add_edge(
                         table_name,
                         referenced_table,
-                        edge_type='foreign_key',
-                        column=fk['column'],
-                        referenced_column=fk['referenced_column']
+                        edge_type="foreign_key",
+                        column=fk["column"],
+                        referenced_column=fk["referenced_column"],
                     )
 
         logger.info(
@@ -78,32 +79,32 @@ class GraphRetriever:
         added_edges = 0
 
         for table in tables_info:
-            table_name = table['name']
+            table_name = table["name"]
             self._tables_info[table_name] = table
 
             if table_name not in self.graph:
                 added_nodes += 1
             self.graph.add_node(
                 table_name,
-                node_type='table',
-                column_count=len(table.get('columns', [])),
-                has_comment=bool(table.get('comment')),
-                comment=table.get('comment', '')
+                node_type="table",
+                column_count=len(table.get("columns", [])),
+                has_comment=bool(table.get("comment")),
+                comment=table.get("comment", ""),
             )
 
         for table in tables_info:
-            table_name = table['name']
-            for fk in table.get('foreign_keys', []):
-                referenced_table = fk['referenced_table']
+            table_name = table["name"]
+            for fk in table.get("foreign_keys", []):
+                referenced_table = fk["referenced_table"]
                 if referenced_table in self.graph:
                     if not self.graph.has_edge(table_name, referenced_table):
                         added_edges += 1
                     self.graph.add_edge(
                         table_name,
                         referenced_table,
-                        edge_type='foreign_key',
-                        column=fk['column'],
-                        referenced_column=fk['referenced_column']
+                        edge_type="foreign_key",
+                        column=fk["column"],
+                        referenced_column=fk["referenced_column"],
                     )
 
         logger.info(
@@ -113,10 +114,7 @@ class GraphRetriever:
         )
 
     def find_join_path(
-        self,
-        from_table: str,
-        to_table: str,
-        max_hops: int = 12
+        self, from_table: str, to_table: str, max_hops: int = 12
     ) -> Optional[List[Dict[str, Any]]]:
         """
         Find join path between two tables.
@@ -141,18 +139,14 @@ class GraphRetriever:
 
             try:
                 path_forward = nx.shortest_path(
-                    self.graph,
-                    source=from_table,
-                    target=to_table
+                    self.graph, source=from_table, target=to_table
                 )
             except nx.NetworkXNoPath:
                 pass
 
             try:
                 path_backward = nx.shortest_path(
-                    self.graph,
-                    source=to_table,
-                    target=from_table
+                    self.graph, source=to_table, target=from_table
                 )
             except nx.NetworkXNoPath:
                 pass
@@ -161,9 +155,7 @@ class GraphRetriever:
             try:
                 undirected_graph = self.graph.to_undirected()
                 path_undirected = nx.shortest_path(
-                    undirected_graph,
-                    source=from_table,
-                    target=to_table
+                    undirected_graph, source=from_table, target=to_table
                 )
             except nx.NetworkXNoPath:
                 pass
@@ -184,7 +176,9 @@ class GraphRetriever:
             path = min(candidates, key=len)
 
             if len(path) - 1 > max_hops:
-                logger.warning(f"Path from {from_table} to {to_table} requires {len(path) - 1} hops (max: {max_hops})")
+                logger.warning(
+                    f"Path from {from_table} to {to_table} requires {len(path) - 1} hops (max: {max_hops})"
+                )
                 return None
 
             # Build join specifications
@@ -196,22 +190,26 @@ class GraphRetriever:
                 # Get edge data (FK relationship)
                 if self.graph.has_edge(left_table, right_table):
                     edge_data = self.graph[left_table][right_table]
-                    joins.append({
-                        "from_table": left_table,
-                        "to_table": right_table,
-                        "from_column": edge_data['column'],
-                        "to_column": edge_data['referenced_column'],
-                        "join_type": "INNER"
-                    })
+                    joins.append(
+                        {
+                            "from_table": left_table,
+                            "to_table": right_table,
+                            "from_column": edge_data["column"],
+                            "to_column": edge_data["referenced_column"],
+                            "join_type": "INNER",
+                        }
+                    )
                 elif self.graph.has_edge(right_table, left_table):
                     edge_data = self.graph[right_table][left_table]
-                    joins.append({
-                        "from_table": left_table,
-                        "to_table": right_table,
-                        "from_column": edge_data['referenced_column'],
-                        "to_column": edge_data['column'],
-                        "join_type": "INNER"
-                    })
+                    joins.append(
+                        {
+                            "from_table": left_table,
+                            "to_table": right_table,
+                            "from_column": edge_data["referenced_column"],
+                            "to_column": edge_data["column"],
+                            "join_type": "INNER",
+                        }
+                    )
 
             return joins
 
@@ -220,10 +218,7 @@ class GraphRetriever:
             return None
 
     def get_related_tables(
-        self,
-        table_name: str,
-        max_distance: int = 1,
-        direction: str = "both"
+        self, table_name: str, max_distance: int = 1, direction: str = "both"
     ) -> Dict[str, List[str]]:
         """
         Get tables related to a given table.
@@ -373,12 +368,14 @@ class GraphRetriever:
             outgoing_fks = list(self.graph.successors(table))
 
             if len(outgoing_fks) > 1:
-                warnings.append({
-                    "bridge_table": table,
-                    "referenced_tables": outgoing_fks,
-                    "warning": f"Table '{table}' connects to multiple tables - potential fan-trap",
-                    "recommendation": "Use separate CTEs or UNION approach if aggregating across these relationships"
-                })
+                warnings.append(
+                    {
+                        "bridge_table": table,
+                        "referenced_tables": outgoing_fks,
+                        "warning": f"Table '{table}' connects to multiple tables - potential fan-trap",
+                        "recommendation": "Use separate CTEs or UNION approach if aggregating across these relationships",
+                    }
+                )
 
         return warnings
 
@@ -411,15 +408,24 @@ class GraphRetriever:
 
         # Find reference tables (many incoming FKs)
         in_degrees = dict(self.graph.in_degree())
-        top_references = sorted(in_degrees.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_references = sorted(in_degrees.items(), key=lambda x: x[1], reverse=True)[
+            :5
+        ]
 
         return {
             "total_tables": self.graph.number_of_nodes(),
             "total_relationships": self.graph.number_of_edges(),
-            "top_central_tables": [{"table": t, "centrality": c} for t, c in top_central],
-            "top_hub_tables": [{"table": t, "outgoing_fks": d} for t, d in top_hubs if d > 0],
-            "top_reference_tables": [{"table": t, "incoming_fks": d} for t, d in top_references if d > 0],
-            "avg_connections_per_table": sum(dict(self.graph.degree()).values()) / max(self.graph.number_of_nodes(), 1)
+            "top_central_tables": [
+                {"table": t, "centrality": c} for t, c in top_central
+            ],
+            "top_hub_tables": [
+                {"table": t, "outgoing_fks": d} for t, d in top_hubs if d > 0
+            ],
+            "top_reference_tables": [
+                {"table": t, "incoming_fks": d} for t, d in top_references if d > 0
+            ],
+            "avg_connections_per_table": sum(dict(self.graph.degree()).values())
+            / max(self.graph.number_of_nodes(), 1),
         }
 
     def load_graph(self, tables_info: List[Dict[str, Any]]) -> bool:
@@ -448,23 +454,24 @@ class GraphRetriever:
         """
         nodes = []
         for node in self.graph.nodes(data=True):
-            nodes.append({
-                "id": node[0],
-                "label": node[0],
-                "type": "table",
-                "column_count": node[1].get('column_count', 0)
-            })
+            nodes.append(
+                {
+                    "id": node[0],
+                    "label": node[0],
+                    "type": "table",
+                    "column_count": node[1].get("column_count", 0),
+                }
+            )
 
         edges = []
         for edge in self.graph.edges(data=True):
-            edges.append({
-                "from": edge[0],
-                "to": edge[1],
-                "label": f"{edge[2].get('column')} → {edge[2].get('referenced_column')}",
-                "type": "foreign_key"
-            })
+            edges.append(
+                {
+                    "from": edge[0],
+                    "to": edge[1],
+                    "label": f"{edge[2].get('column')} → {edge[2].get('referenced_column')}",
+                    "type": "foreign_key",
+                }
+            )
 
-        return {
-            "nodes": nodes,
-            "edges": edges
-        }
+        return {"nodes": nodes, "edges": edges}

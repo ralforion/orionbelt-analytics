@@ -8,10 +8,11 @@ import sys
 from pathlib import Path
 
 # Colors for output
-GREEN = '\033[92m'
-RED = '\033[91m'
-YELLOW = '\033[93m'
-RESET = '\033[0m'
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
+
 
 def test(name, condition, message=""):
     """Run a test and print result."""
@@ -24,15 +25,16 @@ def test(name, condition, message=""):
             print(f"  {YELLOW}{message}{RESET}")
         return False
 
+
 def main():
     """Run all verification tests."""
     project_root = Path(__file__).parent.parent
     passed = 0
     failed = 0
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Phase 1 Verification Tests")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
     # Test 1: Skills directory exists
     skills_dir = project_root / ".claude" / "skills"
@@ -45,7 +47,7 @@ def main():
     expected_skills = [
         "fan-trap-prevention.md",
         "sql-best-practices.md",
-        "chart-examples.md"
+        "chart-examples.md",
     ]
 
     all_skills_present = True
@@ -66,7 +68,9 @@ def main():
         skill_path = skills_dir / skill
         if skill_path.exists() and skill_path.stat().st_size < 1000:
             skills_large_enough = False
-            print(f"  {YELLOW}{skill} too small: {skill_path.stat().st_size} bytes{RESET}")
+            print(
+                f"  {YELLOW}{skill} too small: {skill_path.stat().st_size} bytes{RESET}"
+            )
 
     if test("All skills have sufficient content", skills_large_enough):
         passed += 1
@@ -78,9 +82,9 @@ def main():
     if fan_trap_path.exists():
         content = fan_trap_path.read_text()
         has_key_content = (
-            "What is a Fan-Trap?" in content and
-            "UNION ALL" in content and
-            "Detection Checklist" in content
+            "What is a Fan-Trap?" in content
+            and "UNION ALL" in content
+            and "Detection Checklist" in content
         )
         if test("Fan-trap skill has key content", has_key_content):
             passed += 1
@@ -94,8 +98,7 @@ def main():
     if sql_path.exists():
         content = sql_path.read_text()
         has_key_content = (
-            "Identifier Qualification" in content and
-            "schema.table.column" in content
+            "Identifier Qualification" in content and "schema.table.column" in content
         )
         if test("SQL best practices skill has key content", has_key_content):
             passed += 1
@@ -109,10 +112,10 @@ def main():
     if chart_path.exists():
         content = chart_path.read_text()
         has_key_content = (
-            "bar" in content.lower() and
-            "line" in content.lower() and
-            "scatter" in content.lower() and
-            "generate_chart" in content
+            "bar" in content.lower()
+            and "line" in content.lower()
+            and "scatter" in content.lower()
+            and "generate_chart" in content
         )
         if test("Chart examples skill has key content", has_key_content):
             passed += 1
@@ -159,12 +162,14 @@ def main():
                 print(f"  {GREEN}Instructions: {len(instructions)} chars{RESET}")
             else:
                 failed += 1
-                print(f"  {YELLOW}Instructions: {len(instructions)} chars (expected < 2000){RESET}")
+                print(
+                    f"  {YELLOW}Instructions: {len(instructions)} chars (expected < 2000){RESET}"
+                )
 
             # Check for skill references
             has_skill_refs = (
-                "/fan-trap-prevention" in instructions and
-                "/sql-best-practices" in instructions
+                "/fan-trap-prevention" in instructions
+                and "/sql-best-practices" in instructions
             )
             if test("Server instructions reference skills", has_skill_refs):
                 passed += 1
@@ -196,9 +201,9 @@ def main():
         failed += 1
 
     # Summary
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print(f"Results: {GREEN}{passed} passed{RESET}, {RED}{failed} failed{RESET}")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
     if failed == 0:
         print(f"{GREEN}✓ All tests passed! Phase 1 deployment successful.{RESET}\n")
@@ -206,6 +211,7 @@ def main():
     else:
         print(f"{RED}✗ Some tests failed. Please review the output above.{RESET}\n")
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

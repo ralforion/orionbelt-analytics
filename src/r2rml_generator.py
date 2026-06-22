@@ -13,9 +13,9 @@ R2RML mappings enable:
 
 import logging
 import re
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
-from .database_manager import TableInfo, ColumnInfo
+from .database_manager import ColumnInfo, TableInfo
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,7 @@ class R2RMLGenerator:
     """
 
     def __init__(
-        self,
-        base_iri: str = "http://example.com/",
-        database_name: str = "database"
+        self, base_iri: str = "http://example.com/", database_name: str = "database"
     ):
         """Initialize the R2RML generator.
 
@@ -43,13 +41,11 @@ class R2RMLGenerator:
             base_iri: Base IRI for generated RDF resources (must end with /)
             database_name: Name of the database (used in comments)
         """
-        self.base_iri = base_iri if base_iri.endswith('/') else base_iri + '/'
+        self.base_iri = base_iri if base_iri.endswith("/") else base_iri + "/"
         self.database_name = database_name
 
     def generate_from_schema(
-        self,
-        tables_info: List[TableInfo],
-        schema_name: Optional[str] = None
+        self, tables_info: List[TableInfo], schema_name: Optional[str] = None
     ) -> str:
         """Generate R2RML mapping from database schema information.
 
@@ -75,7 +71,9 @@ class R2RMLGenerator:
 
         # Generate TriplesMap for each table
         for table_info in tables_info:
-            lines.extend(self._generate_triples_map(table_info, schema_name, table_lookup))
+            lines.extend(
+                self._generate_triples_map(table_info, schema_name, table_lookup)
+            )
             lines.append("")
 
         return "\n".join(lines)
@@ -93,7 +91,7 @@ class R2RMLGenerator:
         self,
         table_info: TableInfo,
         schema_name: Optional[str],
-        table_lookup: Dict[str, TableInfo]
+        table_lookup: Dict[str, TableInfo],
     ) -> List[str]:
         """Generate a TriplesMap for a single table.
 
@@ -135,21 +133,25 @@ class R2RMLGenerator:
         lines.append("    ] ;")
 
         # Subject map
-        lines.append(f'    rr:subjectMap [ rr:template "{subject_template}" ; rr:class base:{class_name} ] ;')
+        lines.append(
+            f'    rr:subjectMap [ rr:template "{subject_template}" ; rr:class base:{class_name} ] ;'
+        )
 
         # Build FK lookup for this table
         fk_columns = {}
         for fk in table_info.foreign_keys:
-            fk_columns[fk['column']] = fk
+            fk_columns[fk["column"]] = fk
 
         # Predicate-object maps for each column
         for column in table_info.columns:
             fk = fk_columns.get(column.name)
             if fk:
                 # Foreign key column - generate object property with IRI reference
-                lines.extend(self._generate_fk_predicate_object_map(
-                    column, fk, effective_schema, table_lookup
-                ))
+                lines.extend(
+                    self._generate_fk_predicate_object_map(
+                        column, fk, effective_schema, table_lookup
+                    )
+                )
             else:
                 # Regular column - generate data property with literal value
                 lines.extend(self._generate_predicate_object_map(column, table_name))
@@ -163,9 +165,7 @@ class R2RMLGenerator:
         return lines
 
     def _generate_subject_template(
-        self,
-        table_info: TableInfo,
-        schema_name: Optional[str]
+        self, table_info: TableInfo, schema_name: Optional[str]
     ) -> str:
         """Generate subject IRI template based on primary keys.
 
@@ -190,8 +190,12 @@ class R2RMLGenerator:
             # No primary key defined - use all columns as fallback (not ideal)
             # Try to find an 'id' column
             id_col = next(
-                (c.name for c in table_info.columns if c.name.lower() in ['id', 'rowid', '_id']),
-                None
+                (
+                    c.name
+                    for c in table_info.columns
+                    if c.name.lower() in ["id", "rowid", "_id"]
+                ),
+                None,
             )
             if id_col:
                 return f"{self.base_iri}{table_name}/{{{id_col}}}"
@@ -204,9 +208,7 @@ class R2RMLGenerator:
                 return f"{self.base_iri}{table_name}/{{{first_col}}}"
 
     def _generate_predicate_object_map(
-        self,
-        column: ColumnInfo,
-        table_name: str
+        self, column: ColumnInfo, table_name: str
     ) -> List[str]:
         """Generate predicate-object map for a regular column.
 
@@ -236,7 +238,7 @@ class R2RMLGenerator:
         column: ColumnInfo,
         fk: Dict[str, str],
         schema_name: Optional[str],
-        table_lookup: Dict[str, TableInfo]
+        table_lookup: Dict[str, TableInfo],
     ) -> List[str]:
         """Generate predicate-object map for a foreign key column.
 
@@ -254,7 +256,7 @@ class R2RMLGenerator:
         """
         lines = []
         predicate_name = self._safe_identifier(column.name)
-        ref_table = fk['referenced_table']
+        ref_table = fk["referenced_table"]
 
         # Build the referenced IRI template
         # Use the FK column value to construct the referenced resource IRI
@@ -284,7 +286,19 @@ class R2RMLGenerator:
         # Integer types
         if "tinyint" in sql_type:
             return "xsd:byte"
-        if any(t in sql_type for t in ["integer", "int", "int4", "int2", "int8", "serial", "bigint", "smallint"]):
+        if any(
+            t in sql_type
+            for t in [
+                "integer",
+                "int",
+                "int4",
+                "int2",
+                "int8",
+                "serial",
+                "bigint",
+                "smallint",
+            ]
+        ):
             return "xsd:integer"
 
         # Numeric types
@@ -327,10 +341,10 @@ class R2RMLGenerator:
             return "unnamed"
 
         # Replace non-alphanumeric characters with underscores
-        safe = re.sub(r'[^A-Za-z0-9_]', '_', name)
+        safe = re.sub(r"[^A-Za-z0-9_]", "_", name)
 
         # Ensure it starts with a letter or underscore
-        if safe and not (safe[0].isalpha() or safe[0] == '_'):
-            safe = '_' + safe
+        if safe and not (safe[0].isalpha() or safe[0] == "_"):
+            safe = "_" + safe
 
         return safe or "unnamed"

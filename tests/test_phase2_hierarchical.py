@@ -10,6 +10,7 @@ Verifies that:
 """
 
 import inspect
+
 import pytest
 
 import src.main as main_module
@@ -24,7 +25,7 @@ def _get_tool_fn(name):
     This helper normalizes access.
     """
     obj = getattr(main_module, name)
-    return getattr(obj, 'fn', obj)
+    return getattr(obj, "fn", obj)
 
 
 def _get_tool_docstring(name):
@@ -38,7 +39,7 @@ class TestPhase2LightweightMode:
 
     def test_discover_schema_has_lightweight_parameter(self):
         """Verify discover_schema has lightweight parameter."""
-        fn = _get_tool_fn('discover_schema')
+        fn = _get_tool_fn("discover_schema")
         sig = inspect.signature(fn)
         params = sig.parameters
 
@@ -57,7 +58,7 @@ class TestPhase2LightweightMode:
 
     def test_get_table_details_has_required_params(self):
         """Verify get_table_details has required parameters."""
-        fn = _get_tool_fn('get_table_details')
+        fn = _get_tool_fn("get_table_details")
         sig = inspect.signature(fn)
         params = sig.parameters
 
@@ -67,7 +68,7 @@ class TestPhase2LightweightMode:
 
     def test_discover_schema_docstring_mentions_lightweight(self):
         """Verify discover_schema docstring explains lightweight mode."""
-        docstring = _get_tool_docstring('discover_schema')
+        docstring = _get_tool_docstring("discover_schema")
         assert docstring is not None
 
         # Should explain lightweight mode
@@ -75,7 +76,7 @@ class TestPhase2LightweightMode:
 
     def test_get_table_details_docstring_complete(self):
         """Verify get_table_details has complete docstring."""
-        docstring = _get_tool_docstring('get_table_details')
+        docstring = _get_tool_docstring("get_table_details")
         assert docstring is not None
 
         # Should explain purpose
@@ -112,7 +113,7 @@ class TestPhase2FunctionalityPreserved:
 
     def test_discover_schema_backward_compatible(self):
         """Verify discover_schema defaults to lightweight=True."""
-        fn = _get_tool_fn('discover_schema')
+        fn = _get_tool_fn("discover_schema")
         sig = inspect.signature(fn)
         lightweight_param = sig.parameters["lightweight"]
 
@@ -139,7 +140,7 @@ class TestPhase2FunctionalityPreserved:
             "sample_table_data",
             "execute_sql_query",
             "generate_chart",
-            "cleanup_workspace"
+            "cleanup_workspace",
         ]
 
         for tool in expected_tools:
@@ -162,11 +163,19 @@ class TestPhase2FunctionalityPreserved:
     def test_imports_still_work(self):
         """Verify all imports still work after changes."""
         try:
-            from src.main import mcp, discover_schema, get_table_details
-            from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
+            from src.database_manager import ColumnInfo, DatabaseManager, TableInfo
+            from src.main import discover_schema, get_table_details, mcp
 
-            assert all([mcp, discover_schema, get_table_details,
-                       DatabaseManager, TableInfo, ColumnInfo])
+            assert all(
+                [
+                    mcp,
+                    discover_schema,
+                    get_table_details,
+                    DatabaseManager,
+                    TableInfo,
+                    ColumnInfo,
+                ]
+            )
         except ImportError as e:
             pytest.fail(f"Import failed: {e}")
 
@@ -176,8 +185,8 @@ class TestPhase2HierarchicalWorkflow:
 
     def test_workflow_documentation_in_docstrings(self):
         """Verify hierarchical workflow is documented."""
-        analyze_doc = _get_tool_docstring('discover_schema')
-        details_doc = _get_tool_docstring('get_table_details')
+        analyze_doc = _get_tool_docstring("discover_schema")
+        details_doc = _get_tool_docstring("get_table_details")
 
         # discover_schema should mention lightweight mode
         assert "lightweight" in analyze_doc.lower()
@@ -195,7 +204,7 @@ class TestPhase2HierarchicalWorkflow:
             "relationships",
             "mode",
             "token_savings",
-            "note"
+            "note",
         ]
 
         # Optional key:
@@ -208,13 +217,7 @@ class TestPhase2HierarchicalWorkflow:
     def test_full_response_structure_unchanged(self):
         """Verify full mode response structure is backward compatible."""
         # Expected structure for lightweight=False (existing behavior):
-        expected_keys = [
-            "schema",
-            "table_count",
-            "tables",
-            "schema_file",
-            "next_steps"
-        ]
+        expected_keys = ["schema", "table_count", "tables", "schema_file", "next_steps"]
 
         # This documents backward compatibility
         assert all(isinstance(key, str) for key in expected_keys)
@@ -236,7 +239,7 @@ class TestPhase2EdgeCases:
 
     def test_get_table_details_without_schema(self):
         """Test get_table_details uses default schema."""
-        fn = _get_tool_fn('get_table_details')
+        fn = _get_tool_fn("get_table_details")
         sig = inspect.signature(fn)
         schema_param = sig.parameters["schema_name"]
 

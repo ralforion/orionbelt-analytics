@@ -3,26 +3,26 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import create_engine, text, MetaData, inspect
+from sqlalchemy import MetaData, create_engine, inspect, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError
+from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import NullPool, StaticPool
 
 from ..constants import (
     CONNECTION_TIMEOUT,
-    DUCKDB_SYSTEM_SCHEMAS,
-    MIN_SAMPLE_LIMIT,
-    MAX_SAMPLE_LIMIT,
     DEFAULT_SAMPLE_LIMIT,
-)
-from ..serialization import serialize_rows
-from ..security import (
-    SecureCredentialManager,
-    identifier_validator,
-    audit_log_security_event,
-    SecurityLevel,
+    DUCKDB_SYSTEM_SCHEMAS,
+    MAX_SAMPLE_LIMIT,
+    MIN_SAMPLE_LIMIT,
 )
 from ..database_manager import ColumnInfo, TableInfo
+from ..security import (
+    SecureCredentialManager,
+    SecurityLevel,
+    audit_log_security_event,
+    identifier_validator,
+)
+from ..serialization import serialize_rows
 from .base import DatabaseDriver
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,9 @@ class DuckDBDriver(DatabaseDriver):
             if self._is_motherduck:
                 # MotherDuck connection
                 if motherduck_token:
-                    connection_string = f"duckdb:///md:?motherduck_token={motherduck_token}"
+                    connection_string = (
+                        f"duckdb:///md:?motherduck_token={motherduck_token}"
+                    )
                 else:
                     # Try to use default MotherDuck token from environment
                     connection_string = "duckdb:///md:"
@@ -87,7 +89,9 @@ class DuckDBDriver(DatabaseDriver):
                             {"identifier": database_name[:50]},
                             SecurityLevel.MEDIUM,
                         )
-                        logger.error(f"Invalid MotherDuck database name: {database_name}")
+                        logger.error(
+                            f"Invalid MotherDuck database name: {database_name}"
+                        )
                         return False
             else:
                 # Local DuckDB connection
@@ -160,36 +164,40 @@ class DuckDBDriver(DatabaseDriver):
         """
         try:
             excluded_schemas = "', '".join(DUCKDB_SYSTEM_SCHEMAS)
-            query = text(f"""
+            query = text(
+                f"""
                 SELECT schema_name
                 FROM information_schema.schemata
                 WHERE schema_name NOT IN ('{excluded_schemas}')
                 ORDER BY schema_name
-            """)
+            """
+            )
             with self.engine.connect() as conn:
                 result = conn.execute(query)
                 schemas = [row[0] for row in result.fetchall()]
                 # Ensure 'main' is included if it exists
                 if not schemas:
-                    schemas = ['main']
+                    schemas = ["main"]
                 return schemas
         except SQLAlchemyError as e:
             logger.error(f"Failed to get DuckDB schemas: {e}")
-            return ['main']  # Return default schema on error
+            return ["main"]  # Return default schema on error
 
     def get_tables(self, schema_name: Optional[str] = None) -> List[str]:
         """Get tables in a schema."""
         try:
-            schema = schema_name or 'main'
+            schema = schema_name or "main"
 
             with self.engine.connect() as conn:
-                query = text("""
+                query = text(
+                    """
                     SELECT table_name
                     FROM information_schema.tables
                     WHERE table_schema = :schema_name
                     AND table_type = 'BASE TABLE'
                     ORDER BY table_name
-                """)
+                """
+                )
                 result = conn.execute(query, {"schema_name": schema})
                 return [row[0] for row in result.fetchall()]
         except SQLAlchemyError as e:
@@ -201,7 +209,7 @@ class DuckDBDriver(DatabaseDriver):
     ) -> Optional[TableInfo]:
         """Analyze a DuckDB table and return its metadata."""
         try:
-            schema = schema_name or 'main'
+            schema = schema_name or "main"
 
             with self.engine.connect():
                 inspector = inspect(self.engine)
@@ -215,7 +223,9 @@ class DuckDBDriver(DatabaseDriver):
                 table_pk = inspector.get_pk_constraint(table_name, schema=schema)
                 table_fks = inspector.get_foreign_keys(table_name, schema=schema)
 
-                primary_keys = table_pk.get("constrained_columns", []) if table_pk else []
+                primary_keys = (
+                    table_pk.get("constrained_columns", []) if table_pk else []
+                )
                 primary_keys_upper = [pk.upper() for pk in primary_keys]
 
                 logger.info(
@@ -316,9 +326,9 @@ class DuckDBDriver(DatabaseDriver):
                             "Review DuckDB SQL syntax - check for missing commas, parentheses, or keywords"
                         )
         except Exception as conn_error:
-            validation_result["error"] = (
-                f"Database connection error during validation: {conn_error}"
-            )
+            validation_result[
+                "error"
+            ] = f"Database connection error during validation: {conn_error}"
             validation_result["error_type"] = "connection_error"
 
         return validation_result
@@ -408,7 +418,7 @@ class DuckDBDriver(DatabaseDriver):
             logger.warning(f"Sample limit capped at {MAX_SAMPLE_LIMIT}")
 
         try:
-            schema = schema_name or 'main'
+            schema = schema_name or "main"
 
             with self.engine.connect() as conn:
                 full_table_name = f'"{schema}"."{table_name}"'
@@ -416,7 +426,9 @@ class DuckDBDriver(DatabaseDriver):
                 query_str = f"SELECT * FROM {full_table_name} LIMIT :limit"
                 params = {"limit": limit}
                 db_type_str = "MOTHERDUCK" if self._is_motherduck else "DUCKDB"
-                logger.info(f"🔍 {db_type_str} SQL QUERY: {query_str} | PARAMS: {params}")
+                logger.info(
+                    f"🔍 {db_type_str} SQL QUERY: {query_str} | PARAMS: {params}"
+                )
                 result = conn.execute(text(query_str), params)
                 columns = list(result.keys())
                 return serialize_rows(result.fetchall(), columns)

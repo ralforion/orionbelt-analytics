@@ -19,11 +19,11 @@ Components:
 - CommunityDetector: Identifies logical schema groupings
 """
 
-from .manager import GraphRAGManager
+from .community_detector import CommunityDetector
 from .embedder import SchemaEmbedder
+from .manager import GraphRAGManager
 from .retriever import GraphRetriever
 from .vector_store import VectorStore
-from .community_detector import CommunityDetector
 
 __all__ = [
     "GraphRAGManager",

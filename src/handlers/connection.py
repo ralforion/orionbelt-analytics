@@ -3,16 +3,16 @@
 import logging
 import os
 from datetime import datetime
+
 from fastmcp import Context
 
 from ..constants import SUPPORTED_DB_TYPES
 from ..exceptions import ConnectionError, ValidationError
+from ..handler_context import HandlerContext
 from ..lifecycle.metadata import VersionMetadataManager
 from ..paths import OUTPUT_DIR
 from ..workspace import detect_workspace, format_workspace_summary
-from .workspace import _restore_workspace_core, _format_restore_summary
-
-from ..handler_context import HandlerContext
+from .workspace import _format_restore_summary, _restore_workspace_core
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +333,9 @@ async def list_schemas(ctx: Context, services: "HandlerContext"):
     db_manager = services.get_session_db_manager(ctx)
     schemas = db_manager.get_schemas()
     if schemas:
-        await ctx.info(f"Found {len(schemas)} schemas; next call should be discover_schema")
+        await ctx.info(
+            f"Found {len(schemas)} schemas; next call should be discover_schema"
+        )
     else:
         await ctx.info("No schemas found")
     return schemas if schemas else []

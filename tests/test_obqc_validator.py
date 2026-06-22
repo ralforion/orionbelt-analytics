@@ -1,15 +1,11 @@
 """Tests for OBQC (Ontology-Based Query Check) validator."""
 
 import unittest
-from rdflib import Graph, Namespace, Literal
-from rdflib.namespace import RDF, RDFS, OWL, XSD
 
-from src.obqc_validator import (
-    OBQCValidator,
-    OBQCIssue,
-    OBQCIssueType,
-    OBQCSeverity,
-)
+from rdflib import Graph, Literal, Namespace
+from rdflib.namespace import OWL, RDF, RDFS, XSD
+
+from src.obqc_validator import OBQCIssue, OBQCIssueType, OBQCSeverity, OBQCValidator
 
 
 def create_sample_ontology_graph() -> tuple[Graph, str]:
@@ -217,9 +213,7 @@ class TestOBQCValidator(unittest.TestCase):
 
     def test_valid_select_with_where(self):
         """Test validation of SELECT with WHERE clause."""
-        result = self.validator.validate(
-            "SELECT id, name FROM users WHERE id = 1"
-        )
+        result = self.validator.validate("SELECT id, name FROM users WHERE id = 1")
         self.assertTrue(result.is_valid)
 
     def test_table_not_found(self):
@@ -231,9 +225,7 @@ class TestOBQCValidator(unittest.TestCase):
 
     def test_column_not_found(self):
         """Test detection of non-existent column."""
-        result = self.validator.validate(
-            "SELECT users.nonexistent_column FROM users"
-        )
+        result = self.validator.validate("SELECT users.nonexistent_column FROM users")
         self.assertFalse(result.is_valid)
         issue_types = [i.issue_type for i in result.issues]
         self.assertIn(OBQCIssueType.COLUMN_NOT_FOUND, issue_types)
@@ -279,9 +271,7 @@ class TestOBQCValidator(unittest.TestCase):
     def test_type_mismatch_warning(self):
         """Test detection of type mismatch in comparison."""
         # Comparing integer id with string literal
-        result = self.validator.validate(
-            "SELECT * FROM users WHERE users.id = 'abc'"
-        )
+        result = self.validator.validate("SELECT * FROM users WHERE users.id = 'abc'")
         # Should warn about type mismatch
         warning_issues = [
             i for i in result.issues if i.issue_type == OBQCIssueType.TYPE_MISMATCH
@@ -342,21 +332,15 @@ class TestOBQCValidator(unittest.TestCase):
     def test_dialect_support(self):
         """Test different SQL dialects."""
         # PostgreSQL
-        result = self.validator.validate(
-            "SELECT * FROM users", dialect="postgresql"
-        )
+        result = self.validator.validate("SELECT * FROM users", dialect="postgresql")
         self.assertTrue(result.is_valid)
 
         # Snowflake
-        result = self.validator.validate(
-            "SELECT * FROM users", dialect="snowflake"
-        )
+        result = self.validator.validate("SELECT * FROM users", dialect="snowflake")
         self.assertTrue(result.is_valid)
 
         # Dremio (uses trino dialect)
-        result = self.validator.validate(
-            "SELECT * FROM users", dialect="dremio"
-        )
+        result = self.validator.validate("SELECT * FROM users", dialect="dremio")
         self.assertTrue(result.is_valid)
 
 
@@ -383,8 +367,7 @@ class TestOBQCFanTrapDetection(unittest.TestCase):
         # Should detect fan-trap risk
         self.assertTrue(result.fan_trap_risk)
         fan_trap_issues = [
-            i for i in result.issues
-            if i.issue_type == OBQCIssueType.FAN_TRAP_DETECTED
+            i for i in result.issues if i.issue_type == OBQCIssueType.FAN_TRAP_DETECTED
         ]
         self.assertTrue(len(fan_trap_issues) > 0)
 
@@ -414,35 +397,71 @@ class TestOBQCAxiomDrivenFanTrap(unittest.TestCase):
     """Phase 2: fan-trap detection grounded in owl:disjointWith axioms."""
 
     def setUp(self):
+        from src.database_manager import ColumnInfo, TableInfo
         from src.ontology_generator import OntologyGenerator
-        from src.database_manager import TableInfo, ColumnInfo
 
         def fact(name, fk_to):
             return TableInfo(
-                name=name, schema="public",
+                name=name,
+                schema="public",
                 columns=[
-                    ColumnInfo(name="id", data_type="INTEGER", is_nullable=False,
-                               is_primary_key=True, is_foreign_key=False),
-                    ColumnInfo(name="customer_id", data_type="INTEGER", is_nullable=False,
-                               is_primary_key=False, is_foreign_key=True,
-                               foreign_key_table=fk_to, foreign_key_column="id"),
-                    ColumnInfo(name="amount", data_type="DECIMAL(12,2)", is_nullable=False,
-                               is_primary_key=False, is_foreign_key=False),
+                    ColumnInfo(
+                        name="id",
+                        data_type="INTEGER",
+                        is_nullable=False,
+                        is_primary_key=True,
+                        is_foreign_key=False,
+                    ),
+                    ColumnInfo(
+                        name="customer_id",
+                        data_type="INTEGER",
+                        is_nullable=False,
+                        is_primary_key=False,
+                        is_foreign_key=True,
+                        foreign_key_table=fk_to,
+                        foreign_key_column="id",
+                    ),
+                    ColumnInfo(
+                        name="amount",
+                        data_type="DECIMAL(12,2)",
+                        is_nullable=False,
+                        is_primary_key=False,
+                        is_foreign_key=False,
+                    ),
                 ],
                 primary_keys=["id"],
-                foreign_keys=[{"column": "customer_id", "referenced_table": fk_to, "referenced_column": "id"}],
+                foreign_keys=[
+                    {
+                        "column": "customer_id",
+                        "referenced_table": fk_to,
+                        "referenced_column": "id",
+                    }
+                ],
                 row_count=1000,
             )
 
         customers = TableInfo(
-            name="customers", schema="public",
+            name="customers",
+            schema="public",
             columns=[
-                ColumnInfo(name="id", data_type="INTEGER", is_nullable=False,
-                           is_primary_key=True, is_foreign_key=False),
-                ColumnInfo(name="name", data_type="VARCHAR(200)", is_nullable=False,
-                           is_primary_key=False, is_foreign_key=False),
+                ColumnInfo(
+                    name="id",
+                    data_type="INTEGER",
+                    is_nullable=False,
+                    is_primary_key=True,
+                    is_foreign_key=False,
+                ),
+                ColumnInfo(
+                    name="name",
+                    data_type="VARCHAR(200)",
+                    is_nullable=False,
+                    is_primary_key=False,
+                    is_foreign_key=False,
+                ),
             ],
-            primary_keys=["id"], foreign_keys=[], row_count=500,
+            primary_keys=["id"],
+            foreign_keys=[],
+            row_count=500,
         )
 
         base_uri = "http://test.com/ontology/"
@@ -469,7 +488,9 @@ class TestOBQCAxiomDrivenFanTrap(unittest.TestCase):
             "GROUP BY customers.name"
         )
         self.assertTrue(result.fan_trap_risk)
-        fan = [i for i in result.issues if i.issue_type == OBQCIssueType.FAN_TRAP_DETECTED]
+        fan = [
+            i for i in result.issues if i.issue_type == OBQCIssueType.FAN_TRAP_DETECTED
+        ]
         self.assertEqual(len(fan), 1)
         # cites the actual disjoint pair and recommends a composite (UNION ALL)
         self.assertEqual(set(fan[0].related_entities), {"orders", "returns"})
@@ -490,7 +511,9 @@ class TestOBQCDialectParity(unittest.TestCase):
     def test_dialect_map_covers_all_supported_databases(self):
         from src.constants import SUPPORTED_DB_TYPES
 
-        missing = [db for db in SUPPORTED_DB_TYPES if db not in OBQCValidator.DIALECT_MAP]
+        missing = [
+            db for db in SUPPORTED_DB_TYPES if db not in OBQCValidator.DIALECT_MAP
+        ]
         self.assertEqual(
             missing, [], f"databases missing from OBQC DIALECT_MAP: {missing}"
         )
@@ -514,7 +537,7 @@ class TestOBQCIssue(unittest.TestCase):
             message="Table 'foo' not found",
             location="FROM clause",
             suggestion="Check table name spelling",
-            related_entities=["foo"]
+            related_entities=["foo"],
         )
 
         self.assertEqual(issue.issue_type, OBQCIssueType.TABLE_NOT_FOUND)

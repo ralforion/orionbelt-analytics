@@ -46,7 +46,9 @@ def serialize_row(row: Sequence[Any], columns: List[str]) -> Dict[str, Any]:
     return row_dict
 
 
-def serialize_rows(rows: Sequence[Sequence[Any]], columns: List[str]) -> List[Dict[str, Any]]:
+def serialize_rows(
+    rows: Sequence[Sequence[Any]], columns: List[str]
+) -> List[Dict[str, Any]]:
     """Serialize multiple database rows into JSON-compatible dicts.
 
     Args:

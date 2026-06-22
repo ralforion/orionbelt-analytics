@@ -7,7 +7,7 @@ replacing the 8+ duplicated ThreadPoolExecutor patterns in database_manager.py.
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import TypeVar, Coroutine, Any
+from typing import Any, Coroutine, TypeVar
 
 from .constants import CONNECTION_TIMEOUT
 

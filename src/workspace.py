@@ -5,7 +5,7 @@ and format summaries for user-facing messages.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 from .lifecycle.metadata import VersionMetadataManager
 from .paths import OUTPUT_DIR, get_connection_dir
@@ -67,7 +67,9 @@ def detect_workspace(connection_id: str) -> Optional[Dict[str, Any]]:
                     schema_status["ontology"] = {
                         "available": True,
                         "enriched": ontology_section.get("enriched", False),
-                        "persisted_to_rdf": ontology_section.get("persisted_to_rdf", False),
+                        "persisted_to_rdf": ontology_section.get(
+                            "persisted_to_rdf", False
+                        ),
                         "generated_at": ontology_section.get("generated_at"),
                     }
                 else:
@@ -137,7 +139,9 @@ def format_workspace_summary(workspace: Dict[str, Any]) -> str:
 
         schema_info = schema_data.get("schema", {})
         if schema_info.get("available"):
-            lines.append(f"    - Schema analysis: {schema_info.get('table_count', '?')} tables")
+            lines.append(
+                f"    - Schema analysis: {schema_info.get('table_count', '?')} tables"
+            )
         else:
             lines.append("    - Schema analysis: not available")
 
@@ -162,7 +166,11 @@ def format_workspace_summary(workspace: Dict[str, Any]) -> str:
         lines.append(f"  RDF store: {graph_count} graph(s)")
 
     lines.append("")
-    lines.append("NOTE: Auto-restore was not available. Workspace artifacts exist on disk.")
-    lines.append("Call discover_schema() to re-analyze, or reconnect to trigger auto-restore.")
+    lines.append(
+        "NOTE: Auto-restore was not available. Workspace artifacts exist on disk."
+    )
+    lines.append(
+        "Call discover_schema() to re-analyze, or reconnect to trigger auto-restore."
+    )
 
     return "\n".join(lines)

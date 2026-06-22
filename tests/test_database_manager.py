@@ -1,10 +1,11 @@
 """Tests for the DatabaseManager class with enhanced coverage."""
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.database_manager import DatabaseManager, TableInfo, ColumnInfo
+from src.database_manager import ColumnInfo, DatabaseManager, TableInfo
 
 
 class TestDatabaseManager(unittest.TestCase):
@@ -22,7 +23,7 @@ class TestDatabaseManager(unittest.TestCase):
         self.assertEqual(self.db_manager._connection_pool_size, 5)
         self.assertEqual(self.db_manager._max_overflow, 10)
 
-    @patch('src.drivers.postgresql.create_engine')
+    @patch("src.drivers.postgresql.create_engine")
     def test_connect_postgresql_success(self, mock_create_engine):
         """Test successful PostgreSQL connection."""
         mock_engine = Mock()
@@ -41,7 +42,7 @@ class TestDatabaseManager(unittest.TestCase):
             port=5432,
             database="testdb",
             username="testuser",
-            password="testpass"
+            password="testpass",
         )
 
         self.assertTrue(result)
@@ -50,7 +51,7 @@ class TestDatabaseManager(unittest.TestCase):
         self.assertEqual(self.db_manager.connection_info["host"], "localhost")
         self.assertEqual(self.db_manager.connection_info["database"], "testdb")
 
-    @patch('src.drivers.postgresql.create_engine')
+    @patch("src.drivers.postgresql.create_engine")
     def test_connect_postgresql_failure(self, mock_create_engine):
         """Test PostgreSQL connection failure."""
         mock_create_engine.side_effect = SQLAlchemyError("Connection failed")
@@ -60,7 +61,7 @@ class TestDatabaseManager(unittest.TestCase):
             port=5432,
             database="testdb",
             username="testuser",
-            password="wrongpass"
+            password="wrongpass",
         )
 
         self.assertFalse(result)
@@ -73,12 +74,12 @@ class TestDatabaseManager(unittest.TestCase):
             port=5432,
             database="testdb",
             username="testuser",
-            password="testpass"
+            password="testpass",
         )
 
         self.assertFalse(result)
 
-    @patch('src.drivers.snowflake.create_engine')
+    @patch("src.drivers.snowflake.create_engine")
     def test_connect_snowflake_success(self, mock_create_engine):
         """Test successful Snowflake connection."""
         mock_engine = Mock()
@@ -98,7 +99,7 @@ class TestDatabaseManager(unittest.TestCase):
             password="testpass",
             warehouse="COMPUTE_WH",
             database="TESTDB",
-            schema="PUBLIC"
+            schema="PUBLIC",
         )
 
         self.assertTrue(result)
@@ -121,7 +122,7 @@ class TestDatabaseManager(unittest.TestCase):
         self.assertFalse(self.db_manager._validate_identifier("table name"))
         self.assertFalse(self.db_manager._validate_identifier("a" * 64))  # Too long
 
-    @patch('src.drivers.postgresql.inspect')
+    @patch("src.drivers.postgresql.inspect")
     def test_analyze_table_success(self, mock_inspect):
         """Test successful table analysis."""
         # Setup mocks
@@ -132,21 +133,19 @@ class TestDatabaseManager(unittest.TestCase):
         mock_inspector.has_table.return_value = True
         mock_inspector.get_columns.return_value = [
             {
-                'name': 'id',
-                'type': 'INTEGER',
-                'nullable': False,
-                'comment': 'Primary key'
+                "name": "id",
+                "type": "INTEGER",
+                "nullable": False,
+                "comment": "Primary key",
             },
             {
-                'name': 'name',
-                'type': 'VARCHAR(255)',
-                'nullable': False,
-                'comment': 'User name'
-            }
+                "name": "name",
+                "type": "VARCHAR(255)",
+                "nullable": False,
+                "comment": "User name",
+            },
         ]
-        mock_inspector.get_pk_constraint.return_value = {
-            'constrained_columns': ['id']
-        }
+        mock_inspector.get_pk_constraint.return_value = {"constrained_columns": ["id"]}
         mock_inspector.get_foreign_keys.return_value = []
 
         # Mock connection as context manager
@@ -156,6 +155,7 @@ class TestDatabaseManager(unittest.TestCase):
 
         # Set up the driver directly
         from src.drivers.postgresql import PostgreSQLDriver
+
         driver = PostgreSQLDriver()
         driver.engine = mock_engine
         self.db_manager._driver = driver
@@ -163,14 +163,14 @@ class TestDatabaseManager(unittest.TestCase):
         self.db_manager.connection_info = {"type": "postgresql"}
 
         # Mock _test_connection to return True so _ensure_connection doesn't fail
-        with patch.object(self.db_manager, '_test_connection', return_value=True):
+        with patch.object(self.db_manager, "_test_connection", return_value=True):
             result = self.db_manager.analyze_table("test_table", "public")
 
         self.assertIsInstance(result, TableInfo)
         self.assertEqual(result.name, "test_table")
         self.assertEqual(result.schema, "public")
         self.assertEqual(len(result.columns), 2)
-        self.assertEqual(result.primary_keys, ['id'])
+        self.assertEqual(result.primary_keys, ["id"])
         # row_count is no longer fetched during analyze_table (use sample_table_data tool instead)
         self.assertIsNone(result.row_count)
 
@@ -179,7 +179,7 @@ class TestDatabaseManager(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.db_manager.analyze_table("test_table")
 
-    @patch('src.drivers.postgresql.inspect')
+    @patch("src.drivers.postgresql.inspect")
     def test_analyze_table_not_found(self, mock_inspect):
         """Test analysis of non-existent table."""
         mock_engine = Mock()
@@ -197,6 +197,7 @@ class TestDatabaseManager(unittest.TestCase):
 
         # Set up driver
         from src.drivers.postgresql import PostgreSQLDriver
+
         driver = PostgreSQLDriver()
         driver.engine = mock_engine
         self.db_manager._driver = driver
@@ -204,7 +205,7 @@ class TestDatabaseManager(unittest.TestCase):
         self.db_manager.connection_info = {"type": "postgresql"}
 
         # Mock _test_connection to return True so _ensure_connection doesn't fail
-        with patch.object(self.db_manager, '_test_connection', return_value=True):
+        with patch.object(self.db_manager, "_test_connection", return_value=True):
             result = self.db_manager.analyze_table("nonexistent_table")
 
         self.assertIsNone(result)
@@ -233,13 +234,14 @@ class TestDatabaseManager(unittest.TestCase):
         self.db_manager.connection_info = {"type": "postgresql"}
 
         from src.drivers.postgresql import PostgreSQLDriver
+
         driver = PostgreSQLDriver()
 
         # Test with negative limit - should use default
         mock_engine = Mock()
         mock_conn = MagicMock()
         mock_result = Mock()
-        mock_result.keys = Mock(return_value=['id', 'name'])
+        mock_result.keys = Mock(return_value=["id", "name"])
         mock_result.fetchall = Mock(return_value=[])
         mock_conn.execute = Mock(return_value=mock_result)
         mock_engine.connect.return_value.__enter__ = Mock(return_value=mock_conn)
@@ -255,7 +257,7 @@ class TestDatabaseManager(unittest.TestCase):
         mock_engine2 = Mock()
         mock_conn2 = MagicMock()
         mock_result2 = Mock()
-        mock_result2.keys = Mock(return_value=['id', 'name'])
+        mock_result2.keys = Mock(return_value=["id", "name"])
         mock_result2.fetchall = Mock(return_value=[])
         mock_conn2.execute = Mock(return_value=mock_result2)
         mock_engine2.connect.return_value.__enter__ = Mock(return_value=mock_conn2)
@@ -269,7 +271,7 @@ class TestDatabaseManager(unittest.TestCase):
         # Check the SQL query contains LIMIT 1000
         call_args = mock_conn2.execute.call_args
         # The second argument should be the params dict
-        self.assertEqual(call_args[0][1]['limit'], 1000)
+        self.assertEqual(call_args[0][1]["limit"], 1000)
 
     def test_disconnect(self):
         """Test database disconnection."""
@@ -316,13 +318,17 @@ class TestDatabaseManager(unittest.TestCase):
         quoted = self.db_manager._quote_dremio_identifier('My.Schema."Table"')
         self.assertEqual(quoted, '"My"."Schema"."""Table"""')
 
-    @patch('src.dremio_client.create_dremio_client')
+    @patch("src.dremio_client.create_dremio_client")
     def test_dremio_health_check_pat(self, mock_create_client):
         """Test Dremio health check for PAT connections."""
-        self.db_manager._dremio_rest_connection = {"uri": "https://dremio.example", "pat": "pat"}
+        self.db_manager._dremio_rest_connection = {
+            "uri": "https://dremio.example",
+            "pat": "pat",
+        }
 
         # Set up driver
         from src.drivers.dremio import DremioDriver
+
         driver = DremioDriver()
         driver._rest_connection = {"uri": "https://dremio.example", "pat": "pat"}
         self.db_manager._driver = driver
@@ -335,13 +341,17 @@ class TestDatabaseManager(unittest.TestCase):
 
         self.assertTrue(self.db_manager._test_dremio_connection())
 
-    @patch('src.dremio_client.create_dremio_client')
+    @patch("src.dremio_client.create_dremio_client")
     def test_is_connected_uses_dremio_health_check(self, mock_create_client):
         """Test is_connected for Dremio REST connections."""
-        self.db_manager._dremio_rest_connection = {"uri": "https://dremio.example", "pat": "pat"}
+        self.db_manager._dremio_rest_connection = {
+            "uri": "https://dremio.example",
+            "pat": "pat",
+        }
 
         # Set up driver
         from src.drivers.dremio import DremioDriver
+
         driver = DremioDriver()
         driver._rest_connection = {"uri": "https://dremio.example", "pat": "pat"}
         self.db_manager._driver = driver
@@ -359,12 +369,16 @@ class TestDatabaseManager(unittest.TestCase):
         self.db_manager._last_connection_params = {
             "type": "dremio",
             "uri": "https://dremio.example",
-            "pat": "pat"
+            "pat": "pat",
         }
 
-        with patch.object(self.db_manager, "connect_dremio", return_value=True) as mock_connect:
+        with patch.object(
+            self.db_manager, "connect_dremio", return_value=True
+        ) as mock_connect:
             self.db_manager._reconnect()
-            mock_connect.assert_called_once_with(uri="https://dremio.example", pat="pat")
+            mock_connect.assert_called_once_with(
+                uri="https://dremio.example", pat="pat"
+            )
 
 
 class TestClickHouseConnection(unittest.TestCase):
@@ -374,7 +388,7 @@ class TestClickHouseConnection(unittest.TestCase):
         """Set up test fixtures."""
         self.db_manager = DatabaseManager()
 
-    @patch('src.drivers.clickhouse.create_engine')
+    @patch("src.drivers.clickhouse.create_engine")
     def test_connect_clickhouse_success(self, mock_create_engine):
         """Test successful ClickHouse connection."""
         mock_engine = Mock()
@@ -392,7 +406,7 @@ class TestClickHouseConnection(unittest.TestCase):
             port=8123,
             database="testdb",
             username="default",
-            password=""
+            password="",
         )
 
         self.assertTrue(result)
@@ -406,7 +420,7 @@ class TestClickHouseConnection(unittest.TestCase):
         connection_string = call_args[0][0]
         self.assertIn("clickhouse+http://", connection_string)
 
-    @patch('src.drivers.clickhouse.create_engine')
+    @patch("src.drivers.clickhouse.create_engine")
     def test_connect_clickhouse_failure(self, mock_create_engine):
         """Test ClickHouse connection failure."""
         mock_create_engine.side_effect = SQLAlchemyError("Connection failed")
@@ -416,7 +430,7 @@ class TestClickHouseConnection(unittest.TestCase):
             port=8123,
             database="testdb",
             username="default",
-            password=""
+            password="",
         )
 
         self.assertFalse(result)
@@ -425,14 +439,12 @@ class TestClickHouseConnection(unittest.TestCase):
     def test_connect_clickhouse_missing_params(self):
         """Test ClickHouse connection with missing parameters."""
         result = self.db_manager.connect_clickhouse(
-            host="",  # Missing host
-            port=8123,
-            database="testdb"
+            host="", port=8123, database="testdb"  # Missing host
         )
 
         self.assertFalse(result)
 
-    @patch('src.drivers.clickhouse.create_engine')
+    @patch("src.drivers.clickhouse.create_engine")
     def test_connect_clickhouse_native_protocol(self, mock_create_engine):
         """Test ClickHouse connection with native protocol."""
         mock_engine = Mock()
@@ -451,7 +463,7 @@ class TestClickHouseConnection(unittest.TestCase):
             database="testdb",
             username="default",
             password="",
-            protocol="native"
+            protocol="native",
         )
 
         self.assertTrue(result)
@@ -460,7 +472,7 @@ class TestClickHouseConnection(unittest.TestCase):
         connection_string = call_args[0][0]
         self.assertIn("clickhouse+native://", connection_string)
 
-    @patch('src.drivers.clickhouse.create_engine')
+    @patch("src.drivers.clickhouse.create_engine")
     def test_connect_clickhouse_secure(self, mock_create_engine):
         """Test ClickHouse connection with HTTPS."""
         mock_engine = Mock()
@@ -479,7 +491,7 @@ class TestClickHouseConnection(unittest.TestCase):
             database="testdb",
             username="default",
             password="secret",
-            secure=True
+            secure=True,
         )
 
         self.assertTrue(result)
@@ -501,7 +513,7 @@ class TestTableInfoDataClass(unittest.TestCase):
             is_foreign_key=True,
             foreign_key_table="ref_table",
             foreign_key_column="ref_id",
-            comment="Test column"
+            comment="Test column",
         )
 
         self.assertEqual(col_info.name, "test_column")
@@ -521,7 +533,7 @@ class TestTableInfoDataClass(unittest.TestCase):
                 data_type="INTEGER",
                 is_nullable=False,
                 is_primary_key=True,
-                is_foreign_key=False
+                is_foreign_key=False,
             )
         ]
 
@@ -532,7 +544,7 @@ class TestTableInfoDataClass(unittest.TestCase):
             primary_keys=["id"],
             foreign_keys=[],
             comment="Test table",
-            row_count=100
+            row_count=100,
         )
 
         self.assertEqual(table_info.name, "test_table")
@@ -544,5 +556,5 @@ class TestTableInfoDataClass(unittest.TestCase):
         self.assertEqual(table_info.row_count, 100)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

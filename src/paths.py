@@ -10,7 +10,6 @@ from typing import Optional
 
 from .constants import DEFAULT_OUTPUT_DIR
 
-
 # Project root: parent of the src/ directory
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -97,5 +96,3 @@ def get_charts_dir(connection_id: str) -> Path:
     charts_dir = OUTPUT_DIR / connection_id / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
     return charts_dir
-
-

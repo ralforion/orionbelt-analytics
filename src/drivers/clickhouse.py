@@ -4,20 +4,20 @@ import logging
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
-from sqlalchemy import create_engine, text, MetaData, inspect
+from sqlalchemy import MetaData, create_engine, inspect, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError
+from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import QueuePool
 
 from ..constants import (
-    CONNECTION_TIMEOUT,
     CLICKHOUSE_SYSTEM_SCHEMAS,
-    MIN_SAMPLE_LIMIT,
-    MAX_SAMPLE_LIMIT,
+    CONNECTION_TIMEOUT,
     DEFAULT_SAMPLE_LIMIT,
+    MAX_SAMPLE_LIMIT,
+    MIN_SAMPLE_LIMIT,
 )
-from ..serialization import serialize_rows
 from ..database_manager import ColumnInfo, TableInfo
+from ..serialization import serialize_rows
 from .base import DatabaseDriver
 
 logger = logging.getLogger(__name__)
@@ -117,12 +117,14 @@ class ClickHouseDriver(DatabaseDriver):
 
     def get_schemas(self) -> List[str]:
         excluded_schemas = "', '".join(CLICKHOUSE_SYSTEM_SCHEMAS)
-        query = text(f"""
+        query = text(
+            f"""
             SELECT name
             FROM system.databases
             WHERE name NOT IN ('{excluded_schemas}')
             ORDER BY name
-        """)
+        """
+        )
         try:
             with self.engine.connect() as conn:
                 result = conn.execute(query)
@@ -135,24 +137,28 @@ class ClickHouseDriver(DatabaseDriver):
         try:
             with self.engine.connect() as conn:
                 if schema_name:
-                    query = text("""
+                    query = text(
+                        """
                         SELECT name
                         FROM system.tables
                         WHERE database = :schema_name
                           AND engine NOT IN ('View', 'MaterializedView')
                         ORDER BY name
-                    """)
+                    """
+                    )
                     result = conn.execute(query, {"schema_name": schema_name})
                 else:
                     # Use the connected database name
                     db_name = self._current_database or "default"
-                    query = text("""
+                    query = text(
+                        """
                         SELECT name
                         FROM system.tables
                         WHERE database = :db_name
                           AND engine NOT IN ('View', 'MaterializedView')
                         ORDER BY name
-                    """)
+                    """
+                    )
                     result = conn.execute(query, {"db_name": db_name})
                 return [row[0] for row in result.fetchall()]
         except SQLAlchemyError as e:
@@ -176,9 +182,7 @@ class ClickHouseDriver(DatabaseDriver):
 
                 if schema_name:
                     if not inspector.has_table(table_name, schema=schema_name):
-                        logger.error(
-                            f"Table {schema_name}.{table_name} not found"
-                        )
+                        logger.error(f"Table {schema_name}.{table_name} not found")
                         return None
                     table_columns = inspector.get_columns(
                         table_name, schema=schema_name
@@ -221,14 +225,11 @@ class ClickHouseDriver(DatabaseDriver):
                     is_fk = False
                     for fk in table_fks:
                         constrained_cols_upper = [
-                            c.upper()
-                            for c in fk.get("constrained_columns", [])
+                            c.upper() for c in fk.get("constrained_columns", [])
                         ]
                         if column_name.upper() in constrained_cols_upper:
                             is_fk = True
-                            fk_idx = constrained_cols_upper.index(
-                                column_name.upper()
-                            )
+                            fk_idx = constrained_cols_upper.index(column_name.upper())
                             fk_table = fk.get("referred_table")
                             referred_cols = fk.get("referred_columns", [])
                             fk_column = (
@@ -270,11 +271,13 @@ class ClickHouseDriver(DatabaseDriver):
                 table_comment = None
                 if schema_name:
                     try:
-                        ch_meta_query = text("""
+                        ch_meta_query = text(
+                            """
                             SELECT engine, sorting_key, total_rows
                             FROM system.tables
                             WHERE database = :db AND name = :tbl
-                        """)
+                        """
+                        )
                         ch_result = conn.execute(
                             ch_meta_query,
                             {"db": schema_name, "tbl": table_name},
@@ -337,9 +340,7 @@ class ClickHouseDriver(DatabaseDriver):
                 except Exception as explain_error:
                     error_msg = str(explain_error)
                     validation_result["database_error"] = error_msg
-                    validation_result["error"] = (
-                        f"ClickHouse syntax error: {error_msg}"
-                    )
+                    validation_result["error"] = f"ClickHouse syntax error: {error_msg}"
                     validation_result["error_type"] = "syntax_error"
 
                     if (
@@ -362,9 +363,9 @@ class ClickHouseDriver(DatabaseDriver):
                             "(ClickHouse is case-sensitive)"
                         )
         except Exception as conn_error:
-            validation_result["error"] = (
-                f"Database connection error during validation: {conn_error}"
-            )
+            validation_result[
+                "error"
+            ] = f"Database connection error during validation: {conn_error}"
             validation_result["error_type"] = "connection_error"
 
         return validation_result

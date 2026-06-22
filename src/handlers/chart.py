@@ -1,7 +1,7 @@
 """Chart generation handler implementation."""
 
 import logging
-from typing import Optional, Union, List, Dict, Any
+from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from fastmcp import Context
@@ -9,7 +9,6 @@ from fastmcp.utilities.types import Image
 
 from ..chart_utils import save_image_to_tmp
 from ..config import config_manager
-
 from ..handler_context import HandlerContext
 
 logger = logging.getLogger(__name__)
@@ -40,11 +39,14 @@ async def generate_chart(
     logic and handles MCP Apps resource registration.
     """
     import json
+
     from ..tools.chart import generate_chart as generate_chart_impl
 
     # Parse data_source if it's a string
     if data_source and isinstance(data_source, str):
-        logger.warning("data_source was sent as string instead of JSON array - attempting to parse")
+        logger.warning(
+            "data_source was sent as string instead of JSON array - attempting to parse"
+        )
         try:
             parsed = json.loads(data_source)
             if isinstance(parsed, list):
@@ -57,7 +59,9 @@ async def generate_chart(
                 parsed = ast.literal_eval(data_source)
                 if isinstance(parsed, list):
                     data_source = parsed
-                    logger.info("Successfully parsed data_source from Python literal string format")
+                    logger.info(
+                        "Successfully parsed data_source from Python literal string format"
+                    )
             except (ValueError, SyntaxError) as e:
                 await ctx.info("Chart generation failed - data_source format error")
                 raise RuntimeError(
@@ -77,7 +81,9 @@ async def generate_chart(
             pass
 
     # Call implementation
-    logger.info(f"generate_chart called with output_format={output_format}, chart_type={chart_type}")
+    logger.info(
+        f"generate_chart called with output_format={output_format}, chart_type={chart_type}"
+    )
     result = generate_chart_impl(
         data_source,
         chart_type,
@@ -122,26 +128,35 @@ async def generate_chart(
             chart_json_uri = f"ui://orionbelt/chart-json/{chart_id}"
             if services.provides("add_resource"):
                 from fastmcp.resources import TextResource
-                services.add_resource(TextResource(
-                    uri=chart_uri,
-                    name=f"Chart: {title or chart_type_display}",
-                    text=html,
-                    mime_type="text/html",
-                ))
-                services.add_resource(TextResource(
-                    uri=chart_json_uri,
-                    name=f"Chart JSON: {title or chart_type_display}",
-                    text=fig.to_json(),
-                    mime_type="application/json",
-                ))
-                logger.info(f"Registered chart resources: {chart_uri}, {chart_json_uri}")
+
+                services.add_resource(
+                    TextResource(
+                        uri=chart_uri,
+                        name=f"Chart: {title or chart_type_display}",
+                        text=html,
+                        mime_type="text/html",
+                    )
+                )
+                services.add_resource(
+                    TextResource(
+                        uri=chart_json_uri,
+                        name=f"Chart JSON: {title or chart_type_display}",
+                        text=fig.to_json(),
+                        mime_type="application/json",
+                    )
+                )
+                logger.info(
+                    f"Registered chart resources: {chart_uri}, {chart_json_uri}"
+                )
 
             # Export a static PNG: saved to disk and returned inline as ImageContent
             image_inline = None
             file_uri = ""
             try:
                 chart_id = str(uuid4())
-                image_bytes = fig.to_image(format="png", width=PNG_WIDTH, height=PNG_HEIGHT)
+                image_bytes = fig.to_image(
+                    format="png", width=PNG_WIDTH, height=PNG_HEIGHT
+                )
                 connection_id = services.get_session_data(ctx).connection_id
                 image_file_path = save_image_to_tmp(
                     image_bytes, chart_id, "png", connection_id=connection_id
@@ -152,15 +167,21 @@ async def generate_chart(
             except Exception as e:
                 logger.debug(f"PNG export failed: {e}")
 
-            await ctx.info(f"Interactive {chart_type_display} chart with {data_points} data points")
-            text_result = f"Chart generated: {chart_uri}{file_uri}\nChart JSON: {chart_json_uri}"
+            await ctx.info(
+                f"Interactive {chart_type_display} chart with {data_points} data points"
+            )
+            text_result = (
+                f"Chart generated: {chart_uri}{file_uri}\nChart JSON: {chart_json_uri}"
+            )
             return_binary = config_manager.get_server_config().chart_return_binary
             if image_inline and return_binary:
                 return [text_result, image_inline]
             return text_result
         else:
             await ctx.info("Chart generation failed")
-            raise RuntimeError("Chart generation failed: unexpected result format for interactive mode")
+            raise RuntimeError(
+                "Chart generation failed: unexpected result format for interactive mode"
+            )
 
     # Handle image output
     if isinstance(result, tuple) and len(result) == 2:

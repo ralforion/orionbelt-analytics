@@ -4,20 +4,20 @@ import logging
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
-from sqlalchemy import create_engine, text, MetaData, inspect
+from sqlalchemy import MetaData, create_engine, inspect, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError
+from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import QueuePool
 
 from ..constants import (
     CONNECTION_TIMEOUT,
-    SNOWFLAKE_SYSTEM_SCHEMAS,
-    MIN_SAMPLE_LIMIT,
-    MAX_SAMPLE_LIMIT,
     DEFAULT_SAMPLE_LIMIT,
+    MAX_SAMPLE_LIMIT,
+    MIN_SAMPLE_LIMIT,
+    SNOWFLAKE_SYSTEM_SCHEMAS,
 )
-from ..serialization import serialize_rows
 from ..database_manager import ColumnInfo, TableInfo
+from ..serialization import serialize_rows
 from .base import DatabaseDriver
 
 logger = logging.getLogger(__name__)
@@ -114,12 +114,14 @@ class SnowflakeDriver(DatabaseDriver):
 
     def get_schemas(self) -> List[str]:
         excluded_schemas = "', '".join(SNOWFLAKE_SYSTEM_SCHEMAS)
-        query = text(f"""
+        query = text(
+            f"""
             SELECT schema_name
             FROM information_schema.schemata
             WHERE schema_name NOT IN ('{excluded_schemas}')
             ORDER BY schema_name
-        """)
+        """
+        )
         try:
             with self.engine.connect() as conn:
                 result = conn.execute(query)
@@ -132,21 +134,25 @@ class SnowflakeDriver(DatabaseDriver):
         try:
             with self.engine.connect() as conn:
                 if schema_name:
-                    query = text("""
+                    query = text(
+                        """
                         SELECT table_name
                         FROM information_schema.tables
                         WHERE table_schema = :schema_name
                         AND table_type = 'BASE TABLE'
                         ORDER BY table_name
-                    """)
+                    """
+                    )
                     result = conn.execute(query, {"schema_name": schema_name})
                 else:
-                    query = text("""
+                    query = text(
+                        """
                         SELECT table_name
                         FROM information_schema.tables
                         WHERE table_type = 'BASE TABLE'
                         ORDER BY table_name
-                    """)
+                    """
+                    )
                     result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
         except SQLAlchemyError as e:
@@ -224,9 +230,7 @@ class SnowflakeDriver(DatabaseDriver):
                 fk_by_table: Dict[str, List[Dict]] = {}
                 fk_success = False
                 try:
-                    fk_query = text(
-                        f"SHOW IMPORTED KEYS IN SCHEMA {full_schema_path}"
-                    )
+                    fk_query = text(f"SHOW IMPORTED KEYS IN SCHEMA {full_schema_path}")
                     log_sql(str(fk_query))
                     result = conn.execute(fk_query)
                     for row in result.fetchall():
@@ -265,7 +269,8 @@ class SnowflakeDriver(DatabaseDriver):
                 cols_by_table: Dict[str, List[Dict]] = {}
                 cols_success = False
                 try:
-                    cols_query = text("""
+                    cols_query = text(
+                        """
                         SELECT table_name, column_name, data_type,
                                character_maximum_length, numeric_precision,
                                numeric_scale, is_nullable, column_default,
@@ -273,20 +278,17 @@ class SnowflakeDriver(DatabaseDriver):
                         FROM information_schema.columns
                         WHERE table_schema = :schema_name
                         ORDER BY table_name, ordinal_position
-                    """)
-                    log_sql(str(cols_query))
-                    result = conn.execute(
-                        cols_query, {"schema_name": schema_name}
+                    """
                     )
+                    log_sql(str(cols_query))
+                    result = conn.execute(cols_query, {"schema_name": schema_name})
                     for row in result.fetchall():
                         row_dict = (
                             row._asdict()
                             if hasattr(row, "_asdict")
                             else dict(row._mapping)
                         )
-                        table = row_dict.get("table_name") or row_dict.get(
-                            "TABLE_NAME"
-                        )
+                        table = row_dict.get("table_name") or row_dict.get("TABLE_NAME")
                         if table:
                             cols_by_table.setdefault(table, []).append(
                                 {
@@ -305,9 +307,7 @@ class SnowflakeDriver(DatabaseDriver):
                                     or row_dict.get("COMMENT"),
                                 }
                             )
-                    logger.info(
-                        f"Prefetched columns for {len(cols_by_table)} tables"
-                    )
+                    logger.info(f"Prefetched columns for {len(cols_by_table)} tables")
                     cols_success = True
                 except Exception as e:
                     logger.warning(f"Failed to prefetch columns: {e}")
@@ -319,8 +319,11 @@ class SnowflakeDriver(DatabaseDriver):
             logger.error(f"Failed to prefetch schema metadata: {e}")
 
     def analyze_table(
-        self, table_name: str, schema_name: Optional[str] = None,
-        cache_get: callable = None, log_sql: callable = None,
+        self,
+        table_name: str,
+        schema_name: Optional[str] = None,
+        cache_get: callable = None,
+        log_sql: callable = None,
     ) -> Optional[TableInfo]:
         """Analyze a Snowflake table.
 
@@ -345,9 +348,9 @@ class SnowflakeDriver(DatabaseDriver):
                     cached_fks = cache_get(fk_cache_key)
 
                     if cached_cols is not None:
-                        table_columns = cached_cols.get(
-                            table_name
-                        ) or cached_cols.get(table_name.upper())
+                        table_columns = cached_cols.get(table_name) or cached_cols.get(
+                            table_name.upper()
+                        )
                         if table_columns:
                             logger.debug(
                                 f"Using cached columns for {table_name}: "
@@ -360,9 +363,9 @@ class SnowflakeDriver(DatabaseDriver):
                             return None
 
                     if cached_pks is not None:
-                        primary_keys = cached_pks.get(
-                            table_name, []
-                        ) or cached_pks.get(table_name.upper(), [])
+                        primary_keys = cached_pks.get(table_name, []) or cached_pks.get(
+                            table_name.upper(), []
+                        )
                         logger.debug(
                             f"Using cached PKs for {table_name}: {primary_keys}"
                         )
@@ -371,15 +374,13 @@ class SnowflakeDriver(DatabaseDriver):
                             table_name, schema=schema_name
                         )
                         primary_keys = (
-                            table_pk.get("constrained_columns", [])
-                            if table_pk
-                            else []
+                            table_pk.get("constrained_columns", []) if table_pk else []
                         )
 
                     if cached_fks is not None:
-                        table_fks = cached_fks.get(
-                            table_name, []
-                        ) or cached_fks.get(table_name.upper(), [])
+                        table_fks = cached_fks.get(table_name, []) or cached_fks.get(
+                            table_name.upper(), []
+                        )
                         logger.debug(
                             f"Using cached FKs for {table_name}: "
                             f"{len(table_fks)} constraints"
@@ -391,12 +392,8 @@ class SnowflakeDriver(DatabaseDriver):
                 else:
                     # No cache - use inspector
                     if schema_name:
-                        if not inspector.has_table(
-                            table_name, schema=schema_name
-                        ):
-                            logger.error(
-                                f"Table {schema_name}.{table_name} not found"
-                            )
+                        if not inspector.has_table(table_name, schema=schema_name):
+                            logger.error(f"Table {schema_name}.{table_name} not found")
                             return None
                         table_columns = inspector.get_columns(
                             table_name, schema=schema_name
@@ -415,22 +412,22 @@ class SnowflakeDriver(DatabaseDriver):
                         table_pk = inspector.get_pk_constraint(table_name)
                         table_fks = inspector.get_foreign_keys(table_name)
                     primary_keys = (
-                        table_pk.get("constrained_columns", [])
-                        if table_pk
-                        else []
+                        table_pk.get("constrained_columns", []) if table_pk else []
                     )
 
                 # Fallback: if columns not from cache, fetch with query
                 if table_columns is None and schema_name:
                     try:
-                        cols_query = text("""
+                        cols_query = text(
+                            """
                             SELECT column_name, data_type, is_nullable,
                                    column_default, comment
                             FROM information_schema.columns
                             WHERE table_schema = :schema_name
                               AND table_name = :table_name
                             ORDER BY ordinal_position
-                        """)
+                        """
+                        )
                         if log_sql:
                             log_sql(str(cols_query))
                         result = conn.execute(
@@ -442,9 +439,7 @@ class SnowflakeDriver(DatabaseDriver):
                         )
                         rows = result.fetchall()
                         if not rows:
-                            logger.error(
-                                f"Table {schema_name}.{table_name} not found"
-                            )
+                            logger.error(f"Table {schema_name}.{table_name} not found")
                             return None
                         table_columns = []
                         for row in rows:
@@ -481,12 +476,8 @@ class SnowflakeDriver(DatabaseDriver):
 
                 if table_columns is None:
                     if schema_name:
-                        if not inspector.has_table(
-                            table_name, schema=schema_name
-                        ):
-                            logger.error(
-                                f"Table {schema_name}.{table_name} not found"
-                            )
+                        if not inspector.has_table(table_name, schema=schema_name):
+                            logger.error(f"Table {schema_name}.{table_name} not found")
                             return None
                         table_columns = inspector.get_columns(
                             table_name, schema=schema_name
@@ -519,14 +510,11 @@ class SnowflakeDriver(DatabaseDriver):
                     is_fk = False
                     for fk in table_fks:
                         constrained_cols_upper = [
-                            c.upper()
-                            for c in fk.get("constrained_columns", [])
+                            c.upper() for c in fk.get("constrained_columns", [])
                         ]
                         if column_name.upper() in constrained_cols_upper:
                             is_fk = True
-                            fk_idx = constrained_cols_upper.index(
-                                column_name.upper()
-                            )
+                            fk_idx = constrained_cols_upper.index(column_name.upper())
                             fk_table = fk.get("referred_table")
                             referred_cols = fk.get("referred_columns", [])
                             fk_column = (
@@ -595,9 +583,7 @@ class SnowflakeDriver(DatabaseDriver):
                 except Exception as explain_error:
                     error_msg = str(explain_error)
                     validation_result["database_error"] = error_msg
-                    validation_result["error"] = (
-                        f"Snowflake syntax error: {error_msg}"
-                    )
+                    validation_result["error"] = f"Snowflake syntax error: {error_msg}"
                     validation_result["error_type"] = "syntax_error"
 
                     if "does not exist" in error_msg.lower():
@@ -615,9 +601,9 @@ class SnowflakeDriver(DatabaseDriver):
                             "double quotes for case-sensitive names"
                         )
         except Exception as conn_error:
-            validation_result["error"] = (
-                f"Database connection error during validation: {conn_error}"
-            )
+            validation_result[
+                "error"
+            ] = f"Database connection error during validation: {conn_error}"
             validation_result["error_type"] = "connection_error"
 
         return validation_result

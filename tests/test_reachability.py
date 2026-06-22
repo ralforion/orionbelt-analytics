@@ -26,9 +26,36 @@ def _tbl(name, fks=None):
 def _build():
     tables = [
         _tbl("customers"),
-        _tbl("orders", [{"column": "customer_id", "referenced_table": "customers", "referenced_column": "id"}]),
-        _tbl("order_items", [{"column": "order_id", "referenced_table": "orders", "referenced_column": "id"}]),
-        _tbl("returns", [{"column": "customer_id", "referenced_table": "customers", "referenced_column": "id"}]),
+        _tbl(
+            "orders",
+            [
+                {
+                    "column": "customer_id",
+                    "referenced_table": "customers",
+                    "referenced_column": "id",
+                }
+            ],
+        ),
+        _tbl(
+            "order_items",
+            [
+                {
+                    "column": "order_id",
+                    "referenced_table": "orders",
+                    "referenced_column": "id",
+                }
+            ],
+        ),
+        _tbl(
+            "returns",
+            [
+                {
+                    "column": "customer_id",
+                    "referenced_table": "customers",
+                    "referenced_column": "id",
+                }
+            ],
+        ),
     ]
     r = GraphRetriever()
     r.build_graph(tables)
@@ -57,7 +84,11 @@ def test_reachable_from_dimension_is_empty():
 def test_measurable_from_walks_to_finer_grain():
     r = _build()
     # everything that fans out customers
-    assert set(r.measurable_from("customers")["tables"]) == {"orders", "order_items", "returns"}
+    assert set(r.measurable_from("customers")["tables"]) == {
+        "orders",
+        "order_items",
+        "returns",
+    }
 
 
 def test_measurable_from_interior_fact():
@@ -89,8 +120,14 @@ def test_unknown_table():
 def test_cycle_terminates():
     # Mutual FKs a <-> b must not loop forever.
     tables = [
-        _tbl("a", [{"column": "b_id", "referenced_table": "b", "referenced_column": "id"}]),
-        _tbl("b", [{"column": "a_id", "referenced_table": "a", "referenced_column": "id"}]),
+        _tbl(
+            "a",
+            [{"column": "b_id", "referenced_table": "b", "referenced_column": "id"}],
+        ),
+        _tbl(
+            "b",
+            [{"column": "a_id", "referenced_table": "a", "referenced_column": "id"}],
+        ),
     ]
     r = GraphRetriever()
     r.build_graph(tables)
@@ -100,7 +137,18 @@ def test_cycle_terminates():
 
 
 def test_self_reference_terminates():
-    tables = [_tbl("employee", [{"column": "manager_id", "referenced_table": "employee", "referenced_column": "id"}])]
+    tables = [
+        _tbl(
+            "employee",
+            [
+                {
+                    "column": "manager_id",
+                    "referenced_table": "employee",
+                    "referenced_column": "id",
+                }
+            ],
+        )
+    ]
     r = GraphRetriever()
     r.build_graph(tables)
     # A self-loop reaches nothing new beyond itself (anchor excluded from results).

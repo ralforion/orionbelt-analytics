@@ -14,14 +14,7 @@ Modules:
     workspace  - Workspace restore from previous sessions
 """
 
-from . import connection
-from . import schema
-from . import ontology
-from . import query
-from . import chart
-from . import rdf
-from . import graphrag
-from . import workspace
+from . import chart, connection, graphrag, ontology, query, rdf, schema, workspace
 
 __all__ = [
     "connection",
