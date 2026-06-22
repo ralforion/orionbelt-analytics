@@ -12,18 +12,15 @@ from ..paths import OUTPUT_DIR
 from ..workspace import detect_workspace, format_workspace_summary
 from .workspace import _restore_workspace_core, _format_restore_summary
 
+from ..handler_context import HandlerContext
+
 logger = logging.getLogger(__name__)
 
 
 async def connect_database(
     ctx: Context,
     db_type: str,
-    get_session_db_manager,
-    get_session_data,
-    create_error_response,
-    _get_connection_fingerprint,
-    _clear_session_state,
-    get_oxigraph_store=None,
+    services: "HandlerContext",
 ) -> str:
     """Connect to a database using credentials from environment variables.
 
@@ -49,7 +46,7 @@ async def connect_database(
             f"Invalid database type '{db_type}'. Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
         ).to_response()
 
-    db_manager = get_session_db_manager(ctx)
+    db_manager = services.get_session_db_manager(ctx)
     success = False
     db_name = ""
 
@@ -271,14 +268,14 @@ async def connect_database(
         db_name = database
 
     if success:
-        session = get_session_data(ctx)
-        new_conn_id = _get_connection_fingerprint(db_manager)
+        session = services.get_session_data(ctx)
+        new_conn_id = services.get_connection_fingerprint(db_manager)
 
         if session.connection_id and session.connection_id != new_conn_id:
             logger.info(
                 f"Connection changed (old: {session.connection_id[:8]}..., new: {new_conn_id[:8]}...)"
             )
-            _clear_session_state(session, reason="connection change")
+            services.clear_session_state(session, reason="connection change")
         elif not session.connection_id:
             logger.info(f"Initial connection established: {new_conn_id[:8]}...")
 
@@ -298,10 +295,10 @@ async def connect_database(
         # Detect and auto-restore existing workspace
         response = f"Successfully connected to {db_type} database: {db_name}"
         workspace = detect_workspace(new_conn_id)
-        if workspace and get_oxigraph_store:
+        if workspace and services.get_oxigraph_store:
             try:
                 restore_result = await _restore_workspace_core(
-                    ctx, session, new_conn_id, None, get_oxigraph_store
+                    ctx, session, new_conn_id, None, services
                 )
                 if restore_result:
                     response += "\n\n" + _format_restore_summary(restore_result)
@@ -323,7 +320,7 @@ async def connect_database(
         ).to_response()
 
 
-async def list_schemas(ctx: Context, get_session_db_manager):
+async def list_schemas(ctx: Context, services: "HandlerContext"):
     """Get a list of available schemas from the connected database.
 
     Args:
@@ -333,7 +330,7 @@ async def list_schemas(ctx: Context, get_session_db_manager):
     Returns:
         List of schema names
     """
-    db_manager = get_session_db_manager(ctx)
+    db_manager = services.get_session_db_manager(ctx)
     schemas = db_manager.get_schemas()
     if schemas:
         await ctx.info(f"Found {len(schemas)} schemas; next call should be discover_schema")

@@ -15,6 +15,8 @@ from ..lifecycle.metadata import VersionMetadataManager
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..paths import OUTPUT_DIR, get_connection_dir, get_models_dir, ensure_output_dir
 
+from ..handler_context import HandlerContext
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +25,7 @@ async def _restore_workspace_core(
     session,
     connection_id: str,
     schema_name: Optional[str],
-    get_oxigraph_store,
+    services: "HandlerContext",
 ) -> Optional[Dict[str, Any]]:
     """Core workspace restore logic shared by connect_database and cleanup recovery.
 
@@ -133,7 +135,7 @@ async def _restore_workspace_core(
     rdf_store = workspace.get("rdf_store", {})
     if rdf_store.get("initialized") and OXIGRAPH_AVAILABLE:
         try:
-            store = get_oxigraph_store(ctx)
+            store = services.get_oxigraph_store(ctx)
             if store:
                 restored.append("RDF store (initialized)")
         except Exception as e:
@@ -270,8 +272,7 @@ def _format_restore_summary(result: Dict[str, Any]) -> str:
 
 async def cleanup_workspace(
     ctx: Context,
-    get_session_data,
-    create_error_response,
+    services: "HandlerContext",
 ) -> str:
     """Delete all workspace files for the current connection and clear session state.
 
@@ -287,10 +288,10 @@ async def cleanup_workspace(
     Returns:
         Summary of what was removed
     """
-    session = get_session_data(ctx)
+    session = services.get_session_data(ctx)
 
     if not session.connection_id:
-        return create_error_response(
+        return services.create_error_response(
             "No database connection. Call connect_database first.",
             "connection_error",
         )
@@ -356,8 +357,7 @@ async def save_semantic_model(
     model_yaml: str,
     model_name: str,
     schema_name: Optional[str],
-    get_session_data,
-    create_error_response,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Save a semantic model YAML to the workspace for reuse across sessions.
 
@@ -372,10 +372,10 @@ async def save_semantic_model(
     Returns:
         Save status with file path
     """
-    session = get_session_data(ctx)
+    session = services.get_session_data(ctx)
 
     if not session.connection_id:
-        return create_error_response(
+        return services.create_error_response(
             "No database connection. Call connect_database first.",
             "connection_error",
         )
@@ -389,7 +389,7 @@ async def save_semantic_model(
     models_dir = get_models_dir(connection_id)
     safe_name = Path(model_name.replace(" ", "_")).name
     if not safe_name or safe_name in {".", ".."}:
-        return create_error_response(
+        return services.create_error_response(
             f"Invalid model_name: {model_name!r}", "validation_error"
         )
     model_filename = f"{safe_name}.yaml"
@@ -401,7 +401,7 @@ async def save_semantic_model(
         logger.info(f"Saved semantic model '{model_name}' to: {model_path}")
     except Exception as e:
         logger.error(f"Failed to save semantic model: {e}")
-        return create_error_response(
+        return services.create_error_response(
             f"Failed to save model: {e}",
             "file_error",
         )
@@ -438,8 +438,7 @@ async def save_semantic_model(
 async def get_semantic_model(
     ctx: Context,
     model_name: str,
-    get_session_data,
-    create_error_response,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Retrieve a stored semantic model YAML by name.
 
@@ -452,10 +451,10 @@ async def get_semantic_model(
     Returns:
         Model YAML content and metadata
     """
-    session = get_session_data(ctx)
+    session = services.get_session_data(ctx)
 
     if not session.connection_id:
-        return create_error_response(
+        return services.create_error_response(
             "No database connection. Call connect_database first.",
             "connection_error",
         )
@@ -467,7 +466,7 @@ async def get_semantic_model(
     workspace = mgr.get_workspace()
 
     if not workspace:
-        return create_error_response(
+        return services.create_error_response(
             "No workspace found for this connection.",
             "workspace_not_found",
         )
@@ -477,7 +476,7 @@ async def get_semantic_model(
 
     if not model_info:
         available = list(models.keys())
-        return create_error_response(
+        return services.create_error_response(
             f"Model '{model_name}' not found. Available models: {available or 'none'}",
             "model_not_found",
         )
@@ -488,7 +487,7 @@ async def get_semantic_model(
     model_path = models_dir / model_filename
 
     if not model_path.exists():
-        return create_error_response(
+        return services.create_error_response(
             f"Model file missing: {model_filename}",
             "file_not_found",
         )
@@ -496,7 +495,7 @@ async def get_semantic_model(
     try:
         model_yaml = model_path.read_text(encoding="utf-8")
     except Exception as e:
-        return create_error_response(
+        return services.create_error_response(
             f"Failed to read model file: {e}",
             "file_error",
         )
@@ -514,8 +513,7 @@ async def get_semantic_model(
 
 async def list_semantic_models(
     ctx: Context,
-    get_session_data,
-    create_error_response,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """List all stored semantic models for the current connection.
 
@@ -527,10 +525,10 @@ async def list_semantic_models(
     Returns:
         List of available models with metadata
     """
-    session = get_session_data(ctx)
+    session = services.get_session_data(ctx)
 
     if not session.connection_id:
-        return create_error_response(
+        return services.create_error_response(
             "No database connection. Call connect_database first.",
             "connection_error",
         )

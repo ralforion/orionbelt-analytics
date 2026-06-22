@@ -15,6 +15,8 @@ from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..lifecycle.metadata import update_workspace_section, update_workspace_rdf
 from ..paths import ensure_output_dir, get_connection_dir, OUTPUT_DIR
 
+from ..handler_context import HandlerContext
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,9 +24,7 @@ async def store_ontology_in_rdf(
     ctx: Context,
     schema_name: Optional[str],
     graph_uri: Optional[str],
-    get_session_data,
-    get_oxigraph_store,
-    create_error_response,
+    services: "HandlerContext",
 ) -> str:
     """Store current session ontology in persistent RDF store with SPARQL access."""
     if not OXIGRAPH_AVAILABLE:
@@ -32,11 +32,11 @@ async def store_ontology_in_rdf(
             "pyoxigraph not installed. Install with: pip install pyoxigraph"
         ).to_response()
 
-    store = get_oxigraph_store(ctx)
+    store = services.get_oxigraph_store(ctx)
     if store is None:
         return StoreNotInitializedError("Failed to initialize Oxigraph store").to_response()
 
-    session = get_session_data(ctx)
+    session = services.get_session_data(ctx)
     effective_schema = schema_name or session.get_last_analyzed_schema() or "default"
 
     if not session.ontology_file:
@@ -127,14 +127,13 @@ async def query_sparql(
     ctx: Context,
     sparql_query: str,
     timeout_seconds: int,
-    get_oxigraph_store,
-    create_error_response,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Execute SPARQL query (SELECT, ASK, or CONSTRUCT) against stored ontologies."""
     if not OXIGRAPH_AVAILABLE:
         return DependencyError("pyoxigraph not installed").to_response()
 
-    store = get_oxigraph_store(ctx)
+    store = services.get_oxigraph_store(ctx)
     if store is None:
         return StoreNotInitializedError("Oxigraph store not initialized").to_response()
 
@@ -178,14 +177,13 @@ async def query_sparql(
 async def query_sparql_ask(
     ctx: Context,
     sparql_query: str,
-    get_oxigraph_store,
-    create_error_response,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Execute SPARQL ASK query (returns true/false)."""
     if not OXIGRAPH_AVAILABLE:
         return DependencyError("pyoxigraph not installed").to_response()
 
-    store = get_oxigraph_store(ctx)
+    store = services.get_oxigraph_store(ctx)
     if store is None:
         return StoreNotInitializedError("Oxigraph store not initialized").to_response()
 
@@ -205,14 +203,13 @@ async def add_rdf_knowledge(
     predicate: str,
     object_value: str,
     metadata: Optional[Dict[str, Any]],
-    get_oxigraph_store,
-    create_error_response,
+    services: "HandlerContext",
 ) -> str:
     """Add custom knowledge/metadata to the RDF store."""
     if not OXIGRAPH_AVAILABLE:
         return DependencyError("pyoxigraph not installed").to_response()
 
-    store = get_oxigraph_store(ctx)
+    store = services.get_oxigraph_store(ctx)
     if store is None:
         return StoreNotInitializedError("Oxigraph store not initialized").to_response()
 
@@ -238,21 +235,19 @@ async def add_rdf_knowledge(
 async def list_tables_sparql(
     ctx: Context,
     schema_graph: Optional[str],
-    get_session_data,
-    get_oxigraph_store,
-    create_error_response,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """List all tables from stored ontology using SPARQL."""
     if not OXIGRAPH_AVAILABLE:
         return DependencyError("pyoxigraph not installed").to_response()
 
-    store = get_oxigraph_store(ctx)
+    store = services.get_oxigraph_store(ctx)
     if store is None:
         return StoreNotInitializedError("Oxigraph store not initialized").to_response()
 
     try:
         if not schema_graph:
-            session = get_session_data(ctx)
+            session = services.get_session_data(ctx)
             schema_name = session.get_last_analyzed_schema() or "default"
             schema_graph = f"http://example.com/schema/{schema_name}"
 
@@ -276,14 +271,13 @@ async def find_columns_by_type_sparql(
     ctx: Context,
     data_type: str,
     schema_graph: Optional[str],
-    get_oxigraph_store,
-    create_error_response,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Find columns by data type using SPARQL."""
     if not OXIGRAPH_AVAILABLE:
         return DependencyError("pyoxigraph not installed").to_response()
 
-    store = get_oxigraph_store(ctx)
+    store = services.get_oxigraph_store(ctx)
     if store is None:
         return StoreNotInitializedError("Oxigraph store not initialized").to_response()
 
@@ -306,14 +300,13 @@ async def find_columns_by_type_sparql(
 
 async def get_rdf_store_stats(
     ctx: Context,
-    get_oxigraph_store,
-    create_error_response,
+    services: "HandlerContext",
 ) -> Dict[str, Any]:
     """Get statistics about the persistent RDF store."""
     if not OXIGRAPH_AVAILABLE:
         return DependencyError("pyoxigraph not installed").to_response()
 
-    store = get_oxigraph_store(ctx)
+    store = services.get_oxigraph_store(ctx)
     if store is None:
         return StoreNotInitializedError("Oxigraph store not initialized").to_response()
 

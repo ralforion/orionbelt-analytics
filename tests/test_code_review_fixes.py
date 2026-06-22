@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch, AsyncMock
 import os
 
 from src.session import SessionData
+from src.handler_context import HandlerContext
 from src.database_manager import DatabaseManager
 
 
@@ -181,11 +182,13 @@ class TestDremioPATHandler(unittest.IsolatedAsyncioTestCase):
             await connect_database(
                 ctx=mock_ctx,
                 db_type="dremio",
-                get_session_db_manager=mock_get_db_manager,
-                get_session_data=mock_get_session_data,
-                create_error_response=mock_create_error,
-                _get_connection_fingerprint=mock_fingerprint,
-                _clear_session_state=mock_clear,
+                services=HandlerContext(
+                    get_session_db_manager=mock_get_db_manager,
+                    get_session_data=mock_get_session_data,
+                    create_error_response=mock_create_error,
+                    get_connection_fingerprint=mock_fingerprint,
+                    clear_session_state=mock_clear,
+                ),
             )
 
         mock_db_manager.connect_dremio.assert_called_once_with(
@@ -225,11 +228,13 @@ class TestDremioPATHandler(unittest.IsolatedAsyncioTestCase):
             await connect_database(
                 ctx=mock_ctx,
                 db_type="dremio",
-                get_session_db_manager=mock_get_db_manager,
-                get_session_data=mock_get_session_data,
-                create_error_response=mock_create_error,
-                _get_connection_fingerprint=mock_fingerprint,
-                _clear_session_state=mock_clear,
+                services=HandlerContext(
+                    get_session_db_manager=mock_get_db_manager,
+                    get_session_data=mock_get_session_data,
+                    create_error_response=mock_create_error,
+                    get_connection_fingerprint=mock_fingerprint,
+                    clear_session_state=mock_clear,
+                ),
             )
 
         mock_db_manager.connect_dremio.assert_called_once_with(

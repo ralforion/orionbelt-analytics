@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from src.graphrag.retriever import GraphRetriever
 from src.handlers import graphrag as h
+from src.handler_context import HandlerContext
 
 
 def _tbl(name, fks=None):
@@ -46,8 +47,10 @@ async def _call(facts, dimensions=None, session=None):
     sess = session or _session()
     return await h.plan_composite_query(
         _Ctx(), facts, dimensions,
-        get_session_data=lambda _ctx: sess,
-        create_error_response=_err,
+        services=HandlerContext(
+            get_session_data=lambda _ctx: sess,
+            create_error_response=_err,
+        ),
     )
 
 
