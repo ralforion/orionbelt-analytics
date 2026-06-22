@@ -13,12 +13,12 @@
     "**/build",
     "**/dist"
   ],
-  "pythonVersion": "3.10",
+  "pythonVersion": "3.13",
   "pythonPlatform": "Darwin",
   "executionEnvironments": [
     {
       "root": "src",
-      "pythonVersion": "3.10",
+      "pythonVersion": "3.13",
       "extraPaths": [
         "src"
       ]

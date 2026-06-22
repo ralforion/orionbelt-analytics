@@ -5,7 +5,7 @@ repos:
     rev: 23.12.1
     hooks:
       - id: black
-        language_version: python3.10
+        language_version: python3.13
 
   # Import sorting
   - repo: https://github.com/pycqa/isort
@@ -29,13 +29,15 @@ repos:
         args: ["-r", "src/"]
         exclude: tests/
 
-  # Type checking
+  # Type checking — targets Python 3.13 to match pyproject (requires-python >=3.13).
+  # --ignore-missing-imports is justified: several runtime deps ship no type stubs
+  # (fastmcp, pyoxigraph, chromadb, snowflake/databricks/dremio connectors).
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.8.0
     hooks:
       - id: mypy
         additional_dependencies: [types-all]
-        args: [--ignore-missing-imports]
+        args: [--ignore-missing-imports, --python-version=3.13]
 
   # General hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
