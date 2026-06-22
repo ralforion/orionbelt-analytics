@@ -5,6 +5,46 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-06-22
+
+Architecture-review release: correctness fixes, stronger SQL safety, and a large
+internal refactor of the registration layer. No MCP tool surface changes (still
+26 tools, same signatures).
+
+### Added
+- **Driver/dialect registry** (`src/drivers/registry.py`) — a single source of
+  truth mapping each `db_type` to its driver class and sqlglot dialect.
+  `SUPPORTED_DB_TYPES`, the driver classes, and OBQC's dialect map now all derive
+  from `constants.DB_SQLGLOT_DIALECTS`, so they can no longer drift apart.
+- **Parser-based SQL safety gate** (`security.analyze_sql_statement`) — sqlglot
+  validation is now the primary read-only/single-statement check, run ahead of
+  the regex first-filter.
+- **Typed `HandlerContext`** — handlers receive one request-scoped services
+  object instead of many helper keyword arguments.
+- CI workflow enforcing ruff, black, isort and pytest (mypy advisory).
+
+### Changed
+- **OBQC dialect parity** — `bigquery`, `duckdb`, `databricks` and `mysql` are
+  now validated with their own sqlglot dialect instead of silently falling back
+  to the PostgreSQL dialect.
+- SQL validation now catches write/DDL operations hidden after a CTE
+  (`WITH x AS (...) INSERT ...`) and no longer mis-flags a semicolon inside a
+  string literal (`WHERE name = 'a;b'`) as multiple statements.
+- **Refactor (no behavior change):** split the 1,237-line `main.py` into
+  `server_state.py`, `resources.py` and `tool_types.py`; decomposed the
+  1,466-line `handlers/ontology.py` into focused
+  generation/semantic/io/artifacts modules.
+- Repository formatted with black + isort; tooling aligned to Python 3.13.
+
+### Fixed
+- **AUTO_ONTOLOGY** background generation called a non-existent generator method
+  and silently produced nothing; it now generates the ontology correctly.
+- Artifact downloads (`download_artifact`) honor an explicit `schema_name` and
+  read that schema's per-schema state instead of the currently active schema.
+- RDF-store auto-restore on `connect_database` no longer fails with an
+  AttributeError on RDF-enabled workspaces.
+- Startup banner reports the real registered tool count (was a stale `23`).
+
 ## [1.6.0] - 2026-06-15
 
 ### Added
