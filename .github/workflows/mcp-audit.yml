@@ -41,8 +41,9 @@ jobs:
             > tools.json
 
       - name: Run audit
-        # No --model: run the deterministic static checks only, no LLM call.
-        run: uv run mcp-xray analyze tools.json --runs-dir audit-output
+        # --tools-json feeds the offline dump; no --llm flag means the static +
+        # consolidation checks run deterministically with no model / API key.
+        run: uv run mcp-xray analyze --tools-json tools.json --runs-dir audit-output
 
       - name: Render report to job summary
         if: always()
