@@ -11,10 +11,10 @@ import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, cast
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 
 from .constants import DB_SQLGLOT_DIALECTS, DEFAULT_SAMPLE_LIMIT, IDENTIFIER_PATTERN
@@ -108,7 +108,7 @@ class DatabaseManager:
     - Connection health checks
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Driver holds the active database-specific implementation
         self._driver: Optional[Any] = None  # DatabaseDriver from .drivers.base
 
@@ -131,13 +131,13 @@ class DatabaseManager:
     # Cache helpers
     # ------------------------------------------------------------------
 
-    def _get_cache_key(self, operation: str, *args) -> str:
+    def _get_cache_key(self, operation: str, *args: Any) -> str:
         """Generate cache key for metadata operations."""
         return f"{operation}:{':'.join(str(arg) for arg in args)}"
 
-    def _is_cache_valid(self, cache_entry: Dict) -> bool:
+    def _is_cache_valid(self, cache_entry: Dict[str, Any]) -> bool:
         """Check if cache entry is still valid."""
-        return time.time() - cache_entry.get("timestamp", 0) < self._cache_ttl
+        return bool(time.time() - cache_entry.get("timestamp", 0) < self._cache_ttl)
 
     def _get_from_cache(self, cache_key: str) -> Optional[Any]:
         """Get value from cache if valid."""
@@ -241,7 +241,7 @@ class DatabaseManager:
         """Escape a value for safe use inside a single-quoted SQL literal."""
         return value.replace("'", "''")
 
-    def _quote_dremio_identifier(self, identifier: str) -> str:
+    def _quote_dremio_identifier(self, identifier: Optional[str]) -> str:
         """Quote and escape a Dremio identifier or path safely."""
         if identifier is None:
             return ""
@@ -255,7 +255,7 @@ class DatabaseManager:
     # Connection lifecycle helpers
     # ------------------------------------------------------------------
 
-    def _sync_engine_from_driver(self):
+    def _sync_engine_from_driver(self) -> None:
         """Keep legacy ``self.engine`` attribute in sync with the active driver."""
         if self._driver and hasattr(self._driver, "engine"):
             self.engine = self._driver.engine
@@ -267,7 +267,7 @@ class DatabaseManager:
     def _test_connection(self) -> bool:
         """Test if the current connection is healthy."""
         if self._driver:
-            return self._driver.test_connection()
+            return bool(self._driver.test_connection())
         if not self.engine:
             return False
         try:
@@ -281,10 +281,10 @@ class DatabaseManager:
     def _test_dremio_connection(self) -> bool:
         """Test if the current Dremio REST connection is healthy."""
         if self._driver and self._driver.db_type == "dremio":
-            return self._driver.test_connection()
+            return bool(self._driver.test_connection())
         return False
 
-    def _ensure_connection(self):
+    def _ensure_connection(self) -> None:
         """Ensure we have a healthy database connection, reconnecting if necessary."""
         if self._dremio_rest_connection:
             logger.debug("_ensure_connection: Dremio REST connection info available")
@@ -321,7 +321,7 @@ class DatabaseManager:
             f"_ensure_connection: final engine state: {self.engine is not None}"
         )
 
-    def _reconnect(self):
+    def _reconnect(self) -> None:
         """Reconnect to the database using stored parameters."""
         if not self._last_connection_params:
             raise RuntimeError("No connection parameters stored for reconnection")
@@ -406,7 +406,7 @@ class DatabaseManager:
         logger.info(f"Successfully reconnected to {params['type']} database")
 
     @contextmanager
-    def get_connection(self):
+    def get_connection(self) -> Iterator[Connection]:
         """Context manager for database connections with auto-reconnection."""
         if not self.engine:
             raise RuntimeError("No database connection established")
@@ -570,8 +570,10 @@ class DatabaseManager:
         )
         if success:
             self._driver = driver
-            # Store database name on driver for get_tables fallback
-            driver._database_name = database
+            # Store database name on driver for get_tables fallback.
+            # Set dynamically (read via getattr in the driver); not a declared
+            # attribute, so silence the attr-defined check here.
+            driver._database_name = database  # type: ignore[attr-defined]
             self._dremio_rest_connection = None
             self._sync_engine_from_driver()
 
@@ -598,13 +600,13 @@ class DatabaseManager:
 
     def connect_dremio(
         self,
-        host: str = None,
-        port: int = None,
-        username: str = None,
-        password: str = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
         ssl: bool = False,
-        uri: str = None,
-        pat: str = None,
+        uri: Optional[str] = None,
+        pat: Optional[str] = None,
     ) -> bool:
         """Connect to Dremio using REST API instead of PostgreSQL protocol."""
         from .drivers.dremio import DremioDriver
@@ -675,8 +677,8 @@ class DatabaseManager:
         self,
         project_id: str,
         dataset: str = "",
-        credentials_path: str = None,
-        credentials_json: str = None,
+        credentials_path: Optional[str] = None,
+        credentials_json: Optional[str] = None,
     ) -> bool:
         """Connect to Google BigQuery."""
         from .drivers.bigquery import BigQueryDriver
@@ -717,7 +719,7 @@ class DatabaseManager:
     def connect_duckdb(
         self,
         database_path: str = ":memory:",
-        motherduck_token: str = None,
+        motherduck_token: Optional[str] = None,
         read_only: bool = False,
     ) -> bool:
         """Connect to DuckDB or MotherDuck."""
@@ -879,7 +881,7 @@ class DatabaseManager:
     def get_schemas(self) -> List[str]:
         """Get list of available schemas."""
         if self._driver:
-            return self._driver.get_schemas()
+            return cast(List[str], self._driver.get_schemas())
 
         # Fallback: should not happen if connected through connect_* methods
         if not self.engine and not self._dremio_rest_connection:
@@ -896,7 +898,7 @@ class DatabaseManager:
         cache_key = self._get_cache_key("get_tables", schema_name or "default")
         cached_result = self._get_from_cache(cache_key)
         if cached_result is not None:
-            return cached_result
+            return cast(List[str], cached_result)
 
         # Ensure connection
         if not self._dremio_rest_connection:
@@ -911,7 +913,7 @@ class DatabaseManager:
         )
 
         if self._driver:
-            tables = self._driver.get_tables(schema_name)
+            tables: List[str] = self._driver.get_tables(schema_name)
             self._store_in_cache(cache_key, tables)
             return tables
 
@@ -972,7 +974,10 @@ class DatabaseManager:
                 cache_get=self._get_from_cache,
                 log_sql=self._log_sql_query,
             )
-        return self._driver.analyze_table(table_name, schema_name)
+        return cast(
+            Optional[TableInfo],
+            self._driver.analyze_table(table_name, schema_name),
+        )
 
     # ------------------------------------------------------------------
     # Sample & query (delegated to driver with validation layer)
@@ -999,7 +1004,10 @@ class DatabaseManager:
         if not self._driver:
             raise RuntimeError("No driver available")
 
-        return self._driver.sample_table_data(table_name, schema_name, limit)
+        return cast(
+            List[Dict[str, Any]],
+            self._driver.sample_table_data(table_name, schema_name, limit),
+        )
 
     def validate_sql_syntax(self, sql_query: str) -> Dict[str, Any]:
         """Validate SQL query syntax with enhanced security checks.
@@ -1167,7 +1175,7 @@ class DatabaseManager:
                     r'\bUPDATE\s+(?:[\w"\'`\[\]]+\.)*(["\w`\[\]]+)',
                     r'\bINTO\s+(?:[\w"\'`\[\]]+\.)*(["\w`\[\]]+)',
                 ]
-                tables = set()
+                tables: set[str] = set()
                 for pattern in table_patterns:
                     matches = re.findall(pattern, query_stripped, re.IGNORECASE)
                     tables.update(match.strip("\"'`[]") for match in matches)
@@ -1249,7 +1257,7 @@ class DatabaseManager:
                     f"Result set may be truncated at {limit} rows"
                 )
 
-        return result_data
+        return cast(Dict[str, Any], result_data)
 
     # ------------------------------------------------------------------
     # Connection status & lifecycle
@@ -1267,7 +1275,7 @@ class DatabaseManager:
             return self._test_dremio_connection()
         return self.has_engine() and self._test_connection()
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         """Close the database connection and clear stored parameters."""
         # Clear metadata cache
         if hasattr(self, "_metadata_cache"):

@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from fastmcp import Context
 
@@ -111,7 +111,9 @@ async def validate_sql_syntax(
                 "database_dialect": "unknown",
             }
 
-        validation_result = db_manager.validate_sql_syntax(sql_query.strip())
+        validation_result: Dict[str, Any] = db_manager.validate_sql_syntax(
+            sql_query.strip()
+        )
 
         if "warnings" not in validation_result:
             validation_result["warnings"] = []
@@ -203,7 +205,7 @@ async def execute_sql_query(
     ctx: Context,
     sql_query: str,
     limit: int,
-    checklist_completed: bool,
+    checklist_completed: Union[bool, str],
     query_intent: Optional[str],
     services: "HandlerContext",
 ) -> Dict[str, Any]:
@@ -320,7 +322,7 @@ async def execute_sql_query(
             except Exception as e:
                 logger.debug(f"Context auto-retrieval failed (non-critical): {e}")
 
-        result = db_manager.execute_sql_query(sql_query.strip(), limit)
+        result: Dict[str, Any] = db_manager.execute_sql_query(sql_query.strip(), limit)
 
         # Merge OBQC warnings into result
         if obqc_warnings:
@@ -349,8 +351,9 @@ async def execute_sql_query(
 
     except Exception as e:
         logger.error(f"Critical error in SQL execution: {e}")
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             f"Internal server error during SQL execution: {str(e)}",
             "internal_error",
             "This may indicate a system-level issue. Please check server logs and try again.",
         )
+        return err

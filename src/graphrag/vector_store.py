@@ -51,7 +51,7 @@ class VectorStore:
         description: str,
         embedding: np.ndarray,
         metadata: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> None:
         """
         Add a schema element to the store.
 
@@ -82,7 +82,7 @@ class VectorStore:
         self.elements.append(element)
         self._index_built = False  # Invalidate index
 
-    def add_elements_batch(self, elements: List[Any]):
+    def add_elements_batch(self, elements: List[Any]) -> None:
         """
         Add multiple schema elements in batch.
 
@@ -101,7 +101,7 @@ class VectorStore:
 
         logger.info(f"Added {len(elements)} elements to vector store")
 
-    def build_index(self):
+    def build_index(self) -> None:
         """Build the search index from stored elements."""
         if not self.elements:
             logger.warning("No elements to index")
@@ -226,7 +226,7 @@ class VectorStore:
         """
         return [elem for elem in self.elements if elem.element_type == element_type]
 
-    def save(self, filepath: Path):
+    def save(self, filepath: Path) -> None:
         """
         Save vector store to disk.
 
@@ -245,7 +245,7 @@ class VectorStore:
             f"Saved vector store with {len(self.elements)} elements to {filepath}"
         )
 
-    def load(self, filepath: Path):
+    def load(self, filepath: Path) -> None:
         """
         Load vector store from disk.
 
@@ -273,7 +273,7 @@ class VectorStore:
         Returns:
             Statistics dictionary
         """
-        type_counts = {}
+        type_counts: Dict[str, int] = {}
         for elem in self.elements:
             type_counts[elem.element_type] = type_counts.get(elem.element_type, 0) + 1
 
@@ -284,7 +284,7 @@ class VectorStore:
             "elements_by_type": type_counts,
         }
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all stored elements."""
         self.elements = []
         self.embeddings_matrix = None

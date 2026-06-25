@@ -14,7 +14,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
@@ -27,7 +27,7 @@ try:
     CHROMADB_AVAILABLE = True
 except ImportError:
     CHROMADB_AVAILABLE = False
-    chromadb = None
+    chromadb = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ class ChromaDBVectorStore:
         description: str,
         embedding: np.ndarray,
         metadata: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> None:
         """
         Add a schema element to the store.
 
@@ -130,7 +130,7 @@ class ChromaDBVectorStore:
             metadata: Optional metadata dictionary
         """
         # Prepare metadata (ChromaDB requires strings, ints, floats, or bools)
-        chroma_metadata = {
+        chroma_metadata: Dict[str, Any] = {
             "element_type": element_type,
             "name": name,
             "description": description,
@@ -163,7 +163,7 @@ class ChromaDBVectorStore:
             logger.error(f"Failed to add element {element_id}: {e}")
             raise
 
-    def add_elements_batch(self, elements: List[Any]):
+    def add_elements_batch(self, elements: List[Any]) -> None:
         """
         Add multiple schema elements in batch.
 
@@ -173,13 +173,13 @@ class ChromaDBVectorStore:
         if not elements:
             return
 
-        ids = []
-        embeddings = []
-        metadatas = []
+        ids: List[Any] = []
+        embeddings: List[Any] = []
+        metadatas: List[Any] = []
 
         for elem in elements:
             # Prepare metadata
-            chroma_metadata = {
+            chroma_metadata: Dict[str, Any] = {
                 "element_type": elem.element_type,
                 "name": elem.name,
                 "description": elem.description,
@@ -215,7 +215,7 @@ class ChromaDBVectorStore:
             logger.error(f"Failed to batch add elements: {e}")
             raise
 
-    def build_index(self):
+    def build_index(self) -> None:
         """Build the search index - no-op for ChromaDB (auto-indexed)."""
         self._index_built = True
         count = self.collection.count()
@@ -259,18 +259,21 @@ class ChromaDBVectorStore:
 
         # Query ChromaDB
         try:
-            results = self.collection.query(
-                query_embeddings=[query_embedding.tolist()],
-                n_results=top_k,
-                where=where_filter,
-                include=["metadatas", "distances", "embeddings"],
+            results: Dict[str, Any] = cast(
+                Dict[str, Any],
+                self.collection.query(
+                    query_embeddings=[query_embedding.tolist()],
+                    n_results=top_k,
+                    where=cast(Any, where_filter),
+                    include=["metadatas", "distances", "embeddings"],
+                ),
             )
         except Exception as e:
             logger.error(f"ChromaDB query failed: {e}")
             return []
 
         # Convert results to StoredElement format
-        stored_elements = []
+        stored_elements: List[Tuple[StoredElement, float]] = []
 
         if not results["ids"] or not results["ids"][0]:
             return []
@@ -350,8 +353,11 @@ class ChromaDBVectorStore:
             StoredElement or None if not found
         """
         try:
-            result = self.collection.get(
-                ids=[element_id], include=["metadatas", "embeddings"]
+            result: Dict[str, Any] = cast(
+                Dict[str, Any],
+                self.collection.get(
+                    ids=[element_id], include=["metadatas", "embeddings"]
+                ),
             )
 
             if not result["ids"]:
@@ -397,9 +403,12 @@ class ChromaDBVectorStore:
             List of matching elements
         """
         try:
-            results = self.collection.get(
-                where={"element_type": element_type},
-                include=["metadatas", "embeddings"],
+            results: Dict[str, Any] = cast(
+                Dict[str, Any],
+                self.collection.get(
+                    where={"element_type": element_type},
+                    include=["metadatas", "embeddings"],
+                ),
             )
 
             elements = []
@@ -437,7 +446,7 @@ class ChromaDBVectorStore:
             logger.error(f"Failed to get elements by type {element_type}: {e}")
             return []
 
-    def save(self, filepath: Path):
+    def save(self, filepath: Path) -> None:
         """
         Export vector store to JSON (for backup/migration).
 
@@ -446,7 +455,10 @@ class ChromaDBVectorStore:
         """
         try:
             # Get all data from ChromaDB
-            results = self.collection.get(include=["metadatas", "embeddings"])
+            results: Dict[str, Any] = cast(
+                Dict[str, Any],
+                self.collection.get(include=["metadatas", "embeddings"]),
+            )
 
             elements = []
             for i in range(len(results["ids"])):
@@ -499,7 +511,7 @@ class ChromaDBVectorStore:
                 "ChromaDB is already persisted to disk, JSON export failed but data is safe"
             )
 
-    def load(self, filepath: Path):
+    def load(self, filepath: Path) -> None:
         """
         Import vector store from JSON (migration from old format).
 
@@ -514,13 +526,13 @@ class ChromaDBVectorStore:
             self.clear()
 
             # Batch import
-            ids = []
-            embeddings = []
-            metadatas = []
+            ids: List[Any] = []
+            embeddings: List[Any] = []
+            metadatas: List[Any] = []
 
             for elem_dict in data.get("elements", []):
                 # Prepare metadata
-                chroma_metadata = {
+                chroma_metadata: Dict[str, Any] = {
                     "element_type": elem_dict.get("element_type", "unknown"),
                     "name": elem_dict.get("name", ""),
                     "description": elem_dict.get("description", ""),
@@ -579,7 +591,7 @@ class ChromaDBVectorStore:
             "storage_path": f"tmp/chromadb/{self.connection_id}",
         }
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all stored elements from ChromaDB collection."""
         try:
             # Delete and recreate collection

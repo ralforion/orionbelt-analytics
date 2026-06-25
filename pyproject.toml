@@ -162,6 +162,19 @@ warn_no_return = true
 warn_unreachable = true
 strict_equality = true
 
+# Third-party libraries without type stubs or a py.typed marker. We type-check
+# our own code strictly but cannot annotate these, so silence their import noise.
+[[tool.mypy.overrides]]
+module = [
+    "plotly.*",
+    "sklearn.*",
+    "sentence_transformers.*",
+    "community.*",
+    "pandas.*",
+    "networkx.*",
+]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-ra -q --cov=src --cov-report=term-missing"

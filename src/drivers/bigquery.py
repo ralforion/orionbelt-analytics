@@ -50,7 +50,7 @@ class BigQueryDriver(DatabaseDriver):
     # Connection
     # ------------------------------------------------------------------
 
-    def connect(self, **params) -> bool:
+    def connect(self, **params: Any) -> bool:
         """Connect to BigQuery.
 
         Expected params:
@@ -159,6 +159,7 @@ class BigQueryDriver(DatabaseDriver):
                 ORDER BY schema_name
             """
             )
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
@@ -178,6 +179,7 @@ class BigQueryDriver(DatabaseDriver):
                 logger.error("No dataset specified and no default dataset set")
                 return []
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 query = text(
                     f"""
@@ -206,6 +208,7 @@ class BigQueryDriver(DatabaseDriver):
                 logger.error("No dataset specified for table analysis")
                 return None
 
+            assert self.engine is not None
             with self.engine.connect():
                 inspector = inspect(self.engine)
 
@@ -218,8 +221,8 @@ class BigQueryDriver(DatabaseDriver):
 
                 # BigQuery doesn't have traditional primary keys or foreign keys
                 # but we can check for clustering/partitioning
-                primary_keys = []
-                foreign_keys = []
+                primary_keys: List[str] = []
+                foreign_keys: List[Dict[str, Any]] = []
 
                 columns = []
                 for col_info in table_columns:
@@ -267,6 +270,7 @@ class BigQueryDriver(DatabaseDriver):
     ) -> Dict[str, Any]:
         """Validate BigQuery SQL syntax using dry run."""
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 # BigQuery supports dry run via query job config
                 # For now, we'll do basic syntax check via EXPLAIN
@@ -323,6 +327,7 @@ class BigQueryDriver(DatabaseDriver):
         try:
             start_time = time_mod.time()
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 logger.info(f"🔍 BIGQUERY SQL QUERY: {sql_query}")
                 result = conn.execute(text(sql_query))
@@ -392,6 +397,7 @@ class BigQueryDriver(DatabaseDriver):
                 logger.error("No dataset specified for sampling")
                 return []
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 # BigQuery requires backticks for fully qualified names
                 full_table_name = f"`{self._project_id}.{dataset}.{table_name}`"

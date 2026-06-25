@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from rdflib import Graph, Literal, Namespace, URIRef
+from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.collection import Collection
 from rdflib.namespace import OWL, RDF, RDFS, XSD
 from wordfreq import word_frequency
@@ -275,7 +275,7 @@ class OntologyGenerator:
         """
         return self.quality_report
 
-    def _add_table_to_ontology(self, table_info: TableInfo):
+    def _add_table_to_ontology(self, table_info: TableInfo) -> None:
         """Add a single table and its columns to the ontology with comprehensive database annotations."""
         # Create proper URI for table class
         table_uri = self.base_uri[self._clean_name(table_info.name)]
@@ -311,7 +311,7 @@ class OntologyGenerator:
 
     def _add_column_to_ontology(
         self, table_uri: URIRef, column: ColumnInfo, table_name: str
-    ):
+    ) -> None:
         """Add a column as a data property to the ontology with comprehensive database annotations."""
         # Create proper property URI
         prop_name = f"{self._clean_name(table_name)}_{self._clean_name(column.name)}"
@@ -369,7 +369,7 @@ class OntologyGenerator:
 
     def _add_relationship_to_ontology(
         self, table_uri: URIRef, fk: Dict[str, str], table_name: str
-    ):
+    ) -> None:
         """Add a foreign key relationship as an object property with comprehensive database annotations."""
         referenced_table = fk.get("referenced_table")
         if not referenced_table:
@@ -638,23 +638,23 @@ class OntologyGenerator:
                             continue
 
                         # Try to find a matching table
-                        target_table = self._find_matching_table(potential_table)
+                        matched_table = self._find_matching_table(potential_table)
 
-                        if target_table and target_table.name != table.name:
+                        if matched_table and matched_table.name != table.name:
                             # Determine the likely target column (usually PK)
-                            target_pk = target_table.primary_keys
+                            target_pk = matched_table.primary_keys
                             target_column = target_pk[0] if target_pk else "id"
 
                             # Determine confidence level
                             confidence = self._calculate_fk_confidence(
-                                col, target_table, potential_table
+                                col, matched_table, potential_table
                             )
 
                             inferred.append(
                                 InferredRelationship(
                                     source_table=table.name,
                                     column=col.name,
-                                    target_table=target_table.name,
+                                    target_table=matched_table.name,
                                     target_column=target_column,
                                     confidence=confidence,
                                     pattern_matched=pattern_name,
@@ -1018,6 +1018,8 @@ class OntologyGenerator:
         # as (source_table_name, target_table_name, property_uri)
         relationships: List[Tuple[str, str, URIRef]] = []
         for subj in self.graph.subjects(RDF.type, OWL.ObjectProperty):
+            if not isinstance(subj, URIRef):
+                continue
             rel_type = self.graph.value(subj, self.oba_ns.relationshipType)
             if str(rel_type) != "many_to_one":
                 continue
@@ -1031,8 +1033,8 @@ class OntologyGenerator:
 
         # Build lookup: (source, target) -> property URI
         rel_lookup: Dict[Tuple[str, str], URIRef] = {}
-        for src, tgt, uri in relationships:
-            rel_lookup[(src, tgt)] = uri
+        for rel_src, rel_tgt, rel_uri in relationships:
+            rel_lookup[(rel_src, rel_tgt)] = rel_uri
 
         # Find 2-hop chains A→B→C where A→C has no direct relationship
         declared: Set[Tuple[str, str]] = set()
@@ -1067,7 +1069,7 @@ class OntologyGenerator:
                 )
 
                 # Build the RDF list for the property chain
-                chain_list = Collection(self.graph, None, [uri_ab, uri_bc])
+                chain_list = Collection(self.graph, BNode(), [uri_ab, uri_bc])
                 self.graph.add(
                     (
                         chain_uri,
@@ -1254,7 +1256,7 @@ class OntologyGenerator:
         logger.warning(f"Unknown SQL type '{sql_type}', mapping to xsd:string")
         return XSD.string, None
 
-    def apply_semantic_descriptions(self, descriptions: Dict[str, Any]):
+    def apply_semantic_descriptions(self, descriptions: Dict[str, Any]) -> None:
         """Apply LLM-generated semantic descriptions to the ontology.
 
         This method allows applying rich, context-aware descriptions generated
@@ -1411,7 +1413,7 @@ class OntologyGenerator:
         schema_data = []
 
         for table_info in tables_info:
-            table_data = {
+            table_data: Dict[str, Any] = {
                 "table_name": table_info.name,
                 "schema": table_info.schema,
                 "row_count": table_info.row_count,
@@ -1619,7 +1621,7 @@ class OntologyGenerator:
             if subject == OWL.Class:
                 continue
 
-            class_info = {
+            class_info: Dict[str, Any] = {
                 "uri": str(subject),
                 "local_name": str(subject).split("/")[-1]
                 if "/" in str(subject)
@@ -1641,7 +1643,7 @@ class OntologyGenerator:
             for schema_name in self.graph.objects(subject, self.oba_ns.schemaName):
                 class_info["schema_name"] = str(schema_name)
             for row_count in self.graph.objects(subject, self.oba_ns.rowCount):
-                class_info["row_count"] = int(row_count)
+                class_info["row_count"] = int(str(row_count))
             for comment in self.graph.objects(subject, RDFS.comment):
                 class_info["comment"] = str(comment)
 
@@ -1653,7 +1655,7 @@ class OntologyGenerator:
 
         # Extract data properties (columns)
         for subject in self.graph.subjects(RDF.type, OWL.DatatypeProperty):
-            prop_info = {
+            prop_info: Dict[str, Any] = {
                 "uri": str(subject),
                 "local_name": str(subject).split("/")[-1]
                 if "/" in str(subject)
@@ -1693,7 +1695,7 @@ class OntologyGenerator:
 
         # Extract object properties (relationships)
         for subject in self.graph.subjects(RDF.type, OWL.ObjectProperty):
-            rel_info = {
+            rel_info: Dict[str, Any] = {
                 "uri": str(subject),
                 "local_name": str(subject).split("/")[-1]
                 if "/" in str(subject)
@@ -1993,7 +1995,7 @@ class OntologyGenerator:
                 existing_labels: Dict[str, URIRef] = {}
                 for rdf_type in (OWL.DatatypeProperty, OWL.ObjectProperty):
                     for s, _, _ in self.graph.triples((None, RDF.type, rdf_type)):
-                        if s not in changing_uris:
+                        if isinstance(s, URIRef) and s not in changing_uris:
                             for label in self.graph.objects(s, RDFS.label):
                                 existing_labels[str(label).lower()] = s
 

@@ -20,7 +20,7 @@ class DatabaseDriver(ABC):
     db_type: str = ""
 
     @abstractmethod
-    def connect(self, **params) -> bool:
+    def connect(self, **params: Any) -> bool:
         """Establish a connection to the database.
 
         Args:

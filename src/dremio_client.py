@@ -3,7 +3,8 @@
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List
+from types import TracebackType
+from typing import Any, Dict, List, Optional, Type, Union
 
 import aiohttp
 
@@ -41,19 +42,19 @@ class DremioClient:
     def __init__(
         self,
         uri: str,
-        username: str = None,
-        password: str = None,
-        token: str = None,
-        pat: str = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        token: Optional[str] = None,
+        pat: Optional[str] = None,
     ):
         self.uri = uri.rstrip("/")
         self.username = username
         self.password = password
         self.token = token
         self.pat = pat  # Personal Access Token (preferred)
-        self.session = None
+        self.session: Optional[aiohttp.ClientSession] = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "DremioClient":
         self.session = aiohttp.ClientSession()
         if self.pat:
             # Use PAT directly as token (following official dremio-mcp approach)
@@ -64,16 +65,24 @@ class DremioClient:
             await self._authenticate()
         return self
 
-    async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
+    async def __aexit__(
+        self,
+        _exc_type: Optional[Type[BaseException]],
+        _exc_val: Optional[BaseException],
+        _exc_tb: Optional[TracebackType],
+    ) -> None:
         if self.session:
             await self.session.close()
 
-    async def _authenticate(self):
+    async def _authenticate(self) -> None:
         """Authenticate with username/password to get a token (following official Dremio examples)."""
         auth_data = {
             "userName": self.username,  # Official Dremio API uses 'userName' not 'username'
             "password": self.password,
         }
+
+        if self.session is None:
+            raise DremioAuthError("Client session is not initialized")
 
         try:
             async with self.session.post(
@@ -98,11 +107,13 @@ class DremioClient:
             raise DremioAuthError(f"Network error: {e}")
 
     async def _make_request(
-        self, method: str, endpoint: str, **kwargs
+        self, method: str, endpoint: str, **kwargs: Any
     ) -> Dict[str, Any]:
         """Make authenticated request to Dremio API."""
         if not self.token:
             raise DremioAuthError("No authentication token available")
+        if self.session is None:
+            raise DremioAuthError("Client session is not initialized")
 
         headers = {
             "Authorization": f"Bearer {self.token}"
@@ -123,6 +134,7 @@ class DremioClient:
                 if response.status == 401:
                     raise DremioAuthError("Authentication token expired or invalid")
 
+                data: Dict[str, Any]
                 if response.content_type == "application/json":
                     data = await response.json()
                 else:
@@ -244,7 +256,7 @@ class DremioClient:
             logger.error(f"Failed to get catalogs: {e}")
             return []
 
-    async def get_catalog_info(self, path: List[str]) -> Dict[str, Any]:
+    async def get_catalog_info(self, path: Union[List[str], str]) -> Dict[str, Any]:
         """Get information about a catalog item."""
         try:
             # For nested paths, join with slashes (Dremio REST API requirement)
@@ -287,13 +299,13 @@ class DremioClient:
 
 
 async def create_dremio_client(
-    host: str = None,
+    host: Optional[str] = None,
     port: int = 9047,
-    username: str = None,
-    password: str = None,
-    token: str = None,
-    pat: str = None,
-    uri: str = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+    token: Optional[str] = None,
+    pat: Optional[str] = None,
+    uri: Optional[str] = None,
     ssl: bool = True,
 ) -> DremioClient:
     """Create and authenticate Dremio client.

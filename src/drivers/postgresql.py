@@ -45,7 +45,7 @@ class PostgreSQLDriver(DatabaseDriver):
     # Connection
     # ------------------------------------------------------------------
 
-    def connect(self, **params) -> bool:
+    def connect(self, **params: Any) -> bool:
         """Connect to PostgreSQL.
 
         Expected params: host, port, database, username, password.
@@ -144,6 +144,7 @@ class PostgreSQLDriver(DatabaseDriver):
         """
         )
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
@@ -153,6 +154,7 @@ class PostgreSQLDriver(DatabaseDriver):
 
     def get_tables(self, schema_name: Optional[str] = None) -> List[str]:
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 if schema_name:
                     query = text(
@@ -184,6 +186,7 @@ class PostgreSQLDriver(DatabaseDriver):
         self, table_name: str, schema_name: Optional[str] = None
     ) -> Optional[TableInfo]:
         try:
+            assert self.engine is not None
             with self.engine.connect():
                 inspector = inspect(self.engine)
 
@@ -222,7 +225,7 @@ class PostgreSQLDriver(DatabaseDriver):
                         logger.info(f"  FK: {fk}")
 
                 columns = []
-                foreign_keys = []
+                foreign_keys: List[Dict[str, Any]] = []
                 for col_info in table_columns:
                     column_name = col_info["name"]
                     is_pk = column_name.upper() in primary_keys_upper
@@ -296,6 +299,7 @@ class PostgreSQLDriver(DatabaseDriver):
         self, sql_query: str, validation_result: Dict[str, Any]
     ) -> Dict[str, Any]:
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 prepare_name = "syntax_check_stmt"
                 prepare_sql = f"PREPARE {prepare_name} AS {sql_query}"
@@ -354,6 +358,7 @@ class PostgreSQLDriver(DatabaseDriver):
             start_time = time_mod.time()
             db_type = self.db_type.upper()
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 logger.info(f"\U0001f50d {db_type} SQL QUERY: {sql_query}")
                 result = conn.execute(text(sql_query))
@@ -417,6 +422,7 @@ class PostgreSQLDriver(DatabaseDriver):
             logger.warning(f"Sample limit capped at {MAX_SAMPLE_LIMIT}")
 
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 if schema_name:
                     full_table_name = f'"{schema_name}"."{table_name}"'

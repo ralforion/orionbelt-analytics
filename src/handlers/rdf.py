@@ -1,7 +1,7 @@
 """Oxigraph RDF store and SPARQL handler implementations."""
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from fastmcp import Context
 
@@ -24,7 +24,7 @@ async def store_ontology_in_rdf(
     schema_name: Optional[str],
     graph_uri: Optional[str],
     services: "HandlerContext",
-) -> str:
+) -> Union[str, Dict[str, Any]]:
     """Store current session ontology in persistent RDF store with SPARQL access."""
     if not OXIGRAPH_AVAILABLE:
         return DependencyError(
@@ -211,7 +211,7 @@ async def add_rdf_knowledge(
     object_value: str,
     metadata: Optional[Dict[str, Any]],
     services: "HandlerContext",
-) -> str:
+) -> Union[str, Dict[str, Any]]:
     """Add custom knowledge/metadata to the RDF store."""
     if not OXIGRAPH_AVAILABLE:
         return DependencyError("pyoxigraph not installed").to_response()

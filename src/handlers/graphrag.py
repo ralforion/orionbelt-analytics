@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from fastmcp import Context
 
@@ -209,9 +209,12 @@ async def initialize_graphrag(
     db_manager = services.get_session_db_manager(ctx)
 
     if not db_manager.has_engine():
-        return ConnectionError(
-            "No database connection. Please use connect_database tool first."
-        ).to_response()
+        return cast(
+            str,
+            ConnectionError(
+                "No database connection. Please use connect_database tool first."
+            ).to_response(),
+        )
 
     effective_schema = schema_name
     if not effective_schema:
@@ -246,13 +249,20 @@ async def initialize_graphrag(
             session.cache_schema_analysis(effective_schema or "", tables_info)
 
         except Exception as e:
-            return services.create_error_response(
-                f"Failed to fetch schema: {str(e)}", "database_error"
+            return cast(
+                str,
+                services.create_error_response(
+                    f"Failed to fetch schema: {str(e)}", "database_error"
+                ),
             )
 
     if not tables_info:
-        return services.create_error_response(
-            f"No tables found in schema '{effective_schema or 'default'}'", "data_error"
+        return cast(
+            str,
+            services.create_error_response(
+                f"No tables found in schema '{effective_schema or 'default'}'",
+                "data_error",
+            ),
         )
 
     # Convert TableInfo objects to dictionaries
@@ -326,8 +336,11 @@ async def initialize_graphrag(
 
     except Exception as e:
         logger.error(f"GraphRAG initialization failed: {e}", exc_info=True)
-        return services.create_error_response(
-            f"GraphRAG initialization failed: {str(e)}", "graphrag_error"
+        return cast(
+            str,
+            services.create_error_response(
+                f"GraphRAG initialization failed: {str(e)}", "graphrag_error"
+            ),
         )
 
 
@@ -342,10 +355,11 @@ async def graphrag_search(
     session = services.get_session_data(ctx)
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
+        return err
 
     try:
         results = session.graphrag_manager.search_schema(
@@ -363,9 +377,10 @@ async def graphrag_search(
 
     except Exception as e:
         logger.error(f"GraphRAG search failed: {e}", exc_info=True)
-        return services.create_error_response(
+        err = services.create_error_response(
             f"GraphRAG search failed: {str(e)}", "graphrag_error"
         )
+        return err
 
 
 async def graphrag_query_context(
@@ -379,10 +394,11 @@ async def graphrag_query_context(
     session = services.get_session_data(ctx)
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
+        return err
 
     try:
         context = session.graphrag_manager.get_query_context(
@@ -407,9 +423,10 @@ async def graphrag_query_context(
 
     except Exception as e:
         logger.error(f"GraphRAG query context failed: {e}", exc_info=True)
-        return services.create_error_response(
+        err = services.create_error_response(
             f"GraphRAG query context failed: {str(e)}", "graphrag_error"
         )
+        return err
 
 
 async def graphrag_find_join_path(
@@ -423,10 +440,11 @@ async def graphrag_find_join_path(
     session = services.get_session_data(ctx)
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
+        return err
 
     try:
         join_path = session.graphrag_manager.graph_retriever.find_join_path(
@@ -461,9 +479,10 @@ async def graphrag_find_join_path(
 
     except Exception as e:
         logger.error(f"GraphRAG find join path failed: {e}", exc_info=True)
-        return services.create_error_response(
+        err = services.create_error_response(
             f"GraphRAG find join path failed: {str(e)}", "graphrag_error"
         )
+        return err
 
 
 async def reachable_from(
@@ -476,19 +495,21 @@ async def reachable_from(
     session = services.get_session_data(ctx)
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
+        return err
 
     try:
         result = session.graphrag_manager.graph_retriever.reachable_from(
             table, max_hops=max_hops
         )
         if not result["exists"]:
-            return services.create_error_response(
+            err = services.create_error_response(
                 f"Table '{table}' not found in the schema graph.", "data_error"
             )
+            return err
 
         await ctx.info(
             f"{len(result['tables'])} dimension-capable tables reachable from '{table}'"
@@ -509,9 +530,10 @@ async def reachable_from(
 
     except Exception as e:
         logger.error(f"reachable_from failed: {e}", exc_info=True)
-        return services.create_error_response(
+        err = services.create_error_response(
             f"reachable_from failed: {str(e)}", "graphrag_error"
         )
+        return err
 
 
 async def measurable_from(
@@ -524,19 +546,21 @@ async def measurable_from(
     session = services.get_session_data(ctx)
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
+        return err
 
     try:
         result = session.graphrag_manager.graph_retriever.measurable_from(
             table, max_hops=max_hops
         )
         if not result["exists"]:
-            return services.create_error_response(
+            err = services.create_error_response(
                 f"Table '{table}' not found in the schema graph.", "data_error"
             )
+            return err
 
         await ctx.info(
             f"{len(result['tables'])} measure-capable tables for anchor '{table}'"
@@ -557,9 +581,10 @@ async def measurable_from(
 
     except Exception as e:
         logger.error(f"measurable_from failed: {e}", exc_info=True)
-        return services.create_error_response(
+        err = services.create_error_response(
             f"measurable_from failed: {str(e)}", "graphrag_error"
         )
+        return err
 
 
 async def plan_composite_query(
@@ -579,33 +604,37 @@ async def plan_composite_query(
     session = services.get_session_data(ctx)
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
+        return err
 
     if not facts:
-        return services.create_error_response(
+        err = services.create_error_response(
             "Provide at least one fact (measure-source) table.", "parameter_error"
         )
+        return err
 
     retriever = session.graphrag_manager.graph_retriever
 
     missing = [f for f in facts if f not in retriever.graph]
     if missing:
-        return services.create_error_response(
+        err = services.create_error_response(
             f"Tables not found in schema graph: {', '.join(missing)}", "data_error"
         )
+        return err
 
     # Validate explicit dimensions too — an unknown dimension would otherwise be
     # silently null-padded into every leg and mislead downstream SQL planning.
     if dimensions:
         missing_dims = [d for d in dimensions if d not in retriever.graph]
         if missing_dims:
-            return services.create_error_response(
+            err = services.create_error_response(
                 f"Dimensions not found in schema graph: {', '.join(missing_dims)}",
                 "data_error",
             )
+            return err
 
     facts = list(dict.fromkeys(facts))  # de-dupe, preserve order
 
@@ -685,10 +714,11 @@ async def graphrag_overview(
     session = services.get_session_data(ctx)
 
     if not session.graphrag_initialized or session.graphrag_manager is None:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "GraphRAG not initialized. Please call discover_schema() first.",
             "graphrag_not_initialized",
         )
+        return err
 
     try:
         overview = session.graphrag_manager.get_schema_overview()
@@ -699,6 +729,7 @@ async def graphrag_overview(
 
     except Exception as e:
         logger.error(f"GraphRAG overview failed: {e}", exc_info=True)
-        return services.create_error_response(
+        err = services.create_error_response(
             f"GraphRAG overview failed: {str(e)}", "graphrag_error"
         )
+        return err

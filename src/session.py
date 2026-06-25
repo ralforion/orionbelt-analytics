@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class ConnectionState:
     """Database connection tracking."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.connection_id: Optional[str] = None
         self.connected_at: Optional[datetime] = None
         self.db_manager: Optional[Any] = None  # DatabaseManager (avoid circular import)
@@ -28,7 +28,7 @@ class ConnectionState:
 class OntologyState:
     """Ontology generation and loading state."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ontology_file: Optional[str] = None
         self.r2rml_file: Optional[str] = None
         self.loaded_ontology: Optional[str] = None  # TTL content
@@ -42,7 +42,7 @@ class OntologyState:
 class SchemaCache:
     """Cached schema analysis results (multi-schema capable)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._cached_schema: Optional[
             Dict[str, List[Any]]
         ] = None  # schema_name -> List[TableInfo]
@@ -95,10 +95,10 @@ class SchemaCache:
 class GraphRAGState:
     """GraphRAG integration state with Future-based init tracking."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.graphrag_manager: Optional[Any] = None  # GraphRAGManager
         self.graphrag_initialized: bool = False
-        self._init_task: Optional[asyncio.Task] = None
+        self._init_task: Optional[asyncio.Task[Any]] = None
 
 
 class RDFStoreState:
@@ -108,10 +108,10 @@ class RDFStoreState:
     via named graphs within a single store.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.oxigraph_store: Optional[Any] = None  # OxigraphStoreManager
         self.oxigraph_initialized: bool = False
-        self._init_task: Optional[asyncio.Task] = None
+        self._init_task: Optional[asyncio.Task[Any]] = None
 
 
 class SchemaState:
@@ -136,7 +136,7 @@ class SessionData:
     in SchemaState instances keyed by schema name.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.connection = ConnectionState()
         self.schema_cache = SchemaCache()
         self.rdf_store = RDFStoreState()
@@ -239,130 +239,130 @@ class SessionData:
     # Connection properties (session-scoped, unchanged)
 
     @property
-    def db_manager(self):
+    def db_manager(self) -> Optional[Any]:
         return self.connection.db_manager
 
     @db_manager.setter
-    def db_manager(self, value):
+    def db_manager(self, value: Optional[Any]) -> None:
         self.connection.db_manager = value
 
     @property
-    def connection_id(self):
+    def connection_id(self) -> Optional[str]:
         return self.connection.connection_id
 
     @connection_id.setter
-    def connection_id(self, value):
+    def connection_id(self, value: Optional[str]) -> None:
         self.connection.connection_id = value
 
     @property
-    def connected_at(self):
+    def connected_at(self) -> Optional[datetime]:
         return self.connection.connected_at
 
     @connected_at.setter
-    def connected_at(self, value):
+    def connected_at(self, value: Optional[datetime]) -> None:
         self.connection.connected_at = value
 
     # Ontology properties (per-schema via current schema)
 
     @property
-    def ontology_file(self):
+    def ontology_file(self) -> Optional[str]:
         ss = self._current_schema_state
         return ss.ontology.ontology_file if ss else None
 
     @ontology_file.setter
-    def ontology_file(self, value):
+    def ontology_file(self, value: Optional[str]) -> None:
         self._ensure_schema_state().ontology.ontology_file = value
 
     @property
-    def r2rml_file(self):
+    def r2rml_file(self) -> Optional[str]:
         ss = self._current_schema_state
         return ss.ontology.r2rml_file if ss else None
 
     @r2rml_file.setter
-    def r2rml_file(self, value):
+    def r2rml_file(self, value: Optional[str]) -> None:
         self._ensure_schema_state().ontology.r2rml_file = value
 
     @property
-    def loaded_ontology(self):
+    def loaded_ontology(self) -> Optional[str]:
         ss = self._current_schema_state
         return ss.ontology.loaded_ontology if ss else None
 
     @loaded_ontology.setter
-    def loaded_ontology(self, value):
+    def loaded_ontology(self, value: Optional[str]) -> None:
         self._ensure_schema_state().ontology.loaded_ontology = value
 
     @property
-    def loaded_ontology_path(self):
+    def loaded_ontology_path(self) -> Optional[str]:
         ss = self._current_schema_state
         return ss.ontology.loaded_ontology_path if ss else None
 
     @loaded_ontology_path.setter
-    def loaded_ontology_path(self, value):
+    def loaded_ontology_path(self, value: Optional[str]) -> None:
         self._ensure_schema_state().ontology.loaded_ontology_path = value
 
     @property
-    def obqc_validator(self):
+    def obqc_validator(self) -> Optional[Any]:
         ss = self._current_schema_state
         return ss.ontology.obqc_validator if ss else None
 
     @obqc_validator.setter
-    def obqc_validator(self, value):
+    def obqc_validator(self, value: Optional[Any]) -> None:
         self._ensure_schema_state().ontology.obqc_validator = value
 
     @property
-    def ontology_enriched(self):
+    def ontology_enriched(self) -> bool:
         ss = self._current_schema_state
         return ss.ontology.ontology_enriched if ss else False
 
     @ontology_enriched.setter
-    def ontology_enriched(self, value):
+    def ontology_enriched(self, value: bool) -> None:
         self._ensure_schema_state().ontology.ontology_enriched = value
 
     # Schema file (per-schema via current schema)
 
     @property
-    def schema_file(self):
+    def schema_file(self) -> Optional[str]:
         ss = self._current_schema_state
         return ss.schema_file if ss else None
 
     @schema_file.setter
-    def schema_file(self, value):
+    def schema_file(self, value: Optional[str]) -> None:
         self._ensure_schema_state().schema_file = value
 
     # GraphRAG properties (connection-scoped, accumulative across schemas)
 
     @property
-    def graphrag_manager(self):
+    def graphrag_manager(self) -> Optional[Any]:
         return self.graphrag.graphrag_manager
 
     @graphrag_manager.setter
-    def graphrag_manager(self, value):
+    def graphrag_manager(self, value: Optional[Any]) -> None:
         self.graphrag.graphrag_manager = value
 
     @property
-    def graphrag_initialized(self):
+    def graphrag_initialized(self) -> bool:
         return self.graphrag.graphrag_initialized
 
     @graphrag_initialized.setter
-    def graphrag_initialized(self, value):
+    def graphrag_initialized(self, value: bool) -> None:
         self.graphrag.graphrag_initialized = value
 
     # RDF Store properties (connection-scoped, unchanged)
 
     @property
-    def oxigraph_store(self):
+    def oxigraph_store(self) -> Optional[Any]:
         return self.rdf_store.oxigraph_store
 
     @oxigraph_store.setter
-    def oxigraph_store(self, value):
+    def oxigraph_store(self, value: Optional[Any]) -> None:
         self.rdf_store.oxigraph_store = value
 
     @property
-    def oxigraph_initialized(self):
+    def oxigraph_initialized(self) -> bool:
         return self.rdf_store.oxigraph_initialized
 
     @oxigraph_initialized.setter
-    def oxigraph_initialized(self, value):
+    def oxigraph_initialized(self, value: bool) -> None:
         self.rdf_store.oxigraph_initialized = value
 
     # --- Delegated methods ---

@@ -12,7 +12,7 @@ modules so this file stays mostly decorators + delegation:
 
 import logging
 import os
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union, cast
 
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
@@ -172,7 +172,7 @@ def _services() -> HandlerContext:
 
 
 @mcp.tool()
-async def connect_database(ctx: Context, db_type: _DbType) -> str:
+async def connect_database(ctx: Context, db_type: _DbType) -> str:  # type: ignore[valid-type]
     """Connect to a database using credentials from environment variables.
 
     If a previous workspace exists for this connection, it is automatically
@@ -286,14 +286,17 @@ async def generate_ontology(
     Returns:
         Ontology TTL or status message
     """
-    return await _h_ontology.generate_ontology(
-        ctx,
-        schema_info,
-        schema_name,
-        base_uri,
-        auto_persist,
-        graph_uri,
-        services=_services(),
+    return cast(
+        str,
+        await _h_ontology.generate_ontology(
+            ctx,
+            schema_info,
+            schema_name,
+            base_uri,
+            auto_persist,
+            graph_uri,
+            services=_services(),
+        ),
     )
 
 
@@ -353,12 +356,15 @@ async def apply_semantic_names(
         ontology_file: The ontology filename from generate_ontology response
         save_to_file: Whether to save the updated ontology to a file
     """
-    return await _h_ontology.apply_semantic_names(
-        ctx,
-        suggestions,
-        ontology_file,
-        save_to_file,
-        services=_services(),
+    return cast(
+        str,
+        await _h_ontology.apply_semantic_names(
+            ctx,
+            suggestions,
+            ontology_file,
+            save_to_file,
+            services=_services(),
+        ),
     )
 
 
@@ -424,7 +430,7 @@ async def download_artifact(
     elif artifact_type == "r2rml":
         return await _h_ontology.download_r2rml(ctx, schema_name, services=_services())
     else:
-        return create_error_response(
+        return create_error_response(  # type: ignore[unreachable]
             f"Invalid artifact_type: {artifact_type}. Must be 'ontology' or 'r2rml'.",
             "parameter_error",
         )
@@ -508,7 +514,7 @@ async def generate_chart(
     sort_by: Optional[_Identifier] = None,
     sort_order: Optional[Literal["ascending", "descending"]] = None,
     output_format: Literal["interactive", "image"] = "interactive",
-):
+) -> str:
     """Generate a chart from query results. Returns a ui:// MCP Apps widget for interactive use.
 
     Args:
@@ -523,19 +529,25 @@ async def generate_chart(
         sort_order: 'ascending' or 'descending'
         output_format: "interactive" (default, responsive MCP Apps widget) or "image" (saves PNG file)
     """
-    return await _h_chart.generate_chart(
-        ctx,
-        data_source,
-        chart_type,
-        x_column,
-        y_column,
-        color_column,
-        title,
-        chart_style,
-        sort_by,
-        sort_order,
-        output_format,
-        services=_services(),
+    # The handler returns str (interactive widget URI) or a list of image
+    # artifacts for output_format="image"; the published tool contract is str,
+    # so cast to keep the FastMCP output schema unchanged.
+    return cast(
+        str,
+        await _h_chart.generate_chart(
+            ctx,
+            data_source,
+            chart_type,
+            x_column,
+            y_column,
+            color_column,
+            title,
+            chart_style,
+            sort_by,
+            sort_order,
+            output_format,
+            services=_services(),
+        ),
     )
 
 
@@ -552,9 +564,12 @@ async def cleanup_workspace(ctx: Context) -> str:
     Returns:
         Summary of what was removed
     """
-    return await _h_workspace.cleanup_workspace(
-        ctx,
-        services=_services(),
+    return cast(
+        str,
+        await _h_workspace.cleanup_workspace(
+            ctx,
+            services=_services(),
+        ),
     )
 
 
@@ -820,11 +835,14 @@ async def store_ontology_in_rdf(
     Returns:
         Status message with triple count
     """
-    return await _h_rdf.store_ontology_in_rdf(
-        ctx,
-        schema_name,
-        graph_uri,
-        services=_services(),
+    return cast(
+        str,
+        await _h_rdf.store_ontology_in_rdf(
+            ctx,
+            schema_name,
+            graph_uri,
+            services=_services(),
+        ),
     )
 
 
@@ -876,20 +894,23 @@ async def add_rdf_knowledge(
     Returns:
         Confirmation message
     """
-    return await _h_rdf.add_rdf_knowledge(
-        ctx,
-        subject,
-        predicate,
-        object,
-        metadata,
-        services=_services(),
+    return cast(
+        str,
+        await _h_rdf.add_rdf_knowledge(
+            ctx,
+            subject,
+            predicate,
+            object,
+            metadata,
+            services=_services(),
+        ),
     )
 
 
 # --- Cleanup on shutdown ---
 
 
-def cleanup_server():
+def cleanup_server() -> None:
     """Clean up server resources."""
     _server_state.cleanup()
 

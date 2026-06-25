@@ -7,19 +7,24 @@ Stores ontologies, schema metadata, and accumulated knowledge across sessions.
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
-try:
-    from pyoxigraph import Literal, NamedNode, RdfFormat, Store, Triple
+if TYPE_CHECKING:
+    from pyoxigraph import Literal, NamedNode, QuerySolutions, RdfFormat, Store, Triple
 
-    OXIGRAPH_AVAILABLE = True
-except ImportError:
-    OXIGRAPH_AVAILABLE = False
-    Store = None
-    NamedNode = None
-    RdfFormat = None
-    Literal = None
-    Triple = None
+    OXIGRAPH_AVAILABLE: bool
+else:
+    try:
+        from pyoxigraph import Literal, NamedNode, RdfFormat, Store, Triple
+
+        OXIGRAPH_AVAILABLE = True
+    except ImportError:
+        OXIGRAPH_AVAILABLE = False
+        Store = None
+        NamedNode = None
+        RdfFormat = None
+        Literal = None
+        Triple = None
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +123,13 @@ class OxigraphStoreManager:
                 try:
                     self.store.load(
                         ontology_ttl.encode("utf-8"),
-                        format="text/turtle",
+                        format="text/turtle",  # type: ignore[arg-type]
                         base_iri=graph_uri,
                         to_graph=NamedNode(graph_uri),
                     )
                 except TypeError:
                     # Final fallback for very old versions using mime_type
-                    self.store.load(
+                    self.store.load(  # type: ignore[call-arg]
                         ontology_ttl.encode("utf-8"),
                         mime_type="text/turtle",
                         base_iri=graph_uri,
@@ -176,7 +181,10 @@ class OxigraphStoreManager:
         try:
             results = []
 
-            for solution in self.store.query(sparql_query):
+            # SELECT queries yield QuerySolutions; narrow the query() union so the
+            # iteration type-checks (other query forms are handled by sibling methods).
+            solutions = cast("QuerySolutions", self.store.query(sparql_query))
+            for solution in solutions:
                 binding = {}
                 for var, term in solution.items():
                     # Convert RDF terms to strings
@@ -216,8 +224,10 @@ class OxigraphStoreManager:
         """
         try:
             # For ASK queries, pyoxigraph returns a boolean directly
-            # We need to cast the query result properly
-            result = self.store.query(sparql_query)
+            # We need to cast the query result properly. The concrete result type
+            # varies across pyoxigraph versions (bool vs. QueryBoolean), so treat
+            # it dynamically here.
+            result: Any = self.store.query(sparql_query)
             # ASK queries return a boolean, not an iterator
             # pyoxigraph query() returns the boolean value for ASK queries
             return (
@@ -258,8 +268,10 @@ class OxigraphStoreManager:
         try:
             # Execute query and serialize results
             results = self.store.query(sparql_query)
-            # Oxigraph CONSTRUCT returns a graph
-            return results.serialize(format="text/turtle")
+            # Oxigraph CONSTRUCT returns a graph; serialize() yields bytes (or None
+            # for an empty result), so decode to satisfy the str return contract.
+            serialized = results.serialize(format="text/turtle")  # type: ignore[arg-type]  # noqa: E501
+            return serialized.decode("utf-8") if serialized is not None else ""
         except Exception as e:
             logger.error(f"SPARQL CONSTRUCT query failed: {e}", exc_info=True)
             raise
@@ -271,7 +283,7 @@ class OxigraphStoreManager:
         object: str,
         graph_uri: Optional[str] = None,
         object_is_literal: bool = False,
-    ):
+    ) -> None:
         """
         Add a single RDF triple to the store.
 
@@ -301,9 +313,9 @@ class OxigraphStoreManager:
             triple = Triple(subj, pred, obj)
 
             if graph_uri:
-                self.store.add(triple, NamedNode(graph_uri))
+                self.store.add(triple, NamedNode(graph_uri))  # type: ignore[call-arg,arg-type]  # noqa: E501
             else:
-                self.store.add(triple)
+                self.store.add(triple)  # type: ignore[arg-type]
 
             logger.debug(f"Added triple: <{subject}> <{predicate}> {object}")
 
@@ -318,7 +330,7 @@ class OxigraphStoreManager:
         object: str,
         metadata: Optional[Dict[str, Any]] = None,
         graph_uri: str = "http://example.com/knowledge",
-    ):
+    ) -> None:
         """
         Add learned knowledge to the store with metadata.
 
@@ -390,7 +402,7 @@ class OxigraphStoreManager:
                         }}
                     }}
                 """
-                results = list(self.store.query(query))
+                results = list(cast("QuerySolutions", self.store.query(query)))
                 triple_count = int(results[0]["count"].value) if results else 0
 
                 return {"graph_uri": graph_uri, "triple_count": triple_count}
@@ -405,7 +417,7 @@ class OxigraphStoreManager:
                         GRAPH ?g { ?s ?p ?o }
                     }
                 """
-                graphs = list(self.store.query(query))
+                graphs = list(cast("QuerySolutions", self.store.query(query)))
 
                 return {
                     "total_triples": total_triples,
@@ -506,7 +518,7 @@ class OxigraphStoreManager:
 
         return self.query_sparql_construct(query)
 
-    def close(self):
+    def close(self) -> None:
         """Close the store (flush to disk if persistent)."""
         if hasattr(self.store, "close"):
             self.store.close()

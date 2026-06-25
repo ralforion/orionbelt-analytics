@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional, Union
 
 from fastmcp import Context
 
@@ -95,7 +95,7 @@ async def generate_ontology(
     auto_persist: bool,
     graph_uri: Optional[str],
     services: "HandlerContext",
-) -> str:
+) -> Union[str, Dict[str, Any]]:
     """Generate an RDF ontology from database schema.
 
     Extracts implementation from main.py's generate_ontology tool.
@@ -174,9 +174,10 @@ async def generate_ontology(
             logger.info(f"Using provided schema info: {len(tables_info)} tables")
 
         except Exception as e:
-            return services.create_error_response(
+            err: Dict[str, Any] = services.create_error_response(
                 f"Failed to parse schema_info parameter: {str(e)}", "parameter_error"
             )
+            return err
     else:
         # Try to use cached schema analysis
         session = services.get_session_data(ctx)
@@ -203,10 +204,11 @@ async def generate_ontology(
             db_manager = services.get_session_db_manager(ctx)
 
             if not db_manager.has_engine():
-                return services.create_error_response(
+                err = services.create_error_response(
                     "No database connection established and no schema_info provided. Please use connect_database tool first or provide schema_info parameter.",
                     "connection_error",
                 )
+                return err
 
             try:
                 tables = db_manager.get_tables(schema_name)
@@ -228,14 +230,16 @@ async def generate_ontology(
                 session.cache_schema_analysis(schema_name or "", tables_info)
 
             except Exception as e:
-                return services.create_error_response(
+                err = services.create_error_response(
                     f"Failed to get tables from database: {str(e)}", "database_error"
                 )
+                return err
 
     if not tables_info:
-        return services.create_error_response(
+        err = services.create_error_response(
             "No tables found to generate ontology from", "data_error"
         )
+        return err
 
     generator = services.server_state.get_ontology_generator(base_uri=base_uri)
     ontology_ttl = generator.generate_from_schema(tables_info)

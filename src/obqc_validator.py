@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set
 import sqlglot
 from rdflib import Graph, Namespace, URIRef
 from rdflib.namespace import OWL, RDF, RDFS, XSD
+from rdflib.term import Node
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
@@ -273,8 +274,9 @@ class OBQCValidator:
 
                     # Get XSD type from rdfs:range
                     for range_val in self._graph.objects(subject, RDFS.range):
-                        col_schema.xsd_type = range_val
-                        break
+                        if isinstance(range_val, URIRef):
+                            col_schema.xsd_type = range_val
+                            break
 
                     schema.tables[table_key].columns[column_name.lower()] = col_schema
 
@@ -339,7 +341,7 @@ class OBQCValidator:
 
         return pairs
 
-    def _get_literal(self, subject: URIRef, predicate: URIRef) -> Optional[str]:
+    def _get_literal(self, subject: Node, predicate: URIRef) -> Optional[str]:
         """Get string value of a literal predicate."""
         if self._graph is None:
             return None
@@ -347,7 +349,7 @@ class OBQCValidator:
             return str(obj)
         return None
 
-    def _get_bool(self, subject: URIRef, predicate: URIRef, default: bool) -> bool:
+    def _get_bool(self, subject: Node, predicate: URIRef, default: bool) -> bool:
         """Get boolean value of a literal predicate."""
         val = self._get_literal(subject, predicate)
         if val is None:
@@ -752,15 +754,15 @@ class OBQCValidator:
             if select.args.get("group"):
                 for group_expr in select.args["group"].expressions:
                     if isinstance(group_expr, exp.Column):
-                        col_name = group_expr.name.lower()
+                        gb_col_name = group_expr.name.lower()
                         if group_expr.table:
-                            col_name = f"{group_expr.table.lower()}.{col_name}"
-                        group_by_cols.add(col_name)
+                            gb_col_name = f"{group_expr.table.lower()}.{gb_col_name}"
+                        group_by_cols.add(gb_col_name)
 
             # Check each SELECT expression
             for expr in expressions:
-                col_name = None
-                col_table = None
+                col_name: Optional[str] = None
+                col_table: Optional[str] = None
 
                 if isinstance(expr, exp.Column):
                     col_name = expr.name
@@ -813,9 +815,7 @@ class OBQCValidator:
             for col in agg.find_all(exp.Column):
                 if isinstance(expr, exp.Column):
                     if col.name == expr.name:
-                        if (
-                            col.table is None and expr.table is None
-                        ) or col.table == expr.table:
+                        if col.table == expr.table:
                             return True
                 elif isinstance(expr, exp.Alias) and isinstance(expr.this, exp.Column):
                     if col.name == expr.this.name:

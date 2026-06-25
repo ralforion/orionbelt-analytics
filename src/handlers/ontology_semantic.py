@@ -418,7 +418,7 @@ async def apply_semantic_names(
     ontology_file: Optional[str],
     save_to_file: bool,
     services: "HandlerContext",
-) -> str:
+) -> Union[str, Dict[str, Any]]:
     """Apply LLM-suggested semantic names to an existing ontology."""
     try:
         session = services.get_session_data(ctx)
@@ -431,9 +431,10 @@ async def apply_semantic_names(
                 )
                 ontology_path = conn_dir / ontology_file
                 if not ontology_path.exists():
-                    return services.create_error_response(
+                    err: Dict[str, Any] = services.create_error_response(
                         f"Ontology file not found: {ontology_file}", "file_not_found"
                     )
+                    return err
                 generator = OntologyGenerator()
                 generator.load_from_file(str(ontology_path))
                 source_filename = ontology_file
@@ -441,10 +442,11 @@ async def apply_semantic_names(
             else:
                 generator, source_filename = services.load_ontology_from_session(ctx)
         except ValueError as e:
-            return services.create_error_response(
+            err = services.create_error_response(
                 f"{str(e)} - pass ontology_file parameter from generate_ontology response",
                 "session_error",
             )
+            return err
 
         try:
             if isinstance(suggestions, str):
@@ -452,17 +454,19 @@ async def apply_semantic_names(
             else:
                 name_suggestions = suggestions
         except json.JSONDecodeError as e:
-            return services.create_error_response(
+            err = services.create_error_response(
                 f"Invalid JSON in suggestions parameter: {str(e)}",
                 "parameter_error",
                 "Ensure suggestions is valid JSON with classes, properties, and relationships arrays",
             )
+            return err
 
         if not isinstance(name_suggestions, dict):
-            return services.create_error_response(
+            err = services.create_error_response(
                 "Suggestions must be a JSON object with 'classes', 'properties', and/or 'relationships' arrays",
                 "parameter_error",
             )
+            return err
 
         updated_ontology = generator.apply_semantic_names(name_suggestions)
 
@@ -556,6 +560,7 @@ async def apply_semantic_names(
 
     except Exception as e:
         logger.error(f"Error applying semantic names: {e}")
-        return services.create_error_response(
+        err = services.create_error_response(
             f"Failed to apply semantic names: {str(e)}", "internal_error"
         )
+        return err

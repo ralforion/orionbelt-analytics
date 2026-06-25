@@ -60,7 +60,7 @@ class DatabricksDriver(DatabaseDriver):
     # Connection
     # ------------------------------------------------------------------
 
-    def connect(self, **params) -> bool:
+    def connect(self, **params: Any) -> bool:
         """Connect to Databricks SQL.
 
         Expected params:
@@ -99,6 +99,9 @@ class DatabricksDriver(DatabaseDriver):
             self._schema = schema
 
             # URL-encode the access token and http_path
+            # (guaranteed non-None by the all() check above)
+            assert access_token is not None
+            assert http_path is not None
             safe_token = quote_plus(access_token)
             safe_http_path = quote_plus(http_path)
 
@@ -178,6 +181,7 @@ class DatabricksDriver(DatabaseDriver):
                 ORDER BY schema_name
             """
             )
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 result = conn.execute(query, {"catalog": self._catalog})
                 schemas = [row[0] for row in result.fetchall()]
@@ -191,6 +195,7 @@ class DatabricksDriver(DatabaseDriver):
             logger.error(f"Failed to get Databricks schemas: {e}")
             # Fallback to SHOW SCHEMAS
             try:
+                assert self.engine is not None
                 with self.engine.connect() as conn:
                     result = conn.execute(text(f"SHOW SCHEMAS IN {self._catalog}"))
                     schemas = [row[0] for row in result.fetchall()]
@@ -207,6 +212,7 @@ class DatabricksDriver(DatabaseDriver):
                 logger.error("No schema specified and no default schema set")
                 return []
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 query = text(
                     """
@@ -227,6 +233,7 @@ class DatabricksDriver(DatabaseDriver):
             # Fallback to SHOW TABLES
             try:
                 schema = schema_name or self._schema
+                assert self.engine is not None
                 with self.engine.connect() as conn:
                     result = conn.execute(
                         text(f"SHOW TABLES IN {self._catalog}.{schema}")
@@ -252,6 +259,7 @@ class DatabricksDriver(DatabaseDriver):
                 logger.error("No schema specified for table analysis")
                 return None
 
+            assert self.engine is not None
             with self.engine.connect():
                 inspector = inspect(self.engine)
 
@@ -277,7 +285,7 @@ class DatabricksDriver(DatabaseDriver):
                 )
 
                 columns = []
-                foreign_keys = []
+                foreign_keys: List[Dict[str, Any]] = []
                 for col_info in table_columns:
                     column_name = col_info["name"]
                     is_pk = column_name.upper() in primary_keys_upper
@@ -348,6 +356,7 @@ class DatabricksDriver(DatabaseDriver):
     ) -> Dict[str, Any]:
         """Validate Databricks SQL syntax using EXPLAIN."""
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 try:
                     # Use EXPLAIN to validate syntax
@@ -406,6 +415,7 @@ class DatabricksDriver(DatabaseDriver):
         try:
             start_time = time_mod.time()
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 logger.info(f"🔍 DATABRICKS SQL QUERY: {sql_query}")
                 result = conn.execute(text(sql_query))
@@ -475,6 +485,7 @@ class DatabricksDriver(DatabaseDriver):
                 logger.error("No schema specified for sampling")
                 return []
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 # Use three-part name for Unity Catalog
                 full_table_name = f"`{self._catalog}`.`{schema}`.`{table_name}`"

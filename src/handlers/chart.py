@@ -1,7 +1,7 @@
 """Chart generation handler implementation."""
 
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 from uuid import uuid4
 
 from fastmcp import Context
@@ -32,7 +32,7 @@ async def generate_chart(
     sort_order: Optional[str],
     output_format: str,
     services: "HandlerContext",
-) -> str:
+) -> Union[str, List[Union[str, Image]]]:
     """Generate interactive or static charts from query results.
 
     This handler delegates to tools.chart.generate_chart for the core charting
@@ -44,11 +44,12 @@ async def generate_chart(
 
     # Parse data_source if it's a string
     if data_source and isinstance(data_source, str):
+        raw_data_source = data_source
         logger.warning(
             "data_source was sent as string instead of JSON array - attempting to parse"
         )
         try:
-            parsed = json.loads(data_source)
+            parsed = json.loads(raw_data_source)
             if isinstance(parsed, list):
                 data_source = parsed
                 logger.info("Successfully parsed data_source from JSON string format")
@@ -56,7 +57,7 @@ async def generate_chart(
             try:
                 import ast
 
-                parsed = ast.literal_eval(data_source)
+                parsed = ast.literal_eval(raw_data_source)
                 if isinstance(parsed, list):
                     data_source = parsed
                     logger.info(
@@ -66,7 +67,7 @@ async def generate_chart(
                 await ctx.info("Chart generation failed - data_source format error")
                 raise RuntimeError(
                     f"data_source must be valid JSON (array of objects), not a string. "
-                    f"Received string: {data_source[:100]}... "
+                    f"Received string: {raw_data_source[:100]}... "
                     f"Expected format: [{{'key': 'value'}}, ...] "
                     f"Parse error: {str(e)}"
                 )
@@ -84,8 +85,9 @@ async def generate_chart(
     logger.info(
         f"generate_chart called with output_format={output_format}, chart_type={chart_type}"
     )
+    chart_data = cast(List[Dict[str, Any]], data_source)
     result = generate_chart_impl(
-        data_source,
+        chart_data,
         chart_type,
         x_column,
         y_column,
@@ -131,7 +133,7 @@ async def generate_chart(
 
                 services.add_resource(
                     TextResource(
-                        uri=chart_uri,
+                        uri=cast(Any, chart_uri),
                         name=f"Chart: {title or chart_type_display}",
                         text=html,
                         mime_type="text/html",
@@ -139,7 +141,7 @@ async def generate_chart(
                 )
                 services.add_resource(
                     TextResource(
-                        uri=chart_json_uri,
+                        uri=cast(Any, chart_json_uri),
                         name=f"Chart JSON: {title or chart_type_display}",
                         text=fig.to_json(),
                         mime_type="application/json",
@@ -153,13 +155,13 @@ async def generate_chart(
             image_inline = None
             file_uri = ""
             try:
-                chart_id = str(uuid4())
+                image_id = str(uuid4())
                 image_bytes = fig.to_image(
                     format="png", width=PNG_WIDTH, height=PNG_HEIGHT
                 )
                 connection_id = services.get_session_data(ctx).connection_id
                 image_file_path = save_image_to_tmp(
-                    image_bytes, chart_id, "png", connection_id=connection_id
+                    image_bytes, image_id, "png", connection_id=connection_id
                 )
                 if image_file_path:
                     file_uri = f"\nStatic image: file://{image_file_path}"
@@ -185,13 +187,13 @@ async def generate_chart(
 
     # Handle image output
     if isinstance(result, tuple) and len(result) == 2:
-        image_bytes, chart_id = result
+        image_bytes, image_id = result
 
         connection_id = services.get_session_data(ctx).connection_id
 
         image_file_path = save_image_to_tmp(
             image_bytes,
-            chart_id,
+            image_id,
             "png",
             connection_id=connection_id,
         )

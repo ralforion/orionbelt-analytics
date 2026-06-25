@@ -168,7 +168,7 @@ class DataCleanupManager:
 
         return {"deleted": deleted, "errors": errors, "dry_run": dry_run}
 
-    def _delete_graphrag_files(self, schema_name: str, version: int):
+    def _delete_graphrag_files(self, schema_name: str, version: int) -> None:
         """
         Delete GraphRAG files for a specific version.
 
