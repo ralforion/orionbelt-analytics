@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 if TYPE_CHECKING:
-    from pyoxigraph import Literal, NamedNode, QuerySolutions, RdfFormat, Store, Triple
+    from pyoxigraph import Literal, NamedNode, Quad, QuerySolutions, RdfFormat, Store
 
     OXIGRAPH_AVAILABLE: bool
 else:
     try:
-        from pyoxigraph import Literal, NamedNode, RdfFormat, Store, Triple
+        from pyoxigraph import Literal, NamedNode, Quad, RdfFormat, Store
 
         OXIGRAPH_AVAILABLE = True
     except ImportError:
@@ -24,7 +24,7 @@ else:
         NamedNode = None
         RdfFormat = None
         Literal = None
-        Triple = None
+        Quad = None
 
 logger = logging.getLogger(__name__)
 
@@ -184,14 +184,19 @@ class OxigraphStoreManager:
             # SELECT queries yield QuerySolutions; narrow the query() union so the
             # iteration type-checks (other query forms are handled by sibling methods).
             solutions = cast("QuerySolutions", self.store.query(sparql_query))
+            variables = solutions.variables
             for solution in solutions:
-                binding = {}
-                for var, term in solution.items():
-                    # Convert RDF terms to strings
+                binding: Dict[str, Any] = {}
+                for var in variables:
+                    term = solution[var]
+                    if term is None:
+                        # Variable is unbound in this solution; omit it.
+                        continue
+                    # Key by the bare variable name (no leading "?").
                     if hasattr(term, "value"):
-                        binding[str(var)] = term.value
+                        binding[var.value] = term.value
                     else:
-                        binding[str(var)] = str(term)
+                        binding[var.value] = str(term)
                 results.append(binding)
 
             logger.info(f"SPARQL query returned {len(results)} results")
@@ -223,20 +228,9 @@ class OxigraphStoreManager:
             ```
         """
         try:
-            # For ASK queries, pyoxigraph returns a boolean directly
-            # We need to cast the query result properly. The concrete result type
-            # varies across pyoxigraph versions (bool vs. QueryBoolean), so treat
-            # it dynamically here.
-            result: Any = self.store.query(sparql_query)
-            # ASK queries return a boolean, not an iterator
-            # pyoxigraph query() returns the boolean value for ASK queries
-            return (
-                bool(result)
-                if isinstance(result, bool)
-                else bool(next(iter(result), False))
-            )
-        except StopIteration:
-            return False
+            # ASK queries yield a QueryBoolean (pyoxigraph >= 0.4) or a plain bool
+            # (older versions); both support bool().
+            return bool(self.store.query(sparql_query))
         except Exception as e:
             logger.error(f"SPARQL ASK query failed: {e}", exc_info=True)
             raise
@@ -310,12 +304,10 @@ class OxigraphStoreManager:
             pred = NamedNode(predicate)
             obj = Literal(object) if object_is_literal else NamedNode(object)
 
-            triple = Triple(subj, pred, obj)
-
             if graph_uri:
-                self.store.add(triple, NamedNode(graph_uri))  # type: ignore[call-arg,arg-type]  # noqa: E501
+                self.store.add(Quad(subj, pred, obj, NamedNode(graph_uri)))
             else:
-                self.store.add(triple)  # type: ignore[arg-type]
+                self.store.add(Quad(subj, pred, obj))
 
             logger.debug(f"Added triple: <{subject}> <{predicate}> {object}")
 

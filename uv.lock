@@ -2550,7 +2550,7 @@ requires-dist = [
     { name = "psycopg2-binary", specifier = ">=2.9.11" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pymysql", specifier = ">=1.1.0" },
-    { name = "pyoxigraph", specifier = ">=0.3.22" },
+    { name = "pyoxigraph", specifier = ">=0.5,<0.6" },
     { name = "pyshacl", specifier = ">=0.26.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "rdflib", specifier = ">=7.5.0" },
