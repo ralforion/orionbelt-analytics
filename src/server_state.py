@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from fastmcp import Context
 from pydantic import BaseModel
@@ -57,7 +57,7 @@ def _get_connection_fingerprint(db_manager: DatabaseManager) -> str:
 
 def _calculate_schema_hash(tables_info: List[Any]) -> str:
     """Calculate deterministic hash of schema structure."""
-    schema_structure = {"tables": []}
+    schema_structure: Dict[str, List[Dict[str, Any]]] = {"tables": []}
 
     sorted_tables = sorted(tables_info, key=lambda t: t.name)
     for table in sorted_tables:
@@ -119,9 +119,9 @@ def _clear_session_state(
 class ServerState:
     """Manages server state with per-session isolation and idle eviction."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._sessions: Dict[str, SessionData] = {}
-        self._eviction_task: Optional[asyncio.Task] = None
+        self._eviction_task: Optional[asyncio.Task[None]] = None
 
     @property
     def session_count(self) -> int:
@@ -144,7 +144,7 @@ class ServerState:
         """Create a new ontology generator instance."""
         return OntologyGenerator(base_uri=base_uri)
 
-    def cleanup_session(self, session_id: str):
+    def cleanup_session(self, session_id: str) -> None:
         """Clean up a specific session's resources."""
         if session_id in self._sessions:
             session = self._sessions[session_id]
@@ -165,7 +165,7 @@ class ServerState:
             del self._sessions[session_id]
             logger.debug(f"Cleaned up session: {session_id}")
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Clean up all resources."""
         if self._eviction_task and not self._eviction_task.done():
             self._eviction_task.cancel()
@@ -175,7 +175,7 @@ class ServerState:
 
     # --- Idle eviction ---
 
-    def _ensure_eviction_task(self):
+    def _ensure_eviction_task(self) -> None:
         """Lazily start the eviction background task if not already running."""
         if self._eviction_task is not None and not self._eviction_task.done():
             return
@@ -186,7 +186,7 @@ class ServerState:
         except RuntimeError:
             pass  # No event loop (e.g. tests or sync context)
 
-    async def _eviction_loop(self):
+    async def _eviction_loop(self) -> None:
         """Periodically scan for and evict idle sessions."""
         from .config import config_manager
 
@@ -214,7 +214,7 @@ class ServerState:
                 logger.error(f"Error in session eviction loop: {e}", exc_info=True)
                 await asyncio.sleep(scan_interval)
 
-    def _evict_idle_sessions(self, idle_timeout: int):
+    def _evict_idle_sessions(self, idle_timeout: int) -> None:
         """Scan sessions and evict those idle beyond the timeout."""
         now = datetime.now()
         cutoff = now - timedelta(seconds=idle_timeout)
@@ -263,7 +263,7 @@ def get_session_db_manager(ctx: Context) -> DatabaseManager:
     if session.db_manager is None:
         session.db_manager = DatabaseManager()
         logger.debug(f"Created new DatabaseManager for session: {get_session_id(ctx)}")
-    return session.db_manager
+    return cast(DatabaseManager, session.db_manager)
 
 
 def get_session_obqc_validator(ctx: Context) -> Optional[OBQCValidator]:
@@ -282,7 +282,7 @@ def get_session_obqc_validator(ctx: Context) -> Optional[OBQCValidator]:
         base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
         ontology_generator = OntologyGenerator(base_uri)
 
-        if has_generated_ontology:
+        if session.ontology_file is not None:
             conn_dir = (
                 get_connection_dir(session.connection_id)
                 if session.connection_id
@@ -294,7 +294,7 @@ def get_session_obqc_validator(ctx: Context) -> Optional[OBQCValidator]:
                 logger.debug(
                     f"OBQC loaded ontology from session file: {session.ontology_file}"
                 )
-        elif has_loaded_ontology:
+        elif session.loaded_ontology is not None:
             ontology_generator.load_from_string(session.loaded_ontology)
             logger.debug(
                 f"OBQC loaded ontology from session's loaded ontology: {session.loaded_ontology_path}"
@@ -303,7 +303,7 @@ def get_session_obqc_validator(ctx: Context) -> Optional[OBQCValidator]:
         session.obqc_validator.load_ontology(ontology_generator.graph, base_uri)
         logger.debug(f"Initialized OBQC validator for session: {get_session_id(ctx)}")
 
-    return session.obqc_validator
+    return cast(Optional[OBQCValidator], session.obqc_validator)
 
 
 def get_session_safe_filename(ctx: Context, prefix: str, suffix: str = "") -> str:
@@ -395,4 +395,4 @@ def get_oxigraph_store(ctx: Context) -> Optional[OxigraphStoreManager]:
             logger.error(f"Failed to initialize Oxigraph store: {e}")
             return None
 
-    return session.oxigraph_store
+    return cast(Optional[OxigraphStoreManager], session.oxigraph_store)

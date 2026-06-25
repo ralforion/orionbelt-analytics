@@ -5,7 +5,7 @@ import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastmcp import Context
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 async def _restore_workspace_core(
     ctx: Context,
-    session,
+    session: Any,
     connection_id: str,
     schema_name: Optional[str],
     services: "HandlerContext",
@@ -274,7 +274,7 @@ def _format_restore_summary(result: Dict[str, Any]) -> str:
 async def cleanup_workspace(
     ctx: Context,
     services: "HandlerContext",
-) -> str:
+) -> Union[str, Dict[str, Any]]:
     """Delete all workspace files for the current connection and clear session state.
 
     Removes schema JSON, ontology TTL, R2RML mappings, GraphRAG data,
@@ -292,10 +292,11 @@ async def cleanup_workspace(
     session = services.get_session_data(ctx)
 
     if not session.connection_id:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "No database connection. Call connect_database first.",
             "connection_error",
         )
+        return err
 
     connection_id = session.connection_id
     removed = []
@@ -376,10 +377,11 @@ async def save_semantic_model(
     session = services.get_session_data(ctx)
 
     if not session.connection_id:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "No database connection. Call connect_database first.",
             "connection_error",
         )
+        return err
 
     connection_id = session.connection_id
     effective_schema = schema_name or session.get_last_analyzed_schema() or "default"
@@ -390,9 +392,10 @@ async def save_semantic_model(
     models_dir = get_models_dir(connection_id)
     safe_name = Path(model_name.replace(" ", "_")).name
     if not safe_name or safe_name in {".", ".."}:
-        return services.create_error_response(
+        err = services.create_error_response(
             f"Invalid model_name: {model_name!r}", "validation_error"
         )
+        return err
     model_filename = f"{safe_name}.yaml"
     model_path = models_dir / model_filename
 
@@ -402,10 +405,11 @@ async def save_semantic_model(
         logger.info(f"Saved semantic model '{model_name}' to: {model_path}")
     except Exception as e:
         logger.error(f"Failed to save semantic model: {e}")
-        return services.create_error_response(
+        err = services.create_error_response(
             f"Failed to save model: {e}",
             "file_error",
         )
+        return err
 
     # Update workspace metadata
     try:
@@ -460,10 +464,11 @@ async def get_semantic_model(
     session = services.get_session_data(ctx)
 
     if not session.connection_id:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "No database connection. Call connect_database first.",
             "connection_error",
         )
+        return err
 
     connection_id = session.connection_id
 
@@ -472,20 +477,22 @@ async def get_semantic_model(
     workspace = mgr.get_workspace()
 
     if not workspace:
-        return services.create_error_response(
+        err = services.create_error_response(
             "No workspace found for this connection.",
             "workspace_not_found",
         )
+        return err
 
     models = workspace.get("models", {})
     model_info = models.get(model_name)
 
     if not model_info:
         available = list(models.keys())
-        return services.create_error_response(
+        err = services.create_error_response(
             f"Model '{model_name}' not found. Available models: {available or 'none'}",
             "model_not_found",
         )
+        return err
 
     # Read model file
     model_filename = model_info["file"]
@@ -493,18 +500,20 @@ async def get_semantic_model(
     model_path = models_dir / model_filename
 
     if not model_path.exists():
-        return services.create_error_response(
+        err = services.create_error_response(
             f"Model file missing: {model_filename}",
             "file_not_found",
         )
+        return err
 
     try:
         model_yaml = model_path.read_text(encoding="utf-8")
     except Exception as e:
-        return services.create_error_response(
+        err = services.create_error_response(
             f"Failed to read model file: {e}",
             "file_error",
         )
+        return err
 
     await ctx.info(f"Retrieved semantic model '{model_name}'")
 
@@ -534,10 +543,11 @@ async def list_semantic_models(
     session = services.get_session_data(ctx)
 
     if not session.connection_id:
-        return services.create_error_response(
+        err: Dict[str, Any] = services.create_error_response(
             "No database connection. Call connect_database first.",
             "connection_error",
         )
+        return err
 
     mgr = VersionMetadataManager(session.connection_id, OUTPUT_DIR)
     workspace = mgr.get_workspace()

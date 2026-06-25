@@ -4,6 +4,8 @@ Kept out of ``main.py`` so server setup stays thin. Call
 :func:`register_resources` with the FastMCP instance to wire these up.
 """
 
+from typing import Callable
+
 from fastmcp import FastMCP
 
 from .paths import get_skills_dir
@@ -37,7 +39,7 @@ def _read_skill(filename: str) -> str:
     return f"Skill not found. Please ensure .claude/skills/{filename} exists."
 
 
-def _make_skill_loader(filename: str, title: str):
+def _make_skill_loader(filename: str, title: str) -> Callable[[], str]:
     """Build a zero-argument resource function bound to one skill file.
 
     FastMCP treats any function parameter as a URI-template variable, so the

@@ -1,7 +1,7 @@
 """Chart generation utilities for OrionBelt Analytics."""
 
 import logging
-from typing import Optional
+from typing import Any, Callable, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ def format_measure_name(measure: str) -> str:
     return measure.replace("_", " ").title()
 
 
-def get_quarter_sort_order(values, ascending=True):
+def get_quarter_sort_order(values: Any, ascending: bool = True) -> Optional[List[str]]:
     """Get chronological sort order for quarterly values.
 
     Supports multiple formats:
@@ -48,7 +48,7 @@ def get_quarter_sort_order(values, ascending=True):
         r"^(\d{4})\s*[\-/]?\s*Q([1-4])$",  # 2024 Q1, 2024-Q1, 2024/Q1
     ]
 
-    def parse_quarter(q_str):
+    def parse_quarter(q_str: Any) -> Optional[Tuple[int, int, str]]:
         """Parse quarter string and return (year, quarter, original_string)."""
         q_str_clean = str(q_str).strip()
 
@@ -79,7 +79,9 @@ def get_quarter_sort_order(values, ascending=True):
     return [x[2] for x in parsed]
 
 
-def _get_ordinal_sort_key(values):
+def _get_ordinal_sort_key(
+    values: Any,
+) -> Optional[Tuple[Callable[[Any], int], bool]]:
     """Return a sort-key function if values are weekday names or time-of-day labels.
 
     Supports:
@@ -116,7 +118,7 @@ def _get_ordinal_sort_key(values):
     # --- 12-hour time detection ---
     time_pat = re.compile(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$", re.IGNORECASE)
 
-    def parse_12h(v):
+    def parse_12h(v: Any) -> Optional[int]:
         m = time_pat.match(str(v).strip())
         if not m:
             return None
@@ -129,12 +131,13 @@ def _get_ordinal_sort_key(values):
 
     hours = [parse_12h(v) for v in values_str]
     if all(h is not None for h in hours):
-        return (lambda v: parse_12h(v), True)
+        # All values parsed to a valid hour, so the key never returns None here.
+        return (cast(Callable[[Any], int], lambda v: parse_12h(v)), True)
 
     return None
 
 
-def _clean_dataframe_for_plotly(df):
+def _clean_dataframe_for_plotly(df: Any) -> Any:
     """Create a clean DataFrame copy safe for Plotly operations.
 
     The "cannot insert X, already exists" error occurs when a pandas DataFrame
@@ -160,18 +163,20 @@ def _clean_dataframe_for_plotly(df):
 
 
 def create_plotly_chart(
-    df,
-    chart_type,
-    x_column,
-    y_column,
-    color_column,
-    title,
-    chart_style,
-    width=800,
-    height=600,
-    sort_by=None,
-    sort_order=None,
-):
+    df: Any,
+    chart_type: str,
+    x_column: str,
+    # str (single measure), list[str] (multi-measure), or None (heatmap);
+    # dispatched at runtime via isinstance / truthiness checks below.
+    y_column: Any,
+    color_column: Optional[str],
+    title: str,
+    chart_style: Optional[str],
+    width: int = 800,
+    height: int = 600,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
+) -> Any:
     """Create Plotly chart based on type.
 
     Args:
@@ -457,7 +462,7 @@ def create_plotly_chart(
 
         if is_quarter_column and effective_sort_by == x_column:
             # Extract quarter and year for proper sorting
-            def parse_quarter(q_str):
+            def parse_quarter(q_str: Any) -> Tuple[int, int]:
                 match = re.match(
                     r"^Q([1-4])\s*(\d{4})$", str(q_str).strip(), re.IGNORECASE
                 )

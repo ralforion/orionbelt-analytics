@@ -88,7 +88,7 @@ class VersionMetadataManager:
         if self.metadata_file.exists():
             try:
                 with open(self.metadata_file, "r") as f:
-                    metadata = json.load(f)
+                    metadata: Dict[str, Any] = json.load(f)
                 logger.debug(f"Loaded metadata for connection {self.connection_id}")
                 return metadata
             except Exception as e:
@@ -107,7 +107,7 @@ class VersionMetadataManager:
             "retention_policy": asdict(RetentionPolicy()),
         }
 
-    def _save_metadata(self):
+    def _save_metadata(self) -> None:
         """Save metadata to disk."""
         try:
             with open(self.metadata_file, "w") as f:
@@ -118,7 +118,10 @@ class VersionMetadataManager:
 
     def get_schema_metadata(self, schema_name: str) -> Optional[Dict[str, Any]]:
         """Get metadata for a specific schema."""
-        return self.metadata.get("schemas", {}).get(schema_name)
+        schema_meta: Optional[Dict[str, Any]] = self.metadata.get("schemas", {}).get(
+            schema_name
+        )
+        return schema_meta
 
     def get_current_version(self, schema_name: str) -> Optional[VersionInfo]:
         """Get current (active) version for a schema."""
@@ -263,7 +266,7 @@ class VersionMetadataManager:
 
     def mark_version_deleted(
         self, schema_name: str, version: int, data_type: str = "all"
-    ):
+    ) -> None:
         """
         Mark a version as deleted in metadata.
 
@@ -303,7 +306,10 @@ class VersionMetadataManager:
         workspace = self.get_workspace()
         if not workspace:
             return None
-        return workspace.get("schemas", {}).get(schema_name)
+        schema_ws: Optional[Dict[str, Any]] = workspace.get("schemas", {}).get(
+            schema_name
+        )
+        return schema_ws
 
     def update_workspace(
         self,

@@ -41,7 +41,7 @@ class SchemaEmbedder:
         self.embedding_model = embedding_model
         self._initialize_model()
 
-    def _initialize_model(self):
+    def _initialize_model(self) -> None:
         """Initialize the embedding model."""
         if self.embedding_model == "tfidf":
             from sklearn.feature_extraction.text import TfidfVectorizer
@@ -236,7 +236,8 @@ class SchemaEmbedder:
             Embedding vector
         """
         if self.embedding_model == "sentence-transformers":
-            return self.model.encode(text, convert_to_numpy=True)
+            encoded = self.model.encode(text, convert_to_numpy=True)
+            return np.asarray(encoded)
         else:
             # TF-IDF embedding
             if not self._is_fitted:
@@ -246,7 +247,7 @@ class SchemaEmbedder:
                 self._is_fitted = True
 
             embedding = self.vectorizer.transform([text]).toarray()[0]
-            return embedding
+            return np.asarray(embedding)
 
     def batch_embed_tables(
         self, tables_info: List[Dict[str, Any]]
@@ -286,7 +287,11 @@ class SchemaEmbedder:
         Returns:
             Dictionary with 'tables', 'columns', 'relationships' lists
         """
-        result = {"tables": [], "columns": [], "relationships": []}
+        result: Dict[str, List[SchemaElement]] = {
+            "tables": [],
+            "columns": [],
+            "relationships": [],
+        }
 
         # Collect all text for TF-IDF fitting if needed
         if self.embedding_model == "tfidf" and not self._is_fitted:

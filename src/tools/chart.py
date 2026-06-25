@@ -86,7 +86,7 @@ def generate_chart(
             }
 
         # Auto-detect time series data and switch to line chart
-        def is_time_based_column(column_data):
+        def is_time_based_column(column_data: Any) -> bool:
             """Detect if a column contains time-based data."""
             # Check if already datetime dtype
             if pd.api.types.is_datetime64_any_dtype(column_data):

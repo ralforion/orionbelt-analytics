@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import MetaData, create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
-from sqlalchemy.pool import NullPool, StaticPool
+from sqlalchemy.pool import NullPool, Pool, StaticPool
 
 from ..constants import (
     CONNECTION_TIMEOUT,
@@ -54,7 +54,7 @@ class DuckDBDriver(DatabaseDriver):
     # Connection
     # ------------------------------------------------------------------
 
-    def connect(self, **params) -> bool:
+    def connect(self, **params: Any) -> bool:
         """Connect to DuckDB or MotherDuck.
 
         Expected params:
@@ -103,6 +103,7 @@ class DuckDBDriver(DatabaseDriver):
                         connection_string += "?read_only=true"
 
             # DuckDB uses StaticPool for in-memory, NullPool for file-based
+            poolclass: type[Pool]
             if database_path == ":memory:":
                 poolclass = StaticPool
             else:
@@ -172,6 +173,7 @@ class DuckDBDriver(DatabaseDriver):
                 ORDER BY schema_name
             """
             )
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 result = conn.execute(query)
                 schemas = [row[0] for row in result.fetchall()]
@@ -188,6 +190,7 @@ class DuckDBDriver(DatabaseDriver):
         try:
             schema = schema_name or "main"
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 query = text(
                     """
@@ -211,6 +214,7 @@ class DuckDBDriver(DatabaseDriver):
         try:
             schema = schema_name or "main"
 
+            assert self.engine is not None
             with self.engine.connect():
                 inspector = inspect(self.engine)
 
@@ -234,7 +238,7 @@ class DuckDBDriver(DatabaseDriver):
                 )
 
                 columns = []
-                foreign_keys = []
+                foreign_keys: List[Dict[str, Any]] = []
                 for col_info in table_columns:
                     column_name = col_info["name"]
                     is_pk = column_name.upper() in primary_keys_upper
@@ -305,6 +309,7 @@ class DuckDBDriver(DatabaseDriver):
     ) -> Dict[str, Any]:
         """Validate DuckDB SQL syntax using EXPLAIN."""
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 try:
                     # Use EXPLAIN to validate syntax without executing
@@ -354,6 +359,7 @@ class DuckDBDriver(DatabaseDriver):
             start_time = time_mod.time()
             db_type_str = "MOTHERDUCK" if self._is_motherduck else "DUCKDB"
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 logger.info(f"🔍 {db_type_str} SQL QUERY: {sql_query}")
                 result = conn.execute(text(sql_query))
@@ -420,6 +426,7 @@ class DuckDBDriver(DatabaseDriver):
         try:
             schema = schema_name or "main"
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 full_table_name = f'"{schema}"."{table_name}"'
 

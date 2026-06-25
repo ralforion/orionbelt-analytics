@@ -49,7 +49,7 @@ class MySQLDriver(DatabaseDriver):
     # Connection
     # ------------------------------------------------------------------
 
-    def connect(self, **params) -> bool:
+    def connect(self, **params: Any) -> bool:
         """Connect to MySQL 8.0+ or MariaDB 10.5+.
 
         Expected params: host, port, database, username, password, charset (optional).
@@ -144,6 +144,7 @@ class MySQLDriver(DatabaseDriver):
         """
         )
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
@@ -153,6 +154,7 @@ class MySQLDriver(DatabaseDriver):
 
     def get_tables(self, schema_name: Optional[str] = None) -> List[str]:
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 if schema_name:
                     query = text(
@@ -184,6 +186,7 @@ class MySQLDriver(DatabaseDriver):
         self, table_name: str, schema_name: Optional[str] = None
     ) -> Optional[TableInfo]:
         try:
+            assert self.engine is not None
             with self.engine.connect():
                 inspector = inspect(self.engine)
 
@@ -222,7 +225,7 @@ class MySQLDriver(DatabaseDriver):
                         logger.info(f"  FK: {fk}")
 
                 columns = []
-                foreign_keys = []
+                foreign_keys: List[Dict[str, Any]] = []
                 for col_info in table_columns:
                     column_name = col_info["name"]
                     is_pk = column_name.upper() in primary_keys_upper
@@ -296,6 +299,7 @@ class MySQLDriver(DatabaseDriver):
         self, sql_query: str, validation_result: Dict[str, Any]
     ) -> Dict[str, Any]:
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 # Use EXPLAIN for MySQL syntax validation
                 explain_sql = f"EXPLAIN {sql_query}"
@@ -352,6 +356,7 @@ class MySQLDriver(DatabaseDriver):
             start_time = time_mod.time()
             db_type = self.db_type.upper()
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 logger.info(f"🐬 {db_type} SQL QUERY: {sql_query}")
                 result = conn.execute(text(sql_query))
@@ -415,6 +420,7 @@ class MySQLDriver(DatabaseDriver):
             logger.warning(f"Sample limit capped at {MAX_SAMPLE_LIMIT}")
 
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 if schema_name:
                     # MySQL uses backticks for identifier quoting

@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from fastmcp import Context
 
@@ -16,7 +16,12 @@ from ..paths import PROJECT_ROOT
 logger = logging.getLogger(__name__)
 
 
-def _check_ontology_db_compatibility(graph, ctx, get_session_db_manager, session):
+def _check_ontology_db_compatibility(
+    graph: Any,
+    ctx: Context,
+    get_session_db_manager: Callable[..., Any],
+    session: Any,
+) -> Optional[Dict[str, Any]]:
     """Compare ontology tables/columns against the connected database.
 
     Returns a compatibility dict or None if no database is connected.
@@ -271,7 +276,7 @@ async def load_my_ontology(
                 f"Ontology loaded with {classes_count} classes; ready for SQL generation"
             )
 
-        response = {
+        response: Dict[str, Any] = {
             "success": True,
             "source": "chat_upload" if from_chat else "import_folder",
             "file_path": str(newest_file),

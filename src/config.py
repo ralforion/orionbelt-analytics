@@ -34,7 +34,7 @@ class ServerConfig:
     chart_return_binary: bool = False
     enable_sampling: bool = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate configuration after initialization."""
         if not self.ontology_base_uri.endswith("/"):
             self.ontology_base_uri += "/"
@@ -92,7 +92,7 @@ class DatabaseConfig:
 class ConfigManager:
     """Manages application configuration."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize configuration manager."""
         # Load .env from project root (one level up from src)
         env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")

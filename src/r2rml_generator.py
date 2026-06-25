@@ -139,8 +139,8 @@ class R2RMLGenerator:
 
         # Build FK lookup for this table
         fk_columns = {}
-        for fk in table_info.foreign_keys:
-            fk_columns[fk["column"]] = fk
+        for fk_entry in table_info.foreign_keys:
+            fk_columns[fk_entry["column"]] = fk_entry
 
         # Predicate-object maps for each column
         for column in table_info.columns:

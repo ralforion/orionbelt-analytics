@@ -36,12 +36,9 @@ jobs:
       - name: Tests
         run: uv run pytest
 
-  # Advisory gate: mypy is not yet clean (known strict-mode baseline). It runs on
-  # every PR so the count is visible and trends down, but does not block merges.
-  # Flip continue-on-error to false once src/ type-checks clean.
-  baseline:
+  # Blocking gate: src/ type-checks clean under strict mypy. Keep it green.
+  typecheck:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -53,5 +50,5 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Type check (mypy, advisory)
+      - name: Type check (mypy)
         run: uv run mypy src

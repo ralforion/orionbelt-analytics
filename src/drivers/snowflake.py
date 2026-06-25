@@ -1,7 +1,7 @@
 """Snowflake database driver."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote_plus
 
 from sqlalchemy import MetaData, create_engine, inspect, text
@@ -38,7 +38,7 @@ class SnowflakeDriver(DatabaseDriver):
     # Connection
     # ------------------------------------------------------------------
 
-    def connect(self, **params) -> bool:
+    def connect(self, **params: Any) -> bool:
         """Connect to Snowflake.
 
         Expected params: account, username, password, warehouse, database,
@@ -123,6 +123,7 @@ class SnowflakeDriver(DatabaseDriver):
         """
         )
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
@@ -132,6 +133,7 @@ class SnowflakeDriver(DatabaseDriver):
 
     def get_tables(self, schema_name: Optional[str] = None) -> List[str]:
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 if schema_name:
                     query = text(
@@ -167,9 +169,9 @@ class SnowflakeDriver(DatabaseDriver):
         self,
         schema_name: str,
         connection_info: Dict[str, Any],
-        cache_get: callable,
-        cache_store: callable,
-        log_sql: callable,
+        cache_get: Callable[..., Any],
+        cache_store: Callable[..., Any],
+        log_sql: Callable[..., Any],
     ) -> None:
         """Prefetch all PKs, FKs, and columns for a Snowflake schema at once.
 
@@ -200,6 +202,7 @@ class SnowflakeDriver(DatabaseDriver):
         logger.info(f"Prefetching PKs and FKs for schema {full_schema_path}")
 
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 # --- Primary keys ---
                 pk_by_table: Dict[str, List[str]] = {}
@@ -322,14 +325,15 @@ class SnowflakeDriver(DatabaseDriver):
         self,
         table_name: str,
         schema_name: Optional[str] = None,
-        cache_get: callable = None,
-        log_sql: callable = None,
+        cache_get: Optional[Callable[..., Any]] = None,
+        log_sql: Optional[Callable[..., Any]] = None,
     ) -> Optional[TableInfo]:
         """Analyze a Snowflake table.
 
         If ``cache_get`` is provided, uses prefetched constraint data.
         """
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 inspector = inspect(self.engine)
 
@@ -500,7 +504,7 @@ class SnowflakeDriver(DatabaseDriver):
                         logger.info(f"  FK: {fk}")
 
                 columns = []
-                foreign_keys = []
+                foreign_keys: List[Dict[str, Any]] = []
                 for col_info in table_columns:
                     column_name = col_info["name"]
                     is_pk = column_name.upper() in primary_keys_upper
@@ -574,6 +578,7 @@ class SnowflakeDriver(DatabaseDriver):
         self, sql_query: str, validation_result: Dict[str, Any]
     ) -> Dict[str, Any]:
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 explain_sql = f"EXPLAIN {sql_query}"
                 try:
@@ -627,6 +632,7 @@ class SnowflakeDriver(DatabaseDriver):
         try:
             start_time = time_mod.time()
 
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 logger.info(f"\U0001f50d SNOWFLAKE SQL QUERY: {sql_query}")
                 result = conn.execute(text(sql_query))
@@ -690,6 +696,7 @@ class SnowflakeDriver(DatabaseDriver):
             logger.warning(f"Sample limit capped at {MAX_SAMPLE_LIMIT}")
 
         try:
+            assert self.engine is not None
             with self.engine.connect() as conn:
                 if schema_name:
                     full_table_name = f'"{schema_name}"."{table_name}"'

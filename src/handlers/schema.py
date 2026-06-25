@@ -630,7 +630,9 @@ async def sample_table_data(
         schema_name = session.get_last_analyzed_schema()
 
     db_manager = services.get_session_db_manager(ctx)
-    sample_data = db_manager.sample_table_data(table_name, schema_name, limit)
+    sample_data: List[Dict[str, Any]] = db_manager.sample_table_data(
+        table_name, schema_name, limit
+    )
 
     if sample_data and len(sample_data) > 0:
         await ctx.info(

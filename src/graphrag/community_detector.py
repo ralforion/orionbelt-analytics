@@ -251,7 +251,7 @@ class CommunityDetector:
                 continue
 
             # Find common words in table names
-            word_counts = defaultdict(int)
+            word_counts: defaultdict[str, int] = defaultdict(int)
             for table in table_names:
                 words = table.lower().split("_")
                 for word in words:

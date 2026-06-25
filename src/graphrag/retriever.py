@@ -7,7 +7,7 @@ of foreign key relationships and semantic similarity.
 
 import logging
 from collections import defaultdict, deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import networkx as nx
 
@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 class GraphRetriever:
     """Graph-based retrieval for schema navigation."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the graph retriever."""
         self.graph = nx.DiGraph()
-        self._tables_info = {}
+        self._tables_info: Dict[str, Dict[str, Any]] = {}
 
-    def build_graph(self, tables_info: List[Dict[str, Any]]):
+    def build_graph(self, tables_info: List[Dict[str, Any]]) -> None:
         """
         Build graph from schema information.
 
@@ -66,7 +66,7 @@ class GraphRetriever:
             f"and {self.graph.number_of_edges()} edges"
         )
 
-    def add_to_graph(self, tables_info: List[Dict[str, Any]]):
+    def add_to_graph(self, tables_info: List[Dict[str, Any]]) -> None:
         """Add tables and relationships to the existing graph (accumulative).
 
         Unlike build_graph(), this does NOT clear the graph first.
@@ -219,7 +219,7 @@ class GraphRetriever:
 
     def get_related_tables(
         self, table_name: str, max_distance: int = 1, direction: str = "both"
-    ) -> Dict[str, List[str]]:
+    ) -> Dict[int, List[str]]:
         """
         Get tables related to a given table.
 
@@ -234,7 +234,7 @@ class GraphRetriever:
         if table_name not in self.graph:
             return {}
 
-        related = defaultdict(list)
+        related: defaultdict[int, List[str]] = defaultdict(list)
 
         if direction in ["outgoing", "both"]:
             # Tables this table references (FK from)
@@ -288,7 +288,7 @@ class GraphRetriever:
         self,
         table_name: str,
         max_hops: Optional[int],
-        neighbor_fn,
+        neighbor_fn: Callable[[str], Any],
     ) -> Dict[str, Any]:
         """Cycle-safe directed transitive closure from a table.
 

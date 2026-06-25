@@ -8,11 +8,14 @@ to provide intelligent schema navigation and context-aware query generation.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from .community_detector import CommunityDetector
 from .embedder import SchemaEmbedder
 from .retriever import GraphRetriever
+
+if TYPE_CHECKING:
+    from .vector_store import VectorStore
 
 # Try to use ChromaDB if available, fallback to JSON-based VectorStore
 try:
@@ -54,6 +57,7 @@ class GraphRAGManager:
         self.embedder = SchemaEmbedder(embedding_model=embedding_model)
 
         # Use ChromaDB if available, otherwise fallback to JSON-based storage
+        self.vector_store: Union["ChromaDBVectorStore", "VectorStore"]
         if CHROMADB_AVAILABLE:
             self.vector_store = ChromaDBVectorStore(
                 connection_id=connection_id or "default",
@@ -73,11 +77,11 @@ class GraphRAGManager:
         self._initialized = False
         self._schema_name: Optional[str] = schema_name
         self._schema_names: List[str] = []
-        self._connection_id: Optional[str] = connection_id or "default"
+        self._connection_id: str = connection_id or "default"
 
     def initialize_from_schema(
         self, tables_info: List[Dict[str, Any]], schema_name: str = "default"
-    ):
+    ) -> None:
         """
         Initialize GraphRAG from schema metadata.
 
@@ -118,7 +122,7 @@ class GraphRAGManager:
 
     def accumulate_schema(
         self, tables_info: List[Dict[str, Any]], schema_name: str = "default"
-    ):
+    ) -> None:
         """Add a schema's tables to an already-initialized GraphRAG (accumulative).
 
         Unlike initialize_from_schema(), this does not clear existing data.
@@ -230,7 +234,7 @@ class GraphRAGManager:
 
         primary_tables = [r["element"]["name"] for r in table_results]
 
-        result = {
+        result: Dict[str, Any] = {
             "primary_tables": table_results,
             "related_tables": {},
             "communities": {},
@@ -378,7 +382,7 @@ class GraphRAGManager:
         if not self._initialized:
             raise RuntimeError("GraphRAG not initialized")
 
-        overview = {
+        overview: Dict[str, Any] = {
             "schema_name": self._schema_name,
             "vector_store_stats": self.vector_store.get_statistics(),
             "graph_summary": self.graph_retriever.get_graph_summary(),
@@ -392,7 +396,7 @@ class GraphRAGManager:
 
         return overview
 
-    def save_state(self, output_dir: Path):
+    def save_state(self, output_dir: Path) -> None:
         """
         Save GraphRAG state to disk.
 
@@ -574,7 +578,7 @@ class GraphRAGManager:
         logger.warning("GraphRAG restore failed — no graph data loaded")
         return False
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all GraphRAG state."""
         self.vector_store.clear()
         self.graph_retriever = GraphRetriever()
