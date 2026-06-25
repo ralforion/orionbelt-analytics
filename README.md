@@ -22,6 +22,10 @@
 [![DuckDB](https://img.shields.io/badge/DuckDB-FFF000.svg?logo=duckdb&logoColor=black)](https://duckdb.org)
 [![MySQL](https://img.shields.io/badge/MySQL-4479A1.svg?logo=mysql&logoColor=white)](https://www.mysql.com)
 
+[![Docker Hub](https://img.shields.io/docker/v/ralforion/orionbelt-analytics?logo=docker&logoColor=white&label=Docker%20Hub&color=2496ED&sort=semver)](https://hub.docker.com/r/ralforion/orionbelt-analytics/tags)
+[![Docker pulls](https://img.shields.io/docker/pulls/ralforion/orionbelt-analytics?logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/ralforion/orionbelt-analytics)
+[![Image size](https://img.shields.io/docker/image-size/ralforion/orionbelt-analytics/latest?logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/ralforion/orionbelt-analytics)
+
 OrionBelt Analytics is an MCP server that analyzes relational database schemas and generates RDF/OWL ontologies with embedded SQL mappings. It provides relationship-aware Text-to-SQL with automatic fan-trap prevention, GraphRAG for intelligent schema discovery, and interactive charting -- all accessible through any MCP-compatible AI client.
 
 ## The OrionBelt Ecosystem
