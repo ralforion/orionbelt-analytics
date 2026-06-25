@@ -1,0 +1,69 @@
+name: MCP Server Quality Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: mcp-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Deterministic audit: dumps the FastMCP tool surface and runs mcp-xray's
+  # static checks over the tool definitions. No LLM / API key involved, so it
+  # runs on every push for free. Findings are rendered into the run's Step
+  # Summary and uploaded as an artifact. Advisory for now (continue-on-error);
+  # flip to a gate once the baseline is clean.
+  audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          uv sync
+          uv pip install mcp-xray-audit
+
+      - name: Dump server tools
+        # The server only speaks http/sse in normal operation, but the FastMCP
+        # `mcp` object (with every @mcp.tool() registered on import of src.main)
+        # can run a one-shot stdio session for the dump.
+        run: |
+          uv run mcp-xray dump --stdio \
+            "uv run python -c 'from src.main import mcp; mcp.run(transport=\"stdio\")'" \
+            > tools.json
+
+      - name: Run audit
+        # No --model: run the deterministic static checks only, no LLM call.
+        run: uv run mcp-xray analyze tools.json --runs-dir audit-output
+
+      - name: Render report to job summary
+        if: always()
+        run: |
+          report="$(find audit-output -name report.md -print 2>/dev/null | sort | tail -n1)"
+          {
+            echo "## MCP Server Quality Audit"
+            echo ""
+            if [ -n "$report" ] && [ -f "$report" ]; then
+              cat "$report"
+            else
+              echo "_No \`report.md\` was produced by \`mcp-xray analyze\`._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-audit-report
+          path: |
+            tools.json
+            audit-output/**
+          if-no-files-found: warn
