@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastmcp import Context
 
 from ..handler_context import HandlerContext
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import ensure_output_dir, get_connection_dir
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ async def download_ontology(
                     "hint": "Call store_ontology_in_rdf first or use source='file'",
                 }
 
-            graph_uri = f"http://example.com/schema/{schema_safe}"
+            graph_uri = schema_graph_uri(schema_name)
 
             try:
                 ontology_ttl = store.export_graph(graph_uri, format="turtle")

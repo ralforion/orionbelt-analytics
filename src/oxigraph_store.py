@@ -6,11 +6,20 @@ Stores ontologies, schema metadata, and accumulated knowledge across sessions.
 """
 
 import logging
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 if TYPE_CHECKING:
-    from pyoxigraph import Literal, NamedNode, Quad, QuerySolutions, RdfFormat, Store
+    from pyoxigraph import (
+        Literal,
+        NamedNode,
+        Quad,
+        QuerySolutions,
+        QueryTriples,
+        RdfFormat,
+        Store,
+    )
 
     OXIGRAPH_AVAILABLE: bool
 else:
@@ -27,6 +36,25 @@ else:
         Quad = None
 
 logger = logging.getLogger(__name__)
+
+# Single source of truth for the named-graph URI a schema's RDF is stored under.
+# Manual persistence, auto-persistence, export/download, and SPARQL helpers must
+# all agree on this, or e.g. a manual store writes to a graph the export can't
+# find (see issue: graph-URI mismatch).
+SCHEMA_GRAPH_PREFIX = "http://example.com/schema/"
+
+
+def schema_graph_uri(schema_name: str) -> str:
+    """Return the canonical named-graph URI for a schema's RDF.
+
+    Args:
+        schema_name: Schema identifier (may contain spaces/dots).
+
+    Returns:
+        Graph URI of the form ``http://example.com/schema/<safe-name>``.
+    """
+    schema_safe = schema_name.replace(" ", "_").replace(".", "_")
+    return f"{SCHEMA_GRAPH_PREFIX}{schema_safe}"
 
 
 def _escape_sparql_literal(value: str) -> str:
@@ -78,7 +106,9 @@ class OxigraphStoreManager:
             try:
                 self.store = Store(str(store_path))
             except OSError:
-                lock_file = store_path / "store" / "LOCK"
+                # pyoxigraph (RocksDB) writes LOCK directly inside the store
+                # directory we pass to Store(), not a nested "store/" subdir.
+                lock_file = store_path / "LOCK"
                 if lock_file.exists():
                     logger.warning(f"Removing stale Oxigraph lock file: {lock_file}")
                     lock_file.unlink()
@@ -177,6 +207,48 @@ class OxigraphStoreManager:
                 LIMIT 10
             ''')
             ```
+
+        Raises:
+            TimeoutError: If the query runs longer than ``timeout_seconds``.
+                pyoxigraph exposes no native query cancellation to Python, so the
+                timeout is best-effort: the caller is unblocked, but the orphaned
+                query keeps running in the background until it finishes on its own.
+        """
+        if timeout_seconds is None:
+            return self._execute_select(sparql_query)
+
+        result: List[List[Dict[str, Any]]] = []
+        error: List[BaseException] = []
+
+        def _runner() -> None:
+            try:
+                result.append(self._execute_select(sparql_query))
+            except BaseException as exc:  # noqa: BLE001 - re-raised on caller thread
+                error.append(exc)
+
+        worker = threading.Thread(target=_runner, name="sparql-query", daemon=True)
+        worker.start()
+        worker.join(timeout_seconds)
+
+        if worker.is_alive():
+            logger.warning(
+                f"SPARQL query exceeded {timeout_seconds}s timeout; abandoning the "
+                "wait (the query keeps running in the background until it completes)"
+            )
+            raise TimeoutError(f"SPARQL query exceeded {timeout_seconds}s timeout")
+        if error:
+            raise error[0]
+        return result[0]
+
+    def _execute_select(self, sparql_query: str) -> List[Dict[str, Any]]:
+        """Execute a SELECT query and materialize its bindings (no timeout).
+
+        Args:
+            sparql_query: SPARQL SELECT query string.
+
+        Returns:
+            List of result bindings (each binding is a dict keyed by variable
+            name, with unbound variables omitted).
         """
         try:
             results = []
@@ -260,11 +332,12 @@ class OxigraphStoreManager:
             ```
         """
         try:
-            # Execute query and serialize results
-            results = self.store.query(sparql_query)
-            # Oxigraph CONSTRUCT returns a graph; serialize() yields bytes (or None
-            # for an empty result), so decode to satisfy the str return contract.
-            serialized = results.serialize(format="text/turtle")  # type: ignore[arg-type]  # noqa: E501
+            # CONSTRUCT yields QueryTriples; narrow the query() union so serialize()
+            # resolves to the RDF (not results) overload.
+            results = cast("QueryTriples", self.store.query(sparql_query))
+            # serialize() yields bytes (or None for an empty result), so decode to
+            # satisfy the str return contract.
+            serialized = results.serialize(format=RdfFormat.TURTLE)
             return serialized.decode("utf-8") if serialized is not None else ""
         except Exception as e:
             logger.error(f"SPARQL CONSTRUCT query failed: {e}", exc_info=True)
@@ -509,6 +582,28 @@ class OxigraphStoreManager:
         """
 
         return self.query_sparql_construct(query)
+
+    def delete_graph(self, graph_uri: str) -> None:
+        """Remove a named graph and all of its triples from the store.
+
+        Used when an ontology version is cleaned up so stale triples don't linger
+        in Oxigraph. Removing a graph that doesn't exist is a no-op.
+
+        Args:
+            graph_uri: Named graph URI to delete.
+        """
+        try:
+            self.store.remove_graph(NamedNode(graph_uri))
+            # Drop any schema -> graph tracking that pointed at this graph.
+            self._loaded_ontologies = {
+                schema: uri
+                for schema, uri in self._loaded_ontologies.items()
+                if uri != graph_uri
+            }
+            logger.info(f"Deleted named graph <{graph_uri}>")
+        except Exception as e:
+            logger.error(f"Failed to delete graph {graph_uri}: {e}", exc_info=True)
+            raise
 
     def close(self) -> None:
         """Close the store (flush to disk if persistent)."""

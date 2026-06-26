@@ -587,7 +587,7 @@ Execute a SPARQL query against the RDF ontology store to explore classes, proper
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `sparql_query` | string | Yes | -- | A complete SPARQL query (`SELECT`, `ASK`, or `CONSTRUCT` -- auto-detected) |
-| `timeout_seconds` | integer | No | `30` | Query timeout in seconds (applies to `SELECT`) |
+| `timeout_seconds` | integer | No | `30` | Best-effort query timeout in seconds (applies to `SELECT`). Unblocks the caller after the timeout with an error; the underlying query may keep running in the background, since pyoxigraph exposes no native query cancellation. |
 
 **Returns:** Dictionary containing `success`, `query_type`, the echoed `query`, and:
 - `SELECT`: `result_count` and `results` (variable bindings)

@@ -862,7 +862,9 @@ async def query_sparql(
     Args:
         sparql_query: A complete SPARQL query string (SELECT, ASK, or CONSTRUCT).
             Example: "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10"
-        timeout_seconds: Query timeout in seconds
+        timeout_seconds: Best-effort SELECT timeout in seconds. Unblocks the
+            caller after the timeout; the underlying query may keep running in
+            the background (pyoxigraph has no native query cancellation).
 
     Returns:
         Query results (bindings for SELECT, boolean for ASK, Turtle string for CONSTRUCT)

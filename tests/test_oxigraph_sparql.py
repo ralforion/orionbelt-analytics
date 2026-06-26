@@ -1,10 +1,17 @@
-"""Regression tests for Oxigraph SPARQL read/write round-trips.
+"""Regression tests for Oxigraph SPARQL read/write and store correctness.
 
-These cover the code paths that broke against pyoxigraph 0.5.x (issue #38):
+Cover the paths that broke against pyoxigraph 0.5.x (issue #38):
 - ``add_triple`` (default and named graph) — must build a ``Quad``.
 - ``query_sparql`` SELECT — ``QuerySolution`` no longer exposes ``.items()``.
 - ``query_sparql_ask`` ASK — ``QueryBoolean`` is not iterable.
 - ``add_knowledge`` — exercises ``add_triple`` plus metadata triples.
+
+Plus the follow-up RDF correctness fixes:
+- ``schema_graph_uri`` — single source of truth so store/export/auto-persist
+  agree on the named-graph URI (F3).
+- ``delete_graph`` — version cleanup must actually drop triples (F2).
+- ``query_sparql_construct`` — serialize via ``RdfFormat.TURTLE`` (F5).
+- ``query_sparql`` best-effort timeout watchdog (F1).
 
 They run against the real, pinned pyoxigraph (no mocks) so an API drift like
 the 0.3.x -> 0.5.x break is caught instead of silently shipping.
@@ -12,11 +19,16 @@ the 0.3.x -> 0.5.x break is caught instead of silently shipping.
 
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 
-from src.oxigraph_store import OXIGRAPH_AVAILABLE, OxigraphStoreManager
+from src.oxigraph_store import (
+    OXIGRAPH_AVAILABLE,
+    OxigraphStoreManager,
+    schema_graph_uri,
+)
 
 pytestmark = pytest.mark.skipif(not OXIGRAPH_AVAILABLE, reason="Oxigraph not available")
 
@@ -27,8 +39,10 @@ EX = "http://example.com/"
 def store():
     """A fresh on-disk Oxigraph store, cleaned up after the test."""
     temp_dir = Path(tempfile.mkdtemp())
-    yield OxigraphStoreManager(store_path=temp_dir)
-    shutil.rmtree(temp_dir)
+    mgr = OxigraphStoreManager(store_path=temp_dir)
+    yield mgr
+    mgr.close()  # release RocksDB file handles before removing the dir
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class TestAddTripleAndSelect:
@@ -120,3 +134,92 @@ class TestAddKnowledge:
             f"<{EX}metadata#confidence> ?c }} }}"
         )
         assert meta == [{"c": "0.95"}]
+
+
+class TestSchemaGraphUri:
+    """The shared graph-URI helper that keeps store/export/auto-persist aligned."""
+
+    def test_plain_name(self):
+        assert schema_graph_uri("public") == "http://example.com/schema/public"
+
+    def test_spaces_and_dots_are_made_safe(self):
+        # Spaces/dots must be normalized identically everywhere, or a manual
+        # store writes a graph the export can't find.
+        assert schema_graph_uri("my db.public") == (
+            "http://example.com/schema/my_db_public"
+        )
+
+    def test_store_and_export_use_the_same_graph(self, store):
+        # Round-trip: load into the canonical graph, export from the same URI.
+        graph = schema_graph_uri("sales.reporting")
+        store.add_triple(f"{EX}t", f"{EX}p", f"{EX}o", graph_uri=graph)
+
+        exported = store.export_graph(graph)
+
+        assert f"{EX}t" in exported
+
+
+class TestDeleteGraph:
+    """delete_graph removes a named graph's triples (used by version cleanup)."""
+
+    def test_delete_removes_triples(self, store):
+        graph = schema_graph_uri("doomed")
+        store.add_triple(f"{EX}s", f"{EX}p", f"{EX}o", graph_uri=graph)
+        assert store.export_graph(graph)  # non-empty before
+
+        store.delete_graph(graph)
+
+        results = store.query_sparql(
+            f"SELECT ?s WHERE {{ GRAPH <{graph}> {{ ?s ?p ?o }} }}"
+        )
+        assert results == []
+
+    def test_delete_missing_graph_is_noop(self, store):
+        # Cleanup may call this for a graph that was never persisted.
+        store.delete_graph(schema_graph_uri("never-existed"))
+
+
+class TestConstruct:
+    """CONSTRUCT serialization (F5: RdfFormat.TURTLE, not the deprecated string)."""
+
+    def test_construct_returns_turtle(self, store):
+        store.add_triple(f"{EX}s", f"{EX}p", f"{EX}o")
+
+        turtle = store.query_sparql_construct(
+            "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }"
+        )
+
+        assert f"{EX}s" in turtle and f"{EX}o" in turtle
+
+    def test_construct_empty_result_is_empty_string(self, store):
+        turtle = store.query_sparql_construct(
+            "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }"
+        )
+        assert turtle == ""
+
+
+class TestQueryTimeout:
+    """Best-effort SELECT timeout watchdog (F1)."""
+
+    def test_no_timeout_returns_normally(self, store):
+        store.add_triple(f"{EX}s", f"{EX}p", f"{EX}o")
+        assert store.query_sparql(
+            "SELECT ?s WHERE { ?s ?p ?o }", timeout_seconds=None
+        ) == [{"s": f"{EX}s"}]
+
+    def test_within_timeout_returns(self, store):
+        store.add_triple(f"{EX}s", f"{EX}p", f"{EX}o")
+        assert store.query_sparql(
+            "SELECT ?s WHERE { ?s ?p ?o }", timeout_seconds=30
+        ) == [{"s": f"{EX}s"}]
+
+    def test_timeout_raises(self, store, monkeypatch):
+        # Simulate a slow query by making the SELECT core block past the timeout.
+        def slow_select(_query):
+            time.sleep(2)
+            return []
+
+        monkeypatch.setattr(store, "_execute_select", slow_select)
+
+        with pytest.raises(TimeoutError):
+            store.query_sparql("SELECT ?s WHERE { ?s ?p ?o }", timeout_seconds=1)

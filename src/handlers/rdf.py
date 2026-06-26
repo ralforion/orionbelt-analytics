@@ -13,7 +13,7 @@ from ..exceptions import (
 )
 from ..handler_context import HandlerContext
 from ..lifecycle.metadata import update_workspace_rdf, update_workspace_section
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ async def store_ontology_in_rdf(
         ontology_ttl = ontology_path.read_text(encoding="utf-8")
 
         if not graph_uri:
-            graph_uri = f"http://example.com/ontology/{effective_schema}"
+            graph_uri = schema_graph_uri(effective_schema)
 
         triple_count = store.load_ontology(
             ontology_ttl=ontology_ttl, graph_uri=graph_uri, schema_name=effective_schema
@@ -258,7 +258,7 @@ async def list_tables_sparql(
         if not schema_graph:
             session = services.get_session_data(ctx)
             schema_name = session.get_last_analyzed_schema() or "default"
-            schema_graph = f"http://example.com/schema/{schema_name}"
+            schema_graph = schema_graph_uri(schema_name)
 
         tables = store.list_tables_sparql(schema_graph)
 
