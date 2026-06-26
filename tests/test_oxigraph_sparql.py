@@ -223,3 +223,24 @@ class TestQueryTimeout:
 
         with pytest.raises(TimeoutError):
             store.query_sparql("SELECT ?s WHERE { ?s ?p ?o }", timeout_seconds=1)
+
+
+class TestStoreLock:
+    """A live RocksDB LOCK must never be auto-deleted (F1)."""
+
+    def test_second_open_raises_and_preserves_lock(self):
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            mgr = OxigraphStoreManager(store_path=temp_dir)
+            lock = temp_dir / "LOCK"
+            assert lock.exists()
+
+            # A second open while the first holds the store must fail, NOT delete
+            # the active lock (which would invite two-process corruption).
+            with pytest.raises(OSError):
+                OxigraphStoreManager(store_path=temp_dir)
+
+            assert lock.exists()  # lock left intact
+            mgr.close()
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)

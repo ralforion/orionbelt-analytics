@@ -105,16 +105,19 @@ class OxigraphStoreManager:
             store_path.mkdir(parents=True, exist_ok=True)
             try:
                 self.store = Store(str(store_path))
-            except OSError:
-                # pyoxigraph (RocksDB) writes LOCK directly inside the store
-                # directory we pass to Store(), not a nested "store/" subdir.
-                lock_file = store_path / "LOCK"
-                if lock_file.exists():
-                    logger.warning(f"Removing stale Oxigraph lock file: {lock_file}")
-                    lock_file.unlink()
-                    self.store = Store(str(store_path))
-                else:
-                    raise
+            except OSError as e:
+                # A RocksDB LOCK in the store dir means another process currently
+                # holds the store open. It is NOT stale just because it exists, and
+                # auto-deleting it doesn't unblock this open — it only invites two
+                # processes to corrupt the same database. Surface the error with
+                # recovery guidance and let the operator remove the lock manually
+                # if they are certain no other process is using the store.
+                logger.error(
+                    f"Failed to open Oxigraph store at {store_path}: {e}. "
+                    "If you are certain no other process is using this store, "
+                    f"remove {store_path / 'LOCK'} manually and retry."
+                )
+                raise
             logger.info(f"Initialized Oxigraph persistent store at: {store_path}")
         else:
             self.store = Store()
