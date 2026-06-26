@@ -5,6 +5,45 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-06-26
+
+Bug-fix release centered on the RDF/SPARQL store, which had broken against the
+resolved pyoxigraph version. No MCP tool surface changes (still 26 tools, same
+signatures).
+
+### Fixed
+- **RDF/SPARQL store repaired for pyoxigraph 0.5.x.** `query_sparql` (SELECT),
+  `query_sparql_ask` (ASK), and `add_triple`/`add_knowledge` raised at runtime
+  because they used 0.3.x APIs removed in the resolved 0.5.x. Migrated to `Quad`,
+  `QuerySolutions.variables`, and `bool(QueryBoolean)`. (#39)
+- **Ontology version cleanup now deletes RDF triples.** Added
+  `OxigraphStoreManager.delete_graph()`; cleanup previously called a nonexistent
+  method and left stale triples in the store. (#39)
+- **Consistent RDF named-graph URIs.** Manual storage, auto-persistence,
+  semantic-name persistence, and export/download now share a single
+  `schema_graph_uri()` helper, so a manually stored ontology is no longer
+  invisible to RDF export. (#39)
+- **`query_sparql` timeout is now enforced (best-effort).** `timeout_seconds`
+  previously had no effect; it now unblocks the caller when the timeout elapses
+  (the underlying query may keep running, as pyoxigraph exposes no native
+  cancellation). (#39)
+- **Safe Oxigraph store open.** A locked store no longer has its RocksDB `LOCK`
+  auto-deleted on open failure (which risked two-process corruption); the error
+  propagates with recovery guidance. (#39)
+- CONSTRUCT serialization uses `RdfFormat.TURTLE` instead of a deprecated MIME
+  string. (#39)
+
+### Changed
+- Pinned `pyoxigraph>=0.5,<0.6` and upgraded to 0.5.9. (#39)
+- `src/` now passes strict mypy; the mypy check is a blocking CI gate (was
+  advisory). (#37)
+- Author email updated to info@ralforion.com. (#33)
+
+### Added
+- Deterministic MCP tool-surface audit workflow (`mcp-xray`) in CI, rendering its
+  report to the run summary. (#35, #36)
+- Docker Hub badges and publish workflow. (#34)
+
 ## [1.7.0] - 2026-06-22
 
 Architecture-review release: correctness fixes, stronger SQL safety, and a large
