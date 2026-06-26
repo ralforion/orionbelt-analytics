@@ -11,7 +11,7 @@ from fastmcp import Context
 from ..database_manager import ColumnInfo, TableInfo
 from ..handler_context import HandlerContext
 from ..lifecycle.metadata import update_workspace_rdf, update_workspace_section
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 
 logger = logging.getLogger(__name__)
@@ -335,12 +335,7 @@ async def generate_ontology(
                 store = services.get_oxigraph_store(ctx)
                 if store:
                     if not graph_uri:
-                        schema_safe = (
-                            (schema_name or "default")
-                            .replace(" ", "_")
-                            .replace(".", "_")
-                        )
-                        graph_uri = f"http://example.com/schema/{schema_safe}"
+                        graph_uri = schema_graph_uri(schema_name or "default")
 
                     triple_count = store.load_ontology(
                         ontology_ttl, graph_uri, schema_name or "default"

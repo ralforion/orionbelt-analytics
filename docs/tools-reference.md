@@ -587,7 +587,7 @@ Execute a SPARQL query against the RDF ontology store to explore classes, proper
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `sparql_query` | string | Yes | -- | A complete SPARQL query (`SELECT`, `ASK`, or `CONSTRUCT` -- auto-detected) |
-| `timeout_seconds` | integer | No | `30` | Query timeout in seconds (applies to `SELECT`) |
+| `timeout_seconds` | integer | No | `30` | Best-effort query timeout in seconds (applies to `SELECT`). Unblocks the caller after the timeout with an error; the underlying query may keep running in the background, since pyoxigraph exposes no native query cancellation. |
 
 **Returns:** Dictionary containing `success`, `query_type`, the echoed `query`, and:
 - `SELECT`: `result_count` and `results` (variable bindings)
@@ -633,7 +633,7 @@ All tools operate within these security constraints:
 
 - **Read-only SQL** -- only SELECT statements and schema introspection queries are permitted
 - **SQL injection prevention** -- queries are scanned for injection patterns before execution
-- **Query timeout protection** -- long-running queries are terminated
+- **Query timeout protection** -- queries honor a configurable timeout. For SPARQL this is best-effort: the caller is released when the timeout elapses, but the underlying query may keep running in the background (pyoxigraph exposes no native query cancellation), so a timeout bounds caller latency, not server CPU
 - **Result size limits** -- maximum 5,000 rows per query
 - **Credential isolation** -- database credentials are read from environment variables, never passed as tool parameters
 - **Session isolation** -- each MCP session maintains independent state (connections, caches, artifacts)

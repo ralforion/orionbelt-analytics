@@ -10,7 +10,7 @@ from fastmcp import Context
 
 from ..constants import OBA_NAMESPACE
 from ..handler_context import HandlerContext
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -245,7 +245,7 @@ async def load_my_ontology(
                 if store:
                     schema_name = newest_file.stem.replace("ontology_", "")
                     if not graph_uri:
-                        graph_uri = f"http://example.com/schema/{schema_name}"
+                        graph_uri = schema_graph_uri(schema_name)
                     used_graph_uri = graph_uri
 
                     triple_count = store.load_ontology(

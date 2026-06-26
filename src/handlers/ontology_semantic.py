@@ -12,7 +12,7 @@ from ..config import config_manager
 from ..handler_context import HandlerContext
 from ..lifecycle.metadata import update_workspace_section
 from ..ontology_generator import OntologyGenerator
-from ..oxigraph_store import OXIGRAPH_AVAILABLE
+from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..utils import is_client_disconnect, safe_ctx_info
 from .ontology_generation import _build_minimal_graph_summary
@@ -536,10 +536,11 @@ async def apply_semantic_names(
                 if store:
                     session = services.get_session_data(ctx)
                     schema_name = (
-                        getattr(session, "schema_name", "default") or "default"
+                        session.current_schema
+                        or session.get_last_analyzed_schema()
+                        or "default"
                     )
-                    schema_safe = schema_name.replace(" ", "_").replace(".", "_")
-                    graph_uri = f"http://example.com/schema/{schema_safe}"
+                    graph_uri = schema_graph_uri(schema_name)
                     triple_count = store.load_ontology(
                         updated_ontology, graph_uri, schema_name
                     )
