@@ -4,7 +4,7 @@
 
 ## What is GraphRAG
 
-GraphRAG is a Graph-based Retrieval Augmented Generation subsystem built into OrionBelt Analytics. It provides schema intelligence by combining two complementary techniques:
+GraphRAG is a Graph-based Retrieval Augmented Generation subsystem built into OrionBelt® Analytics. It provides schema intelligence by combining two complementary techniques:
 
 - **Graph traversal** over foreign key relationships, supporting paths up to 12 hops deep, to discover how tables connect across complex schemas.
 - **Vector embeddings** for semantic similarity, enabling natural language search over tables, columns, and relationships without requiring exact name matches.
