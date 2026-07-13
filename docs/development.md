@@ -2,7 +2,7 @@
 
 [<- Back to README](../README.md)
 
-This guide covers the development workflow for OrionBelt Analytics -- prerequisites, project layout, architecture, testing, and contribution guidelines.
+This guide covers the development workflow for OrionBelt® Analytics -- prerequisites, project layout, architecture, testing, and contribution guidelines.
 
 ---
 

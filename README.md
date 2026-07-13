@@ -3,7 +3,7 @@
   <img src="https://raw.githubusercontent.com/ralforion/orionbelt-analytics/main/assets/ORIONBELT_Logo.png" alt="OrionBelt Logo" width="400">
 </p>
 
-<h1 align="center">OrionBelt Analytics</h1>
+<h1 align="center">OrionBelt® Analytics</h1>
 
 <p align="center"><strong>The Ontology-based MCP server for your Text-2-SQL convenience.</strong></p>
 
@@ -270,4 +270,9 @@ For commercial licensing inquiries, contact: licensing@ralforion.com
   <a href="https://ralforion.com">
     <img src="https://raw.githubusercontent.com/ralforion/orionbelt-analytics/main/assets/RALFORION_doo_Logo.png" alt="RALFORION d.o.o." width="200">
   </a>
+</p>
+
+<p align="center">
+  Copyright © 2026 RALFORION d.o.o.<br>
+  OrionBelt® is a registered trademark of RALFORION d.o.o.
 </p>

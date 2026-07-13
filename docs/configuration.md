@@ -2,7 +2,7 @@
 
 # Configuration Reference
 
-This document provides the full configuration reference for OrionBelt Analytics, covering all environment variables, transport modes, and per-database troubleshooting guidance.
+This document provides the full configuration reference for OrionBelt® Analytics, covering all environment variables, transport modes, and per-database troubleshooting guidance.
 
 ## Environment Variables
 

@@ -2,7 +2,7 @@
 
 # AI Framework Integrations
 
-OrionBelt Analytics exposes all its tools -- schema analysis, ontology generation,
+OrionBelt® Analytics exposes all its tools -- schema analysis, ontology generation,
 Text-to-SQL with fan-trap prevention, GraphRAG, and charting -- through a native
 MCP (Model Context Protocol) server. Any AI agent framework with MCP client support
 can connect to `http://localhost:9000/mcp` and auto-discover every available tool,

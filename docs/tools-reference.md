@@ -2,7 +2,7 @@
 
 # MCP Tools Reference
 
-Complete reference for all OrionBelt Analytics MCP tools. These tools are invoked by AI clients (Claude, etc.) through the Model Context Protocol -- they are not Python functions.
+Complete reference for all OrionBelt® Analytics MCP tools. These tools are invoked by AI clients (Claude, etc.) through the Model Context Protocol -- they are not Python functions.
 
 ---
 

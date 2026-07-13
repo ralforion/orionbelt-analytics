@@ -2,7 +2,7 @@
 
 # Fan-Trap Prevention
 
-Fan-traps are one of the most common causes of silently incorrect SQL results. They inflate aggregated values without raising errors, making them particularly dangerous in analytical queries. OrionBelt Analytics detects fan-trap risks automatically at multiple stages -- during schema analysis, query validation, and GraphRAG context retrieval.
+Fan-traps are one of the most common causes of silently incorrect SQL results. They inflate aggregated values without raising errors, making them particularly dangerous in analytical queries. OrionBelt® Analytics detects fan-trap risks automatically at multiple stages -- during schema analysis, query validation, and GraphRAG context retrieval.
 
 ## What Is a Fan-Trap?
 
