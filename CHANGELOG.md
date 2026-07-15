@@ -5,6 +5,43 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] - 2026-07-15
+
+Bug-fix release. Charting broke for anyone installing on pandas 3, which a fresh
+install already resolves — the dependency floors are unbounded, so this affected
+1.7.1 as published. No MCP tool surface changes (still 26 tools, same signatures).
+
+### Fixed
+- **Line-chart datetime axes lost `type="date"` under pandas 3.** The
+  time-series axis enhancement was gated on a literal `datetime64[ns]` dtype;
+  pandas 3 parses to `datetime64[us]`, so the check silently stopped matching and
+  the axis rendered untyped — no error, just a wrong axis. Now matched with
+  `pd.api.types.is_datetime64_any_dtype`, which is resolution-agnostic (and was
+  already used for the same purpose elsewhere). (#54)
+
+### Changed
+- Allow `fastmcp[apps]` 3.4.x (`>=3.3.1,<3.5`). This is the only dependency
+  constraint that moves for installers; the pandas/sqlglot/cryptography floors are
+  unchanged. (#47)
+- Docker image moves to **Python 3.14**. The base image tag is now the single
+  source of truth for the image's interpreter (`UV_PYTHON` pinned to it), so a
+  base bump can no longer leave uv building the virtualenv against a different
+  Python. (#50)
+- OBQC accepts sqlglot 30's `Expr`. `Expr` is a new base class of `Expression`
+  and `parse_one` returns the wider type; the validator helpers now take
+  `exp.Expr`. Types only — no behavior change. (#52)
+- Dependency refresh: sqlglot 30.12.0, pandas 3.0.3, cryptography 49.0.0, plus 20
+  minor/patch bumps. (#45, #49, #52, #55)
+
+### Internal
+- Dependabot now watches uv, GitHub Actions, and Docker. (#42)
+- CI tests on both Python 3.13 and 3.14, covering the supported `requires-python`
+  range rather than a single pinned version. (#50)
+- Docker image changes are gated by a build **and smoke test** (venv interpreter
+  resolves, `src.main` imports, server boots and serves) — the image previously
+  was not built at all until a release tag, so a broken one surfaced as a failed
+  publish. (#51, #53)
+
 ## [1.7.1] - 2026-06-26
 
 Bug-fix release centered on the RDF/SPARQL store, which had broken against the
