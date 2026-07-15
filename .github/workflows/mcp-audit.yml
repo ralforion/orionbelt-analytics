@@ -24,26 +24,30 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install dependencies
-        run: |
-          uv sync
-          uv pip install mcp-xray-audit
+        # mcp-xray-audit is a CI-only tool and deliberately not in the lock, so
+        # it is supplied per-invocation with `uv run --with` below. Installing it
+        # into the project venv instead is fragile: any later `uv run` that
+        # re-syncs the venv drops it, and the next step fails to spawn mcp-xray.
+        run: uv sync
 
       - name: Dump server tools
         # The server only speaks http/sse in normal operation, but the FastMCP
         # `mcp` object (with every @mcp.tool() registered on import of src.main)
         # can run a one-shot stdio session for the dump.
         run: |
-          uv run mcp-xray dump --stdio \
+          uv run --with mcp-xray-audit mcp-xray dump --stdio \
             "uv run python -c 'from src.main import mcp; mcp.run(transport=\"stdio\")'" \
             > tools.json
 
       - name: Run audit
         # --tools-json feeds the offline dump; no --llm flag means the static +
         # consolidation checks run deterministically with no model / API key.
-        run: uv run mcp-xray analyze --tools-json tools.json --runs-dir audit-output
+        run: |
+          uv run --with mcp-xray-audit mcp-xray analyze \
+            --tools-json tools.json --runs-dir audit-output
 
       - name: Render report to job summary
         if: always()
