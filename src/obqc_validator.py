@@ -432,14 +432,14 @@ class OBQCValidator:
 
         return result
 
-    def _extract_tables(self, parsed: exp.Expression, result: OBQCResult) -> None:
+    def _extract_tables(self, parsed: exp.Expr, result: OBQCResult) -> None:
         """Extract all table references from parsed query."""
         for table in parsed.find_all(exp.Table):
             table_name = table.name
             if table_name and table_name not in result.parsed_tables:
                 result.parsed_tables.append(table_name)
 
-    def _extract_columns(self, parsed: exp.Expression, result: OBQCResult) -> None:
+    def _extract_columns(self, parsed: exp.Expr, result: OBQCResult) -> None:
         """Extract all column references from parsed query."""
         for column in parsed.find_all(exp.Column):
             col_ref = column.name
@@ -448,7 +448,7 @@ class OBQCValidator:
             if col_ref and col_ref not in result.parsed_columns:
                 result.parsed_columns.append(col_ref)
 
-    def _extract_joins(self, parsed: exp.Expression, result: OBQCResult) -> None:
+    def _extract_joins(self, parsed: exp.Expr, result: OBQCResult) -> None:
         """Extract join information from parsed query."""
         for join in parsed.find_all(exp.Join):
             join_info: Dict[str, Any] = {
@@ -467,7 +467,7 @@ class OBQCValidator:
 
             result.parsed_joins.append(join_info)
 
-    def _extract_aggregations(self, parsed: exp.Expression, result: OBQCResult) -> None:
+    def _extract_aggregations(self, parsed: exp.Expr, result: OBQCResult) -> None:
         """Detect aggregate functions and GROUP BY."""
         # Check for aggregate functions
         agg_types = (exp.Sum, exp.Count, exp.Avg, exp.Min, exp.Max)
@@ -651,7 +651,7 @@ class OBQCValidator:
         return None
 
     def _validate_type_compatibility(
-        self, parsed: exp.Expression, result: OBQCResult
+        self, parsed: exp.Expr, result: OBQCResult
     ) -> None:
         """Rule: Check type compatibility in comparisons."""
         comparison_types = (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)
@@ -675,7 +675,7 @@ class OBQCValidator:
                         )
                     )
 
-    def _infer_type(self, expr: exp.Expression) -> Optional[str]:
+    def _infer_type(self, expr: exp.Expr) -> Optional[str]:
         """Infer the XSD type of an expression from ontology."""
         if self._schema_cache is None:
             return None
@@ -740,7 +740,7 @@ class OBQCValidator:
         return cat1 == cat2 or cat1 == "unknown" or cat2 == "unknown"
 
     def _validate_aggregation_context(
-        self, parsed: exp.Expression, result: OBQCResult
+        self, parsed: exp.Expr, result: OBQCResult
     ) -> None:
         """Rule: Validate GROUP BY completeness for aggregation queries."""
         if not result.has_aggregation:
