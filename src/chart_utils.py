@@ -606,8 +606,10 @@ def create_plotly_chart(
                 },
             )
 
-        # Enhance for time series
-        if sorted_df[x_column].dtype in ["datetime64[ns]"]:
+        # Enhance for time series. Match on any datetime resolution rather than
+        # a literal "datetime64[ns]": pandas 3 parses to datetime64[us], so an
+        # ns-only comparison silently stops matching and the axis loses type=date.
+        if pd.api.types.is_datetime64_any_dtype(sorted_df[x_column]):
             fig.update_xaxes(title=format_measure_name(x_column), type="date")
     elif chart_type == "scatter":
         fig = px.scatter(

@@ -38,6 +38,23 @@ class TestCreatePlotlyChart(unittest.TestCase):
         fig = create_plotly_chart(df, "line", "month", "value", None, "Line", "grouped")
         self.assertIsNotNone(fig)
 
+    def test_line_chart_datetime_x_axis_is_typed_as_date(self):
+        """A datetime x-axis must be marked type='date', at any resolution.
+
+        Asserts the axis config rather than just a non-None figure, which is
+        what let the resolution bug hide. Note this only bites under pandas 3
+        (datetime64[us]); on pandas 2 the line path re-parses x to [ns], so it
+        passes either way.
+        """
+        df = pd.DataFrame(
+            {
+                "day": pd.to_datetime(["2024-01-15", "2024-02-15", "2024-03-15"]),
+                "value": [1, 2, 3],
+            }
+        )
+        fig = create_plotly_chart(df, "line", "day", "value", None, "Line", "grouped")
+        self.assertEqual(fig.layout.xaxis.type, "date")
+
     def test_scatter_chart(self):
         df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
         fig = create_plotly_chart(df, "scatter", "x", "y", None, "Scatter", "grouped")
