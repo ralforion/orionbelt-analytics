@@ -80,9 +80,15 @@ jobs:
             -c 'import src.main; print("src.main import OK")'
 
       - name: Boot server and check it serves
-        # A bare 405/406 from /mcp is success: it means the MCP app is mounted and
-        # replying, and only rejects this request for lacking the MCP Accept
-        # header. Anything else (or no listener) means the server did not come up.
+        # Only explicit expected codes count as success. /mcp answers 406 to a
+        # bare GET (it wants the MCP Accept header), 405 if it rejects the method,
+        # 200 if a future handler accepts it — all of which prove the MCP app is
+        # mounted and replying.
+        #
+        # 404 must NOT be accepted: unmatched routes on this server return 404
+        # (verified — `/` and any unknown path do), so an unmounted /mcp would
+        # answer 404 and a broad 4xx match would call that success. That is the
+        # regression this step exists to catch.
         run: |
           set -euo pipefail
           docker run -d --name obpr -p 9000:9000 orionbelt-analytics:pr
@@ -92,8 +98,21 @@ jobs:
             if [ "$code" != "000" ]; then
               echo "Server responded with HTTP $code"
               case "$code" in
-                4*|2*) echo "Server is serving."; exit 0 ;;
-                *) echo "::error::Unexpected status $code from /mcp"; docker logs obpr; exit 1 ;;
+                200|405|406)
+                  echo "Server is serving."
+                  exit 0
+                  ;;
+                404)
+                  echo "::error::/mcp returned 404 — the MCP app is not mounted."
+                  echo "The server is listening but has no /mcp route."
+                  docker logs obpr
+                  exit 1
+                  ;;
+                *)
+                  echo "::error::Unexpected status $code from /mcp"
+                  docker logs obpr
+                  exit 1
+                  ;;
               esac
             fi
             sleep 2
