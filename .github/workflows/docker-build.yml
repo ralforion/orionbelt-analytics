@@ -1,0 +1,112 @@
+name: Docker Build
+
+# Builds and smoke-tests the image on PRs that can change it. Nothing is pushed.
+#
+# Why this exists: docker-publish.yml only builds on version tags, so until now
+# a Dockerfile change reached us at release time, when a bad one means a broken
+# publish. That is not hypothetical — a base-image bump (#43) passed every check
+# and would have shipped an image whose dependencies could not import.
+#
+# Why it smoke-tests rather than only building: that image BUILT cleanly. uv had
+# quietly fetched its own CPython and the venv symlink dangled in the runtime
+# stage, so the failure only appeared when something ran. A build-only job would
+# have gone green on it. The import and boot steps below are the actual gate.
+
+on:
+  pull_request:
+    paths:
+      # Anything that can change what lands in the image or which interpreter
+      # the venv is built against.
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".python-version"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docker-build.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          # Native amd64 only, and load into the local daemon so the smoke test
+          # can run it. The tag build in docker-publish.yml stays multi-arch;
+          # emulating arm64 here would cost minutes to catch little more.
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: orionbelt-analytics:pr
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify venv interpreter resolves
+        # The venv's python must point at the base image interpreter. When it
+        # dangles, `python` silently falls back to the base python, which cannot
+        # see the venv's site-packages, and every import fails at startup.
+        run: |
+          docker run --rm --entrypoint sh orionbelt-analytics:pr -c '
+            set -eu
+            target=$(readlink -f /opt/venv/bin/python || true)
+            if [ ! -x "$target" ]; then
+              echo "::error::/opt/venv/bin/python does not resolve to an executable."
+              echo "Symlink: $(ls -l /opt/venv/bin/python 2>&1 || echo missing)"
+              echo "Likely cause: uv built the venv against an interpreter outside"
+              echo "/opt/venv, which the runtime stage does not copy. Check that the"
+              echo "base image Python and .python-version agree."
+              exit 1
+            fi
+            echo "venv python -> $target"
+            python -V
+          '
+
+      - name: Import server module
+        # Catches missing runtime deps and dependency/interpreter incompatibility
+        # (e.g. chromadb 1.5.2 raising ConfigError on Python 3.14).
+        run: |
+          docker run --rm --entrypoint python orionbelt-analytics:pr \
+            -c 'import src.main; print("src.main import OK")'
+
+      - name: Boot server and check it serves
+        # A bare 405/406 from /mcp is success: it means the MCP app is mounted and
+        # replying, and only rejects this request for lacking the MCP Accept
+        # header. Anything else (or no listener) means the server did not come up.
+        run: |
+          set -euo pipefail
+          docker run -d --name obpr -p 9000:9000 orionbelt-analytics:pr
+
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/mcp || true)
+            if [ "$code" != "000" ]; then
+              echo "Server responded with HTTP $code"
+              case "$code" in
+                4*|2*) echo "Server is serving."; exit 0 ;;
+                *) echo "::error::Unexpected status $code from /mcp"; docker logs obpr; exit 1 ;;
+              esac
+            fi
+            sleep 2
+          done
+
+          echo "::error::Server did not start listening within 60s."
+          docker logs obpr
+          exit 1
+
+      - name: Server logs
+        if: failure()
+        run: docker logs obpr 2>&1 || true
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f obpr 2>/dev/null || true
