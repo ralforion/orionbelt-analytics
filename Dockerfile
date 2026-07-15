@@ -10,6 +10,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv
 
+# Pin the venv to the base image interpreter, making the FROM tag the single
+# source of truth for the image's Python. Without this, a base image whose
+# Python differs from .python-version makes uv fetch its own CPython; the venv
+# then symlinks outside /opt/venv, and the runtime stage — which copies only
+# /opt/venv — ships a dangling python that breaks every import at startup.
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON=/usr/local/bin/python3
+
 # Build deps for any wheels that need compiling (most are wheels, but keep gcc as a safety net)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \

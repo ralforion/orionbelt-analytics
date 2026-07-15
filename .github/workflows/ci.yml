@@ -11,15 +11,21 @@ concurrency:
 
 jobs:
   # Blocking gates: these pass and must stay green on every PR.
+  # Matrix covers the full requires-python range (>=3.13): 3.13 is what most
+  # installs from PyPI get, 3.14 is what the Docker image ships.
   quality:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: uv sync
@@ -39,13 +45,17 @@ jobs:
   # Blocking gate: src/ type-checks clean under strict mypy. Keep it green.
   typecheck:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: uv sync
