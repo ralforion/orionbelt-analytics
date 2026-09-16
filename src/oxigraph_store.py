@@ -162,7 +162,7 @@ class OxigraphStoreManager:
         if store_path:
             store_path.mkdir(parents=True, exist_ok=True)
             try:
-                self.store = Store(str(store_path))
+                self._store: Store | None = Store(str(store_path))
             except OSError as e:
                 # A RocksDB LOCK in the store dir means another process currently
                 # holds the store open. It is NOT stale just because it exists, and
@@ -178,11 +178,27 @@ class OxigraphStoreManager:
                 raise
             logger.info(f"Initialized Oxigraph persistent store at: {store_path}")
         else:
-            self.store = Store()
+            self._store = Store()
             logger.info("Initialized Oxigraph in-memory store")
 
         # Track loaded ontologies
         self._loaded_ontologies: dict[str, str] = {}  # schema_name -> graph_uri
+
+    @property
+    def store(self) -> Store:
+        """The underlying pyoxigraph store.
+
+        Raises:
+            RuntimeError: If :meth:`close` has already released it.
+        """
+        if self._store is None:
+            raise RuntimeError("Oxigraph store is closed")
+        return self._store
+
+    @property
+    def is_closed(self) -> bool:
+        """True once :meth:`close` has released the underlying store."""
+        return self._store is None
 
     def load_ontology(self, ontology_ttl: str, graph_uri: str, schema_name: str) -> int:
         """
@@ -764,7 +780,22 @@ class OxigraphStoreManager:
             raise
 
     def close(self) -> None:
-        """Close the store (flush to disk if persistent)."""
-        if hasattr(self.store, "close"):
-            self.store.close()
+        """Release the underlying store, flushing a persistent one first.
+
+        pyoxigraph exposes no close(): RocksDB releases the directory's LOCK
+        only when the Store object is garbage-collected. Dropping the last
+        reference here makes that happen at close time rather than whenever
+        the manager itself is collected, so the directory can be reopened
+        immediately. Safe to call more than once.
+        """
+        store = self._store
+        if store is None:
+            return
+        self._store = None
+        if self.store_path is not None:
+            try:
+                store.flush()
+            except Exception as e:
+                logger.warning(f"Flush on close failed for {self.store_path}: {e}")
+        del store
         logger.info("Closed Oxigraph store")

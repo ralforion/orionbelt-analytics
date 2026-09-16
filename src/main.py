@@ -12,10 +12,11 @@ modules so this file stays mostly decorators + delegation:
 
 import logging
 import os
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal
 
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
+from fastmcp.utilities.types import Image
 from pydantic import Field
 
 from . import __name__ as SERVER_NAME
@@ -172,7 +173,9 @@ def _services() -> HandlerContext:
 
 
 @mcp.tool()
-async def connect_database(ctx: Context, db_type: _DbType) -> str:  # type: ignore[valid-type]
+async def connect_database(
+    ctx: Context, db_type: _DbType  # type: ignore[valid-type]
+) -> str | dict[str, Any]:
     """Connect to a database using credentials from environment variables.
 
     If a previous workspace exists for this connection, it is automatically
@@ -273,7 +276,7 @@ async def generate_ontology(
     base_uri: _Uri = "http://example.com/ontology/",
     auto_persist: bool = True,
     graph_uri: _Uri | None = None,
-) -> str:
+) -> str | dict[str, Any]:
     """Generate an RDF ontology from database schema. AUTO-ANALYZES schema if needed!
 
     Args:
@@ -286,17 +289,14 @@ async def generate_ontology(
     Returns:
         Ontology TTL or status message
     """
-    return cast(
-        str,
-        await _h_ontology.generate_ontology(
-            ctx,
-            schema_info,
-            schema_name,
-            base_uri,
-            auto_persist,
-            graph_uri,
-            services=_services(),
-        ),
+    return await _h_ontology.generate_ontology(
+        ctx,
+        schema_info,
+        schema_name,
+        base_uri,
+        auto_persist,
+        graph_uri,
+        services=_services(),
     )
 
 
@@ -331,7 +331,7 @@ async def apply_semantic_names(
     suggestions: Annotated[str, Field(max_length=2000000)] | dict[str, Any],
     ontology_file: _SafeName | None = None,
     save_to_file: bool = True,
-) -> str:
+) -> str | dict[str, Any]:
     """Apply semantic name suggestions to an existing ontology.
 
     The suggestions parameter accepts a JSON object (or JSON string) with 'classes',
@@ -356,15 +356,12 @@ async def apply_semantic_names(
         ontology_file: The ontology filename from generate_ontology response
         save_to_file: Whether to save the updated ontology to a file
     """
-    return cast(
-        str,
-        await _h_ontology.apply_semantic_names(
-            ctx,
-            suggestions,
-            ontology_file,
-            save_to_file,
-            services=_services(),
-        ),
+    return await _h_ontology.apply_semantic_names(
+        ctx,
+        suggestions,
+        ontology_file,
+        save_to_file,
+        services=_services(),
     )
 
 
@@ -532,7 +529,7 @@ async def generate_chart(
     sort_by: _Identifier | None = None,
     sort_order: Literal["ascending", "descending"] | None = None,
     output_format: Literal["interactive", "image"] = "interactive",
-) -> str:
+) -> str | list[str | Image]:
     """Generate a chart from query results. Returns a ui:// MCP Apps widget for interactive use.
 
     Args:
@@ -547,30 +544,28 @@ async def generate_chart(
         sort_order: 'ascending' or 'descending'
         output_format: "interactive" (default, responsive MCP Apps widget) or "image" (saves PNG file)
     """
-    # The handler returns str (interactive widget URI) or a list of image
-    # artifacts for output_format="image"; the published tool contract is str,
-    # so cast to keep the FastMCP output schema unchanged.
-    return cast(
-        str,
-        await _h_chart.generate_chart(
-            ctx,
-            data_source,
-            chart_type,
-            x_column,
-            y_column,
-            color_column,
-            title,
-            chart_style,
-            sort_by,
-            sort_order,
-            output_format,
-            services=_services(),
-        ),
+    # The handler returns str (interactive widget URI) or a list of text and
+    # image content for output_format="image". Declaring the union makes
+    # FastMCP publish no output schema, so the image mode is not rejected for
+    # lacking structured content.
+    return await _h_chart.generate_chart(
+        ctx,
+        data_source,
+        chart_type,
+        x_column,
+        y_column,
+        color_column,
+        title,
+        chart_style,
+        sort_by,
+        sort_order,
+        output_format,
+        services=_services(),
     )
 
 
 @mcp.tool()
-async def cleanup_workspace(ctx: Context) -> str:
+async def cleanup_workspace(ctx: Context) -> str | dict[str, Any]:
     """Delete all workspace files for the current database connection and clear session state.
 
     Removes schema JSON, ontology TTL, R2RML mappings, GraphRAG data, ChromaDB vectors,
@@ -582,12 +577,9 @@ async def cleanup_workspace(ctx: Context) -> str:
     Returns:
         Summary of what was removed
     """
-    return cast(
-        str,
-        await _h_workspace.cleanup_workspace(
-            ctx,
-            services=_services(),
-        ),
+    return await _h_workspace.cleanup_workspace(
+        ctx,
+        services=_services(),
     )
 
 
@@ -938,7 +930,7 @@ async def store_ontology_in_rdf(
     ctx: Context,
     schema_name: _Identifier | None = None,
     graph_uri: _Uri | None = None,
-) -> str:
+) -> str | dict[str, Any]:
     """Store current session ontology in persistent RDF store with SPARQL access.
 
     Args:
@@ -948,14 +940,11 @@ async def store_ontology_in_rdf(
     Returns:
         Status message with triple count
     """
-    return cast(
-        str,
-        await _h_rdf.store_ontology_in_rdf(
-            ctx,
-            schema_name,
-            graph_uri,
-            services=_services(),
-        ),
+    return await _h_rdf.store_ontology_in_rdf(
+        ctx,
+        schema_name,
+        graph_uri,
+        services=_services(),
     )
 
 
@@ -1006,7 +995,7 @@ async def add_rdf_knowledge(
     predicate: _Uri,
     object: Annotated[str, Field(max_length=8192)],
     metadata: dict[str, Any] | None = None,
-) -> str:
+) -> str | dict[str, Any]:
     """Add custom knowledge/metadata to the RDF store.
 
     Args:
@@ -1018,16 +1007,13 @@ async def add_rdf_knowledge(
     Returns:
         Confirmation message
     """
-    return cast(
-        str,
-        await _h_rdf.add_rdf_knowledge(
-            ctx,
-            subject,
-            predicate,
-            object,
-            metadata,
-            services=_services(),
-        ),
+    return await _h_rdf.add_rdf_knowledge(
+        ctx,
+        subject,
+        predicate,
+        object,
+        metadata,
+        services=_services(),
     )
 
 

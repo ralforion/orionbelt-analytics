@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import cast
+from typing import Any
 
 from fastmcp import Context
 
@@ -22,7 +22,7 @@ async def connect_database(
     ctx: Context,
     db_type: str,
     services: "HandlerContext",
-) -> str:
+) -> str | dict[str, Any]:
     """Connect to a database using credentials from environment variables.
 
     If a previous workspace exists for this connection, it is automatically
@@ -43,13 +43,10 @@ async def connect_database(
     """
     # Validate input parameters
     if not db_type or db_type not in SUPPORTED_DB_TYPES:
-        return cast(
-            str,
-            ValidationError(
-                f"Invalid database type '{db_type}'. "
-                f"Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
-            ).to_response(),
-        )
+        return ValidationError(
+            f"Invalid database type '{db_type}'. "
+            f"Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
+        ).to_response()
 
     db_manager = services.get_session_db_manager(ctx)
     success = False
@@ -71,13 +68,10 @@ async def connect_database(
         }
         missing_params = [k for k, v in required_params.items() if not v]
         if missing_params:
-            return cast(
-                str,
-                ValidationError(
-                    "Missing required environment variables for PostgreSQL: "
-                    f"{', '.join(missing_params)}. Please check your .env file."
-                ).to_response(),
-            )
+            return ValidationError(
+                "Missing required environment variables for PostgreSQL: "
+                f"{', '.join(missing_params)}. Please check your .env file."
+            ).to_response()
 
         success = db_manager.connect_postgresql(
             host=str(host),
@@ -105,13 +99,10 @@ async def connect_database(
         }
         missing_params = [k for k, v in required_params.items() if not v]
         if missing_params:
-            return cast(
-                str,
-                ValidationError(
-                    "Missing required environment variables for Snowflake: "
-                    f"{', '.join(missing_params)}. Please check your .env file."
-                ).to_response(),
-            )
+            return ValidationError(
+                "Missing required environment variables for Snowflake: "
+                f"{', '.join(missing_params)}. Please check your .env file."
+            ).to_response()
 
         success = db_manager.connect_snowflake(
             account=str(account),
@@ -146,15 +137,12 @@ async def connect_database(
             }
             missing_params = [k for k, v in required_params.items() if not v]
             if missing_params:
-                return cast(
-                    str,
-                    ValidationError(
-                        "Missing required environment variables for Dremio: "
-                        f"{', '.join(missing_params)}. "
-                        "Please check your .env file. "
-                        "For PAT-based auth, set DREMIO_URI and DREMIO_PAT instead."
-                    ).to_response(),
-                )
+                return ValidationError(
+                    "Missing required environment variables for Dremio: "
+                    f"{', '.join(missing_params)}. "
+                    "Please check your .env file. "
+                    "For PAT-based auth, set DREMIO_URI and DREMIO_PAT instead."
+                ).to_response()
 
             success = db_manager.connect_dremio(
                 host=str(host),
@@ -179,13 +167,10 @@ async def connect_database(
         }
         missing_params = [k for k, v in required_params.items() if not v]
         if missing_params:
-            return cast(
-                str,
-                ValidationError(
-                    "Missing required environment variables for ClickHouse: "
-                    f"{', '.join(missing_params)}. Please check your .env file."
-                ).to_response(),
-            )
+            return ValidationError(
+                "Missing required environment variables for ClickHouse: "
+                f"{', '.join(missing_params)}. Please check your .env file."
+            ).to_response()
 
         success = db_manager.connect_clickhouse(
             host=str(host),
@@ -207,13 +192,10 @@ async def connect_database(
         required_params = {"BIGQUERY_PROJECT_ID": project_id}
         missing_params = [k for k, v in required_params.items() if not v]
         if missing_params:
-            return cast(
-                str,
-                ValidationError(
-                    "Missing required environment variables for BigQuery: "
-                    f"{', '.join(missing_params)}. Please check your .env file."
-                ).to_response(),
-            )
+            return ValidationError(
+                "Missing required environment variables for BigQuery: "
+                f"{', '.join(missing_params)}. Please check your .env file."
+            ).to_response()
 
         success = db_manager.connect_bigquery(
             project_id=str(project_id),
@@ -249,13 +231,10 @@ async def connect_database(
         }
         missing_params = [k for k, v in required_params.items() if not v]
         if missing_params:
-            return cast(
-                str,
-                ValidationError(
-                    "Missing required environment variables for Databricks: "
-                    f"{', '.join(missing_params)}. Please check your .env file."
-                ).to_response(),
-            )
+            return ValidationError(
+                "Missing required environment variables for Databricks: "
+                f"{', '.join(missing_params)}. Please check your .env file."
+            ).to_response()
 
         success = db_manager.connect_databricks(
             server_hostname=str(server_hostname),
@@ -282,13 +261,10 @@ async def connect_database(
         }
         missing_params = [k for k, v in required_params.items() if not v]
         if missing_params:
-            return cast(
-                str,
-                ValidationError(
-                    "Missing required environment variables for MySQL: "
-                    f"{', '.join(missing_params)}. Please check your .env file."
-                ).to_response(),
-            )
+            return ValidationError(
+                "Missing required environment variables for MySQL: "
+                f"{', '.join(missing_params)}. Please check your .env file."
+            ).to_response()
 
         success = db_manager.connect_mysql(
             host=str(host),
@@ -353,12 +329,9 @@ async def connect_database(
         return response
     else:
         await ctx.info("Database connection failed; check credentials and try again")
-        return cast(
-            str,
-            ConnectionError(
-                f"Failed to connect to {db_type} database: {db_name}"
-            ).to_response(),
-        )
+        return ConnectionError(
+            f"Failed to connect to {db_type} database: {db_name}"
+        ).to_response()
 
 
 async def list_schemas(ctx: Context, services: "HandlerContext") -> list[str]:

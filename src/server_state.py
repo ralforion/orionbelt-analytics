@@ -14,7 +14,10 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, cast
 
 from fastmcp import Context
@@ -111,18 +114,139 @@ def _clear_session_state(
     # Clear connection-scoped state
     session.graphrag_manager = None
     session.graphrag_initialized = False
+    if session.oxigraph_store is not None:
+        try:
+            _server_state.release_oxigraph_store(session.oxigraph_store)
+        except Exception as e:
+            logger.warning(f"Error releasing Oxigraph store ({reason}): {e}")
     session.oxigraph_store = None
     session.oxigraph_initialized = False
 
     logger.info("Session state cleared")
 
 
+class _StoreHandle:
+    """A shared Oxigraph store plus the number of sessions holding it."""
+
+    __slots__ = ("manager", "refcount")
+
+    def __init__(self, manager: OxigraphStoreManager) -> None:
+        self.manager = manager
+        self.refcount = 0
+
+
 class ServerState:
-    """Manages server state with per-session isolation and idle eviction."""
+    """Manages server state with per-session isolation and idle eviction.
+
+    Oxigraph stores are shared per store directory rather than opened per
+    session. The directory is connection-scoped, and RocksDB allows exactly one
+    open handle per directory -- even inside one process. Without sharing, a
+    client that reconnects (a new MCP session on the same database) cannot
+    open the store while the previous session still holds it, and every
+    SPARQL-backed tool fails until that session is evicted.
+    """
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionData] = {}
         self._eviction_task: asyncio.Task[None] | None = None
+        self._stores: dict[Path, _StoreHandle] = {}
+        self._removing_stores: dict[Path, int] = {}
+
+    # --- Shared Oxigraph stores ---
+
+    def acquire_oxigraph_store(self, store_path: Path) -> OxigraphStoreManager:
+        """Open the store at ``store_path``, or share the handle already open.
+
+        Each call must be balanced by :meth:`release_oxigraph_store`.
+
+        Args:
+            store_path: Store directory, from :func:`get_oxigraph_store_dir`.
+
+        Returns:
+            The store manager for that directory, shared across sessions.
+        """
+        if store_path in self._removing_stores:
+            raise RuntimeError(
+                f"Oxigraph store at {store_path} is being removed by "
+                "cleanup_workspace; retry once it has finished"
+            )
+        handle = self._stores.get(store_path)
+        if handle is None:
+            handle = _StoreHandle(OxigraphStoreManager(store_path=store_path))
+            self._stores[store_path] = handle
+        handle.refcount += 1
+        return handle.manager
+
+    def release_oxigraph_store(self, manager: Any) -> None:
+        """Drop one session's reference; close the store when the last one goes.
+
+        A manager the registry does not know (a test double, or a store that
+        :meth:`discard_oxigraph_store` already dropped) is closed outright, as
+        nothing else can be holding it.
+
+        Args:
+            manager: The store manager returned by :meth:`acquire_oxigraph_store`.
+        """
+        for store_path, handle in self._stores.items():
+            if handle.manager is manager:
+                handle.refcount -= 1
+                if handle.refcount <= 0:
+                    del self._stores[store_path]
+                    manager.close()
+                    logger.debug(f"Closed Oxigraph store at: {store_path}")
+                return
+        manager.close()
+
+    def discard_oxigraph_store(self, store_path: Path) -> None:
+        """Close the shared store at ``store_path`` and detach it everywhere.
+
+        For callers about to delete the store directory: every session sharing
+        the handle is reset so its next access reopens a fresh store instead of
+        using a closed one.
+
+        Args:
+            store_path: Store directory to close.
+        """
+        handle = self._stores.pop(store_path, None)
+        if handle is None:
+            return
+        for session in self._sessions.values():
+            if session.rdf_store.oxigraph_store is handle.manager:
+                session.rdf_store.oxigraph_store = None
+                session.rdf_store.oxigraph_initialized = False
+        handle.manager.close()
+        logger.info(f"Discarded shared Oxigraph store at: {store_path}")
+
+    @contextmanager
+    def removing_oxigraph_store(self, store_path: Path) -> Iterator[None]:
+        """Discard the store at ``store_path`` and keep it closed for the block.
+
+        For deleting the directory. Discarding alone is not enough: the
+        deletion awaits in a thread, and another session on the same
+        connection can reopen the directory in between, so the files would be
+        removed under a live, registered handle and its later writes lost.
+        While the block is open, :meth:`acquire_oxigraph_store` refuses the
+        path. Blocks nest: overlapping removals of the same directory keep it
+        refused until the last one has exited.
+
+        Args:
+            store_path: Store directory about to be deleted.
+        """
+        self.discard_oxigraph_store(store_path)
+        self._removing_stores[store_path] = self._removing_stores.get(store_path, 0) + 1
+        try:
+            yield
+        finally:
+            remaining = self._removing_stores[store_path] - 1
+            if remaining:
+                self._removing_stores[store_path] = remaining
+            else:
+                del self._removing_stores[store_path]
+
+    def oxigraph_store_refcount(self, store_path: Path) -> int:
+        """Number of sessions currently sharing the store at ``store_path``."""
+        handle = self._stores.get(store_path)
+        return handle.refcount if handle else 0
 
     @property
     def session_count(self) -> int:
@@ -186,7 +310,7 @@ class ServerState:
                 logger.warning(f"Error disconnecting db for session {session_id}: {e}")
         if session.rdf_store.oxigraph_store:
             try:
-                session.rdf_store.oxigraph_store.close()
+                self.release_oxigraph_store(session.rdf_store.oxigraph_store)
             except Exception as e:
                 logger.warning(f"Error closing Oxigraph for session {session_id}: {e}")
 
@@ -447,7 +571,11 @@ def create_error_response(
 
 
 def get_oxigraph_store(ctx: Context) -> OxigraphStoreManager | None:
-    """Get or initialize connection-scoped Oxigraph store for the session."""
+    """Get the connection-scoped Oxigraph store for the session.
+
+    The store is shared with every other session on the same connection (see
+    :class:`ServerState`); the session only holds a reference to it.
+    """
     session = get_session_data(ctx)
 
     if not OXIGRAPH_AVAILABLE:
@@ -457,7 +585,7 @@ def get_oxigraph_store(ctx: Context) -> OxigraphStoreManager | None:
     if session.oxigraph_store is None:
         try:
             store_path = get_oxigraph_store_dir(connection_id=session.connection_id)
-            session.oxigraph_store = OxigraphStoreManager(store_path=store_path)
+            session.oxigraph_store = _server_state.acquire_oxigraph_store(store_path)
             session.oxigraph_initialized = True
 
             if session.connection_id:
