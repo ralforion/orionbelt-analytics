@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import shutil
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -307,13 +308,14 @@ async def cleanup_workspace(
 
     # 1. Close live resources before deleting their files. The Oxigraph store
     # is shared by every session on this connection, so it is discarded through
-    # the registry, which also detaches the other sessions from the handle.
+    # the registry, which also detaches the other sessions from the handle and
+    # refuses to reopen the directory until the deletion below has finished.
     store_path = get_oxigraph_store_dir(connection_id)
-    if services.server_state is not None:
-        try:
-            services.server_state.discard_oxigraph_store(store_path)
-        except Exception as e:
-            logger.debug(f"Oxigraph discard during cleanup: {e}")
+    removing_store = (
+        services.server_state.removing_oxigraph_store(store_path)
+        if services.server_state is not None
+        else nullcontext()
+    )
     if session.oxigraph_store is not None:
         try:
             session.oxigraph_store.close()
@@ -333,18 +335,20 @@ async def cleanup_workspace(
         for store_dir in get_connection_store_dirs(connection_id)
     ]
 
-    for dir_path, label in dirs_to_remove:
-        if not dir_path.exists():
-            continue
-        await asyncio.to_thread(shutil.rmtree, dir_path, ignore_errors=True)
-        # rmtree(ignore_errors=True) never raises, so success cannot be inferred
-        # from "it didn't throw" -- a locked or read-only tree silently survives.
-        # Check, so the response does not claim a deletion that did not happen.
-        if dir_path.exists():
-            logger.warning(f"Failed to remove {label}: {dir_path} still present")
-        else:
-            removed.append(label)
-            logger.info(f"Cleaned up {label}: {dir_path}")
+    with removing_store:
+        for dir_path, label in dirs_to_remove:
+            if not dir_path.exists():
+                continue
+            await asyncio.to_thread(shutil.rmtree, dir_path, ignore_errors=True)
+            # rmtree(ignore_errors=True) never raises, so success cannot be
+            # inferred from "it didn't throw" -- a locked or read-only tree
+            # silently survives. Check, so the response does not claim a
+            # deletion that did not happen.
+            if dir_path.exists():
+                logger.warning(f"Failed to remove {label}: {dir_path} still present")
+            else:
+                removed.append(label)
+                logger.info(f"Cleaned up {label}: {dir_path}")
 
     # 3. Clear all in-memory session state (keep connection alive)
     session.clear_schema_cache()

@@ -8,6 +8,7 @@ tool answered "Failed to initialize Oxigraph store" until the old session was
 evicted -- 30 minutes by default.
 """
 
+import asyncio
 import types
 from unittest.mock import Mock, patch
 
@@ -182,3 +183,65 @@ def test_close_releases_the_directory_lock(tmp_path):
     manager.close()  # idempotent
     reopened = OxigraphStoreManager(store_path=tmp_path)  # would raise if held
     reopened.close()
+
+
+async def test_cleanup_workspace_blocks_reopen_until_deletion_finishes(
+    tmp_path, monkeypatch
+):
+    """Regression: a session reopening the store mid-cleanup would have its
+    files deleted under a live handle, and its later writes silently lost."""
+    import shutil
+    from unittest.mock import AsyncMock
+
+    from src.handler_context import HandlerContext
+    from src.handlers import workspace as workspace_handler
+    from src.paths import get_oxigraph_store_dir
+
+    monkeypatch.setattr("src.paths.OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(workspace_handler, "OUTPUT_DIR", tmp_path)
+
+    state = ServerState()
+    cleaning = state.get_session("cleaning")
+    cleaning.connection_id = "connrace"
+    store_path = get_oxigraph_store_dir("connrace")
+    cleaning.oxigraph_store = state.acquire_oxigraph_store(store_path)
+
+    overlapping: list[str] = []
+    real_to_thread = asyncio.to_thread
+
+    async def to_thread_with_overlap(func, /, *args, **kwargs):
+        # Another session on the same connection asks for the store while the
+        # deletion is in flight.
+        if func is shutil.rmtree:
+            try:
+                state.acquire_oxigraph_store(store_path)
+                overlapping.append("acquired")
+            except RuntimeError as e:
+                overlapping.append(str(e))
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(workspace_handler.asyncio, "to_thread", to_thread_with_overlap)
+
+    ctx = Mock()
+    ctx.info = AsyncMock()
+    services = HandlerContext(
+        get_session_data=lambda _ctx: cleaning, server_state=state
+    )
+
+    response = await workspace_handler.cleanup_workspace(ctx, services)
+
+    assert "Oxigraph RDF store" in response
+    assert overlapping, "the deletion never ran"
+    assert all("being removed" in outcome for outcome in overlapping)
+    assert state.oxigraph_store_refcount(store_path) == 0
+
+    # Once cleanup has finished the directory can be opened again, and what
+    # is written then survives a reopen.
+    reopened = state.acquire_oxigraph_store(store_path)
+    reopened.add_triple(
+        "http://example.com/s", "http://example.com/p", "http://example.com/o"
+    )
+    state.release_oxigraph_store(reopened)
+    again = state.acquire_oxigraph_store(store_path)
+    assert again.query_sparql_ask(ASK_ANY) is True
+    state.release_oxigraph_store(again)

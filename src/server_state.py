@@ -14,6 +14,8 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -148,6 +150,7 @@ class ServerState:
         self._sessions: dict[str, SessionData] = {}
         self._eviction_task: asyncio.Task[None] | None = None
         self._stores: dict[Path, _StoreHandle] = {}
+        self._removing_stores: set[Path] = set()
 
     # --- Shared Oxigraph stores ---
 
@@ -162,6 +165,11 @@ class ServerState:
         Returns:
             The store manager for that directory, shared across sessions.
         """
+        if store_path in self._removing_stores:
+            raise RuntimeError(
+                f"Oxigraph store at {store_path} is being removed by "
+                "cleanup_workspace; retry once it has finished"
+            )
         handle = self._stores.get(store_path)
         if handle is None:
             handle = _StoreHandle(OxigraphStoreManager(store_path=store_path))
@@ -208,6 +216,27 @@ class ServerState:
                 session.rdf_store.oxigraph_initialized = False
         handle.manager.close()
         logger.info(f"Discarded shared Oxigraph store at: {store_path}")
+
+    @contextmanager
+    def removing_oxigraph_store(self, store_path: Path) -> Iterator[None]:
+        """Discard the store at ``store_path`` and keep it closed for the block.
+
+        For deleting the directory. Discarding alone is not enough: the
+        deletion awaits in a thread, and another session on the same
+        connection can reopen the directory in between, so the files would be
+        removed under a live, registered handle and its later writes lost.
+        While the block is open, :meth:`acquire_oxigraph_store` refuses the
+        path.
+
+        Args:
+            store_path: Store directory about to be deleted.
+        """
+        self.discard_oxigraph_store(store_path)
+        self._removing_stores.add(store_path)
+        try:
+            yield
+        finally:
+            self._removing_stores.discard(store_path)
 
     def oxigraph_store_refcount(self, store_path: Path) -> int:
         """Number of sessions currently sharing the store at ``store_path``."""

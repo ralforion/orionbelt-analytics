@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that session was evicted, 30 minutes by default. `ServerState` now shares one
   handle per store directory across sessions and closes it when the last
   session lets go; `cleanup_workspace` detaches every session before deleting
-  the directory. `OxigraphStoreManager.close()` now actually releases the
+  the directory and refuses to reopen it until the deletion has finished,
+  so a concurrent session cannot get a handle whose files are being removed. `OxigraphStoreManager.close()` now actually releases the
   directory: pyoxigraph has no close(), so the LOCK was only freed when the
   manager happened to be garbage-collected.
 - **Tool errors arrived as schema violations.** Six tools were declared to
