@@ -321,3 +321,55 @@ async def test_cancelled_cleanup_keeps_the_guard_until_rmtree_finishes(
     again = state.acquire_oxigraph_store(store_path)
     assert again.query_sparql_ask(ASK_ANY) is True
     state.release_oxigraph_store(again)
+
+
+async def test_cleanup_never_leaves_a_session_holding_a_closed_store(
+    tmp_path, monkeypatch
+):
+    """Regression: cleanup closed the shared manager directly before the
+    removal task detached the other sessions, so their next store-backed call
+    failed with "Oxigraph store is closed" instead of the transient refusal."""
+    from unittest.mock import AsyncMock
+
+    from src.handler_context import HandlerContext
+    from src.handlers import workspace as workspace_handler
+    from src.paths import get_oxigraph_store_dir
+
+    monkeypatch.setattr("src.paths.OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(workspace_handler, "OUTPUT_DIR", tmp_path)
+
+    state = ServerState()
+    cleaning, other = state.get_session("cleaning"), state.get_session("other")
+    store_path = get_oxigraph_store_dir("connclosed")
+    for session in (cleaning, other):
+        session.connection_id = "connclosed"
+        session.oxigraph_store = state.acquire_oxigraph_store(store_path)
+
+    def other_never_holds_a_closed_store() -> None:
+        held = other.oxigraph_store
+        assert held is None or not held.is_closed
+
+    # Observed at the last synchronous point before the removal task runs,
+    # which is where the direct close used to leave `other` with a dead handle.
+    real_create_task = asyncio.create_task
+
+    def create_task_after_check(coro, **kwargs):
+        other_never_holds_a_closed_store()
+        return real_create_task(coro, **kwargs)
+
+    monkeypatch.setattr(
+        workspace_handler.asyncio, "create_task", create_task_after_check
+    )
+
+    ctx = Mock()
+    ctx.info = AsyncMock()
+    services = HandlerContext(
+        get_session_data=lambda _ctx: cleaning, server_state=state
+    )
+
+    await workspace_handler.cleanup_workspace(ctx, services)
+
+    other_never_holds_a_closed_store()
+    assert other.oxigraph_store is None
+    assert cleaning.oxigraph_store is None
+    assert state.oxigraph_store_refcount(store_path) == 0

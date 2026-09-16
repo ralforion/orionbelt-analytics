@@ -311,20 +311,21 @@ async def cleanup_workspace(
     connection_id = session.connection_id
 
     # 1. Close live resources before deleting their files. The Oxigraph store
-    # is shared by every session on this connection, so it is discarded through
-    # the registry, which also detaches the other sessions from the handle and
-    # refuses to reopen the directory until the deletion below has finished.
+    # is shared by every session on this connection, so it must not be closed
+    # here: the other sessions would keep pointing at a closed manager. The
+    # removal task below discards it through the registry, which detaches
+    # every session and refuses to reopen the directory until the deletion has
+    # finished. Only without a registry is this session's handle its own.
     store_path = get_oxigraph_store_dir(connection_id)
-    removing_store = (
-        services.server_state.removing_oxigraph_store(store_path)
-        if services.server_state is not None
-        else nullcontext()
-    )
-    if session.oxigraph_store is not None:
-        try:
-            session.oxigraph_store.close()
-        except Exception as e:
-            logger.debug(f"Oxigraph close during cleanup: {e}")
+    if services.server_state is not None:
+        removing_store = services.server_state.removing_oxigraph_store(store_path)
+    else:
+        removing_store = nullcontext()
+        if session.oxigraph_store is not None:
+            try:
+                session.oxigraph_store.close()
+            except Exception as e:
+                logger.debug(f"Oxigraph close during cleanup: {e}")
 
     # Drop GraphRAG reference (connection-scoped, releases ChromaDB handle)
     session.graphrag_manager = None
