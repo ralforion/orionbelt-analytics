@@ -150,7 +150,7 @@ class ServerState:
         self._sessions: dict[str, SessionData] = {}
         self._eviction_task: asyncio.Task[None] | None = None
         self._stores: dict[Path, _StoreHandle] = {}
-        self._removing_stores: set[Path] = set()
+        self._removing_stores: dict[Path, int] = {}
 
     # --- Shared Oxigraph stores ---
 
@@ -226,17 +226,22 @@ class ServerState:
         connection can reopen the directory in between, so the files would be
         removed under a live, registered handle and its later writes lost.
         While the block is open, :meth:`acquire_oxigraph_store` refuses the
-        path.
+        path. Blocks nest: overlapping removals of the same directory keep it
+        refused until the last one has exited.
 
         Args:
             store_path: Store directory about to be deleted.
         """
         self.discard_oxigraph_store(store_path)
-        self._removing_stores.add(store_path)
+        self._removing_stores[store_path] = self._removing_stores.get(store_path, 0) + 1
         try:
             yield
         finally:
-            self._removing_stores.discard(store_path)
+            remaining = self._removing_stores[store_path] - 1
+            if remaining:
+                self._removing_stores[store_path] = remaining
+            else:
+                del self._removing_stores[store_path]
 
     def oxigraph_store_refcount(self, store_path: Path) -> int:
         """Number of sessions currently sharing the store at ``store_path``."""

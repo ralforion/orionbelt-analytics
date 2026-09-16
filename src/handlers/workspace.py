@@ -28,6 +28,11 @@ from ..utils import read_json_file, read_text_file, utc_now, write_text_file
 
 logger = logging.getLogger(__name__)
 
+# Directory removals in flight, kept alive past the request that started them:
+# asyncio only holds tasks weakly, and a cancelled request must not let its
+# removal be collected while its guard on the store directory is still needed.
+_pending_removals: set["asyncio.Task[list[str]]"] = set()
+
 
 async def _restore_workspace_core(
     ctx: Context,
@@ -304,7 +309,6 @@ async def cleanup_workspace(
         return err
 
     connection_id = session.connection_id
-    removed = []
 
     # 1. Close live resources before deleting their files. The Oxigraph store
     # is shared by every session on this connection, so it is discarded through
@@ -335,20 +339,34 @@ async def cleanup_workspace(
         for store_dir in get_connection_store_dirs(connection_id)
     ]
 
-    with removing_store:
-        for dir_path, label in dirs_to_remove:
-            if not dir_path.exists():
-                continue
-            await asyncio.to_thread(shutil.rmtree, dir_path, ignore_errors=True)
-            # rmtree(ignore_errors=True) never raises, so success cannot be
-            # inferred from "it didn't throw" -- a locked or read-only tree
-            # silently survives. Check, so the response does not claim a
-            # deletion that did not happen.
-            if dir_path.exists():
-                logger.warning(f"Failed to remove {label}: {dir_path} still present")
-            else:
-                removed.append(label)
-                logger.info(f"Cleaned up {label}: {dir_path}")
+    async def _remove_directories() -> list[str]:
+        removed: list[str] = []
+        with removing_store:
+            for dir_path, label in dirs_to_remove:
+                if not dir_path.exists():
+                    continue
+                await asyncio.to_thread(shutil.rmtree, dir_path, ignore_errors=True)
+                # rmtree(ignore_errors=True) never raises, so success cannot be
+                # inferred from "it didn't throw" -- a locked or read-only tree
+                # silently survives. Check, so the response does not claim a
+                # deletion that did not happen.
+                if dir_path.exists():
+                    logger.warning(
+                        f"Failed to remove {label}: {dir_path} still present"
+                    )
+                else:
+                    removed.append(label)
+                    logger.info(f"Cleaned up {label}: {dir_path}")
+        return removed
+
+    # Cancelling the request cannot stop an rmtree already running in its
+    # thread. The removal therefore runs as its own task, which owns the guard
+    # on the store directory and drops it only after the last worker has
+    # finished; shield() keeps a cancellation from reaching that task.
+    removal = asyncio.create_task(_remove_directories())
+    _pending_removals.add(removal)
+    removal.add_done_callback(_pending_removals.discard)
+    removed = await asyncio.shield(removal)
 
     # 3. Clear all in-memory session state (keep connection alive)
     session.clear_schema_cache()

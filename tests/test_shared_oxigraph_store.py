@@ -245,3 +245,79 @@ async def test_cleanup_workspace_blocks_reopen_until_deletion_finishes(
     again = state.acquire_oxigraph_store(store_path)
     assert again.query_sparql_ask(ASK_ANY) is True
     state.release_oxigraph_store(again)
+
+
+def test_overlapping_removals_keep_the_directory_refused(tmp_path):
+    state = ServerState()
+
+    with state.removing_oxigraph_store(tmp_path):
+        with state.removing_oxigraph_store(tmp_path):
+            pass
+        # The inner removal finished; the outer one is still deleting files.
+        with pytest.raises(RuntimeError, match="being removed"):
+            state.acquire_oxigraph_store(tmp_path)
+
+    reopened = state.acquire_oxigraph_store(tmp_path)
+    state.release_oxigraph_store(reopened)
+
+
+async def test_cancelled_cleanup_keeps_the_guard_until_rmtree_finishes(
+    tmp_path, monkeypatch
+):
+    """Regression: cancelling the request exited the guard while rmtree kept
+    running in its thread, so a reopen in that window lost its later writes."""
+    import shutil
+    import threading
+    from unittest.mock import AsyncMock
+
+    from src.handler_context import HandlerContext
+    from src.handlers import workspace as workspace_handler
+    from src.paths import get_oxigraph_store_dir
+
+    monkeypatch.setattr("src.paths.OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(workspace_handler, "OUTPUT_DIR", tmp_path)
+
+    state = ServerState()
+    cleaning = state.get_session("cleaning")
+    cleaning.connection_id = "conncancel"
+    store_path = get_oxigraph_store_dir("conncancel")
+    cleaning.oxigraph_store = state.acquire_oxigraph_store(store_path)
+
+    deleting, proceed = threading.Event(), threading.Event()
+    real_rmtree = shutil.rmtree
+
+    def slow_rmtree(path, ignore_errors=False):
+        deleting.set()
+        assert proceed.wait(timeout=10)
+        real_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(workspace_handler.shutil, "rmtree", slow_rmtree)
+
+    ctx = Mock()
+    ctx.info = AsyncMock()
+    services = HandlerContext(
+        get_session_data=lambda _ctx: cleaning, server_state=state
+    )
+
+    request = asyncio.create_task(workspace_handler.cleanup_workspace(ctx, services))
+    assert await asyncio.to_thread(deleting.wait, 10)
+    request.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request
+
+    # The request is gone, the worker is still deleting: no reopen allowed.
+    with pytest.raises(RuntimeError, match="being removed"):
+        state.acquire_oxigraph_store(store_path)
+
+    proceed.set()
+    await asyncio.gather(*workspace_handler._pending_removals)
+
+    assert not store_path.exists()
+    reopened = state.acquire_oxigraph_store(store_path)
+    reopened.add_triple(
+        "http://example.com/s", "http://example.com/p", "http://example.com/o"
+    )
+    state.release_oxigraph_store(reopened)
+    again = state.acquire_oxigraph_store(store_path)
+    assert again.query_sparql_ask(ASK_ANY) is True
+    state.release_oxigraph_store(again)
