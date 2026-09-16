@@ -21,6 +21,7 @@ from ..paths import (
     get_connection_dir,
     get_connection_store_dirs,
     get_models_dir,
+    get_oxigraph_store_dir,
 )
 from ..utils import read_json_file, read_text_file, utc_now, write_text_file
 
@@ -304,7 +305,15 @@ async def cleanup_workspace(
     connection_id = session.connection_id
     removed = []
 
-    # 1. Close live resources before deleting their files
+    # 1. Close live resources before deleting their files. The Oxigraph store
+    # is shared by every session on this connection, so it is discarded through
+    # the registry, which also detaches the other sessions from the handle.
+    store_path = get_oxigraph_store_dir(connection_id)
+    if services.server_state is not None:
+        try:
+            services.server_state.discard_oxigraph_store(store_path)
+        except Exception as e:
+            logger.debug(f"Oxigraph discard during cleanup: {e}")
     if session.oxigraph_store is not None:
         try:
             session.oxigraph_store.close()

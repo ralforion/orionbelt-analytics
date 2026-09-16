@@ -5,6 +5,31 @@ All notable changes to OrionBelt Analytics will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A reconnecting client lost the RDF store.** The Oxigraph store was opened
+  once per MCP session, but its RocksDB directory is per connection and takes
+  exactly one handle. A new session on the same database (a chat client
+  reconnecting, a second tab) could not open it while the previous session still
+  held it, so `store_ontology_in_rdf`, `query_sparql` and every other
+  store-backed tool failed with "Failed to initialize Oxigraph store" until
+  that session was evicted, 30 minutes by default. `ServerState` now shares one
+  handle per store directory across sessions and closes it when the last
+  session lets go; `cleanup_workspace` detaches every session before deleting
+  the directory. `OxigraphStoreManager.close()` now actually releases the
+  directory: pyoxigraph has no close(), so the LOCK was only freed when the
+  manager happened to be garbage-collected.
+- **Tool errors arrived as schema violations.** Six tools were declared to
+  return a string while their handlers return an error dict on failure, so
+  FastMCP published a string-only output schema and clients validating
+  structured content rejected the error itself ("is not of type 'string'").
+  The declarations now admit both, and `generate_chart` declares its image
+  content list, which FastMCP cannot describe, so it publishes no output
+  schema instead of rejecting image mode for lacking structured content.
+  Affected: `connect_database`, `generate_ontology`, `apply_semantic_names`,
+  `cleanup_workspace`, `store_ontology_in_rdf`, `add_rdf_knowledge`.
+
 ## [2.0.3] - 2026-08-31
 
 No functional change — as with 2.0.2, not a line of `src/` differs, and the
