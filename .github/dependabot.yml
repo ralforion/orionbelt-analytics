@@ -18,7 +18,10 @@ updates:
       python-minor-patch:
         update-types: ["minor", "patch"]
     ignore:
-      # fastmcp is pinned to <3.4 in pyproject; majors need a manual migration.
+      # fastmcp is pinned to <3.5 in pyproject; majors need a manual migration.
+      # FastMCP 4 implements MCP 2026-07-28 (no transport sessions, no
+      # ctx.sample) and cannot refuse that era server-side, so it is a
+      # deliberate step, not a bump.
       - dependency-name: "fastmcp"
         update-types: ["version-update:semver-major"]
 
