@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
   a fresh one per request, which would otherwise open an empty session on
   every call.
+- **Cache hints for clients on MCP 2026-07-28.** The tool list, the resource
+  list and resource reads now carry a `private` cache hint of
+  `MCP_CACHE_TTL_SECONDS` (default 300, `0` to disable), so a client need not
+  fetch them again on every turn. All of it is safe to keep: tools and skill
+  files change only with a release, and every chart widget has its own URI.
+  Handshake-era clients receive no hint.
 
 ### Changed
 - **A request without an MCP session is refused, not pooled.** `get_session_id`
