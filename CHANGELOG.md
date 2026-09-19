@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `connect_database` now returns one (`ob_k2m9qa`), and all 28 tools accept it
   as the optional `connection` argument. A call finds its session by the
   handle, else by the MCP transport session, else -- unless
-  `SESSIONLESS_FALLBACK=none` -- by being the only live session on the server.
+  `SESSIONLESS_FALLBACK=none` -- as the only live session that was itself opened
+  without a transport session (never one that belongs to a transport session;
+  logged as a warning on first use; multi-user deployments should set `none`).
   A handle that names no live session is an error (`unknown_connection`) and
   never lands in another session. Each handle is a user session of its own,
   with its own current schema and ontology state; sessions on one database
@@ -92,6 +94,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http` (streamable HTTP).
 
 ### Fixed
+- **Background initialisation stays with the database it was started for.**
+  GraphRAG initialisation and `AUTO_ONTOLOGY` generation outlive the tool call
+  that started them, and read the session lazily all the way through. A session
+  that connected to another database meanwhile pointed them at the new
+  database: the old database's index was installed as the new one's GraphRAG,
+  its ontology loaded into the new database's RDF store and named as the
+  session's ontology, and its metadata written into the wrong workspace. With
+  GraphRAG shared per connection that would have reached every session on the
+  new database. The work now takes its GraphRAG state and connection ID once,
+  up front; the ontology task leaves a session that moved on alone, and still
+  writes the file and metadata where they belong. A connection change also
+  waits for the init tasks it cancels before the old RDF store is released.
 - **A reconnecting client lost the RDF store.** The Oxigraph store was opened
   once per MCP session, but its RocksDB directory is per connection and takes
   exactly one handle. A new session on the same database (a chat client

@@ -306,7 +306,13 @@ async def connect_database(
             logger.info(
                 f"Connection changed (old: {session.connection_id[:8]}..., new: {new_conn_id[:8]}...)"
             )
-            services.clear_session_state(session, reason="connection change")
+            # Awaited where it can be: background init started on the old
+            # database is cancelled if nobody else needs it, and must have
+            # stopped before the old database's RDF store is released.
+            if services.provides("aclear_session_state"):
+                await services.aclear_session_state(session, reason="connection change")
+            else:
+                services.clear_session_state(session, reason="connection change")
         elif not session.connection_id:
             logger.info(f"Initial connection established: {new_conn_id[:8]}...")
 

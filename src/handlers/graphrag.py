@@ -21,13 +21,33 @@ from ..lifecycle.metadata import (
 from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
+from ..session import GraphRAGState
 from ..utils import notify_client, utc_now, write_text_file
 
 logger = logging.getLogger(__name__)
 
 
+class _Pinned:
+    """What a piece of GraphRAG work belongs to, fixed when the work starts.
+
+    Background initialisation outlives the tool call that started it, and the
+    session it was started from may move to another database meanwhile. Read
+    through the session then, ``graphrag_manager`` and ``connection_id`` are
+    the *new* database's: the old database's index would be installed as the
+    new one's -- for every session sharing it -- and its metadata written into
+    the wrong workspace. So the state object and the connection ID are taken
+    once, up front, and everything afterwards goes through them.
+    """
+
+    def __init__(self, session: Any) -> None:
+        state = getattr(session, "graphrag", None)
+        # A test double has no GraphRAGState; its own attributes stand in.
+        self.graphrag: Any = state if isinstance(state, GraphRAGState) else session
+        self.connection_id: str | None = session.connection_id
+
+
 async def _save_graphrag_state(
-    session: Any, schema_name: str, version: int | None
+    session: Any, schema_name: str, version: int | None, pinned: _Pinned | None = None
 ) -> None:
     """Persist GraphRAG state and record its half of a specific version.
 
@@ -46,20 +66,23 @@ async def _save_graphrag_state(
         session: Session data holding the GraphRAG manager and connection id.
         schema_name: Schema whose version to record against.
         version: The version number this work belongs to, if known.
+        pinned: The state and connection this work was started for, when the
+            caller is a background task; taken from the session otherwise.
     """
-    manager = session.graphrag_manager
+    pinned = pinned or _Pinned(session)
+    manager = pinned.graphrag.graphrag_manager
     output_dir = ensure_output_dir()
 
     snapshot_files = await asyncio.to_thread(
         manager.save_state, output_dir, version, schema_name
     )
 
-    if version is None or not session.connection_id:
+    if version is None or not pinned.connection_id:
         return
 
     try:
         await update_schema_version(
-            connection_id=session.connection_id,
+            connection_id=pinned.connection_id,
             output_dir=OUTPUT_DIR,
             schema_name=schema_name,
             updates={
@@ -123,6 +146,8 @@ async def _auto_generate_ontology_background(
     """
     from ..config import config_manager
 
+    # Fixed now: the session may be on another database by the time this ends.
+    connection_id: str | None = session.connection_id
     try:
         start_time = time.time()
         logger.info(f"Auto-generating ontology for schema '{schema_name}'...")
@@ -142,9 +167,7 @@ async def _auto_generate_ontology_background(
         )
 
         conn_dir = (
-            get_connection_dir(session.connection_id)
-            if session.connection_id
-            else ensure_output_dir()
+            get_connection_dir(connection_id) if connection_id else ensure_output_dir()
         )
 
         timestamp = utc_now().strftime("%Y%m%d_%H%M%S")
@@ -154,14 +177,29 @@ async def _auto_generate_ontology_background(
             ontology_file = conn_dir / f"ontology_{schema_name}_{timestamp}.ttl"
             await write_text_file(ontology_file, ontology_ttl)
 
-            # Write to the specific schema's state (not current schema)
-            schema_state = session.get_or_create_schema_state(schema_name)
-            previous_ontology_file = schema_state.ontology.ontology_file
-            schema_state.ontology.ontology_file = ontology_file.name
+            # The file above belongs to the database this work was started for.
+            # The session's ontology pointer and its RDF store belong to
+            # whatever database the session is on *now*. If it has moved on,
+            # they are not ours to touch: this ontology would be loaded into
+            # another database's RDF store and named as that database's
+            # ontology.
+            session_moved_on = session.connection_id != connection_id
+            previous_ontology_file = None
+            if session_moved_on:
+                logger.info(
+                    f"Session left connection {str(connection_id)[:8]}... while "
+                    f"the ontology for '{schema_name}' was generated; the file "
+                    "and its metadata are kept, the session is left alone"
+                )
+            else:
+                # Write to the specific schema's state (not current schema)
+                schema_state = session.get_or_create_schema_state(schema_name)
+                previous_ontology_file = schema_state.ontology.ontology_file
+                schema_state.ontology.ontology_file = ontology_file.name
 
             graph_uri = ""
             triple_count = 0
-            if OXIGRAPH_AVAILABLE:
+            if OXIGRAPH_AVAILABLE and not session_moved_on:
                 try:
                     # Direct store access for background task (connection-scoped)
                     if session.oxigraph_store:
@@ -184,10 +222,10 @@ async def _auto_generate_ontology_background(
             # an auto-generated ontology leaves that version with no TTL file,
             # no graph URI and a zero triple count -- and retention could never
             # clean up the graph it loaded.
-            if session.connection_id:
+            if connection_id:
                 try:
                     await update_workspace_section(
-                        connection_id=session.connection_id,
+                        connection_id=connection_id,
                         output_dir=OUTPUT_DIR,
                         schema_name=schema_name,
                         section="ontology",
@@ -200,7 +238,7 @@ async def _auto_generate_ontology_background(
                         },
                     )
                     await update_schema_version(
-                        connection_id=session.connection_id,
+                        connection_id=connection_id,
                         output_dir=OUTPUT_DIR,
                         schema_name=schema_name,
                         updates={
@@ -253,19 +291,21 @@ async def _auto_initialize_graphrag_background(
     task. It is threaded through rather than resolved on completion so a
     rediscovery of the same schema mid-run cannot capture this run's output.
     """
+    pinned = _Pinned(session)
+    graphrag = pinned.graphrag
     try:
         start_time = time.time()
         tables_dict = [_table_info_to_dict(t) for t in tables_info]
         views_dict = [_view_info_to_dict(v) for v in views_info or []]
 
-        if session.graphrag_manager is None:
+        if graphrag.graphrag_manager is None:
             # First schema — initialize from scratch
             logger.info(f"Initializing GraphRAG for schema '{schema_name}'...")
-            session.graphrag_manager = GraphRAGManager(
-                connection_id=session.connection_id,
+            graphrag.graphrag_manager = GraphRAGManager(
+                connection_id=pinned.connection_id,
                 schema_name=schema_name,
             )
-            session.graphrag_manager.initialize_from_schema(
+            graphrag.graphrag_manager.initialize_from_schema(
                 tables_info=tables_dict,
                 schema_name=schema_name,
                 views_info=views_dict,
@@ -275,30 +315,30 @@ async def _auto_initialize_graphrag_background(
             logger.info(
                 f"Accumulating schema '{schema_name}' into existing GraphRAG..."
             )
-            session.graphrag_manager.accumulate_schema(
+            graphrag.graphrag_manager.accumulate_schema(
                 tables_info=tables_dict,
                 schema_name=schema_name,
                 views_info=views_dict,
             )
 
-        await _save_graphrag_state(session, schema_name, version)
+        await _save_graphrag_state(session, schema_name, version, pinned=pinned)
 
         elapsed = time.time() - start_time
-        session.graphrag_initialized = True
+        graphrag.graphrag_initialized = True
 
-        total_tables = session.graphrag_manager.graph_retriever.graph.number_of_nodes()
-        schemas = session.graphrag_manager._schema_names
+        total_tables = graphrag.graphrag_manager.graph_retriever.graph.number_of_nodes()
+        schemas = graphrag.graphrag_manager._schema_names
         logger.info(
             f"GraphRAG auto-initialized successfully ({elapsed:.2f}s) — "
             f"{total_tables} tables across schemas: {schemas}"
         )
 
         # Write workspace metadata for graphrag section
-        if session.connection_id:
+        if pinned.connection_id:
             try:
-                stats = session.graphrag_manager.vector_store.get_statistics()
+                stats = graphrag.graphrag_manager.vector_store.get_statistics()
                 await update_workspace_section(
-                    connection_id=session.connection_id,
+                    connection_id=pinned.connection_id,
                     output_dir=OUTPUT_DIR,
                     schema_name=schema_name,
                     section="graphrag",
@@ -329,7 +369,7 @@ async def _auto_initialize_graphrag_background(
         logger.exception(
             f"GraphRAG auto-initialization failed: {type(e).__name__}: {e}",
         )
-        session.graphrag_initialized = False
+        graphrag.graphrag_initialized = False
 
 
 async def initialize_graphrag(

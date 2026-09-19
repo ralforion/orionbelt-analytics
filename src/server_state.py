@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 _HANDLE_PREFIX = "ob_"
 _HANDLE_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
 _HANDLE_LENGTH = 6
+# Key prefix of a session opened by a client without a transport session.
+_HANDLE_SESSION_PREFIX = "handle:"
 
 # The handle the current tool call runs under, set by the registration layer
 # for the length of the call. A context variable, because handlers resolve
@@ -212,6 +214,28 @@ def _clear_session_state(
     logger.info("Session state cleared")
 
 
+async def aclear_session_state(
+    session: SessionData, reason: str = "connection change"
+) -> None:
+    """Clear session state, waiting for its background init tasks to stop first.
+
+    Preferred over :func:`_clear_session_state` wherever a loop is running, for
+    the reason :meth:`ServerState.aclose_session` exists: a cancelled task
+    keeps running until its next suspension point, and clearing releases the
+    Oxigraph store. Releasing it while a cancelled task is still unwinding is
+    how that task ends up holding a store nobody can reopen.
+
+    Args:
+        session: Session whose state to clear, typically because it is
+            connecting to a different database.
+        reason: For the log.
+    """
+    pending = _server_state.cancel_init_tasks_of(session)
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    _clear_session_state(session, reason)
+
+
 class _StoreHandle:
     """A shared Oxigraph store plus the number of sessions holding it."""
 
@@ -267,7 +291,7 @@ class ServerState:
         handle = self._mint_handle()
         session = SessionData()
         session.handle = handle
-        key = f"handle:{handle}"
+        key = f"{_HANDLE_SESSION_PREFIX}{handle}"
         self._handles[handle] = key
         self._sessions[key] = session
         self._ensure_eviction_task()
@@ -301,10 +325,24 @@ class ServerState:
         return self._sessions.get(key) if key is not None else None
 
     def sole_session(self) -> SessionData | None:
-        """The only live session, if there is exactly one."""
-        if len(self._sessions) != 1:
+        """The only live session a caller without a transport session can be.
+
+        Only sessions that were themselves opened without a transport session
+        are candidates. A session that belongs to a transport session has a
+        client that identifies itself on every request, so a caller who does
+        not cannot be that client, however alone that session is.
+
+        Returns:
+            The session, if exactly one candidate is live.
+        """
+        candidates = [
+            session
+            for key, session in self._sessions.items()
+            if key.startswith(_HANDLE_SESSION_PREFIX)
+        ]
+        if len(candidates) != 1:
             return None
-        session = next(iter(self._sessions.values()))
+        session = candidates[0]
         session.touch()
         return session
 
@@ -549,9 +587,21 @@ class ServerState:
         session = self._sessions.get(session_id)
         if session is None:
             return []
+        return self.cancel_init_tasks_of(session)
 
-        # The init tasks belong to the shared runtime. While other sessions
-        # hold it they are still waiting for this initialisation to finish.
+    def cancel_init_tasks_of(self, session: SessionData) -> list["asyncio.Task[Any]"]:
+        """Request cancellation of the init tasks only this session still needs.
+
+        The tasks belong to the shared runtime. While other sessions hold it
+        they are still waiting for the initialisation to finish, so nothing is
+        cancelled; the last holder leaving is what ends them.
+
+        Args:
+            session: The session that is leaving its connection.
+
+        Returns:
+            The tasks that were still running, for the caller to await.
+        """
         runtime = session.runtime
         if isinstance(runtime, ConnectionRuntime) and runtime.holders > 1:
             return []
@@ -560,10 +610,7 @@ class ServerState:
         for task in pending:
             task.cancel()
         if pending:
-            logger.debug(
-                f"Cancelled {len(pending)} pending GraphRAG init task(s) "
-                f"for session {session_id}"
-            )
+            logger.debug(f"Cancelled {len(pending)} pending GraphRAG init task(s)")
         return pending
 
     def _release_session(self, session_id: str) -> None:
@@ -738,6 +785,15 @@ def get_session_data(ctx: Context) -> SessionData:
     if _sessionless_fallback_enabled():
         sole = _server_state.sole_session()
         if sole is not None:
+            if not sole.fallback_noted:
+                sole.fallback_noted = True
+                logger.warning(
+                    f"A request with neither an MCP session nor a connection "
+                    f"handle was placed in the only sessionless session "
+                    f"({sole.handle}). Fine on a single-user server; if several "
+                    "people share this one, set SESSIONLESS_FALLBACK=none so "
+                    "nobody lands in another user's session by omission."
+                )
             return sole
 
     raise SessionRequiredError(

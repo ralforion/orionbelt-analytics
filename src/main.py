@@ -129,6 +129,7 @@ from .server_state import (  # noqa: E402, F401
     _get_connection_fingerprint,
     _server_state,
     _transport_session_id,
+    aclear_session_state,
     begin_connection_scope,
     create_error_response,
     end_connection_scope,
@@ -293,6 +294,7 @@ def _services() -> HandlerContext:
         server_state=_server_state,
         get_connection_fingerprint=_get_connection_fingerprint,
         clear_session_state=_clear_session_state,
+        aclear_session_state=aclear_session_state,
         auto_initialize_graphrag_background=_h_graphrag._auto_initialize_graphrag_background,
         add_resource=mcp.add_resource,
     )

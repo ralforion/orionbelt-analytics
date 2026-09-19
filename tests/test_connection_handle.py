@@ -117,19 +117,41 @@ def test_a_handle_wins_over_the_transport_session(state):
     assert get_session_data(_ctx("transport-a")) is mine
 
 
-def test_without_session_or_handle_the_sole_live_session_is_used(state, monkeypatch):
+def test_without_session_or_handle_the_sole_sessionless_session_is_used(
+    state, monkeypatch, caplog
+):
     _fallback(monkeypatch, "sole_session")
-    only = state.get_session("transport-a")
+    only = state.open_handle_session()
 
-    assert get_session_data(_ctx(None)) is only
+    with caplog.at_level("WARNING"):
+        assert get_session_data(_ctx(None)) is only
+        assert get_session_data(_ctx(None)) is only
+
+    # Said once per session, and it names the way out.
+    notes = [r for r in caplog.records if "SESSIONLESS_FALLBACK=none" in r.message]
+    assert len(notes) == 1
+
+
+def test_a_transport_session_is_never_the_fallback(state, monkeypatch):
+    """Its client identifies itself on every request, so a caller who does not
+    cannot be that client, however alone that session is."""
+    _fallback(monkeypatch, "sole_session")
+    state.get_session("transport-a")
+
+    with pytest.raises(SessionRequiredError):
+        get_session_data(_ctx(None))
+
+    # Next to it, the one sessionless session is still unambiguous.
+    mine = state.open_handle_session()
+    assert get_session_data(_ctx(None)) is mine
 
 
 def test_with_several_sessions_a_bare_request_is_refused_not_guessed(
     state, monkeypatch
 ):
     _fallback(monkeypatch, "sole_session")
-    state.get_session("transport-a")
-    state.get_session("transport-b")
+    state.open_handle_session()
+    state.open_handle_session()
 
     with pytest.raises(SessionRequiredError) as raised:
         get_session_data(_ctx(None))
@@ -140,7 +162,7 @@ def test_with_several_sessions_a_bare_request_is_refused_not_guessed(
 
 def test_the_fallback_can_be_switched_off(state, monkeypatch):
     _fallback(monkeypatch, "none")
-    state.get_session("transport-a")
+    state.open_handle_session()
 
     with pytest.raises(SessionRequiredError):
         get_session_data(_ctx(None))
@@ -356,7 +378,7 @@ def test_a_per_request_id_does_not_open_a_session_per_call(state, monkeypatch):
     """The failure this guards against: every modern call landing in a new,
     empty session because its throwaway ID looked like a real one."""
     _fallback(monkeypatch, "sole_session")
-    only = state.get_session("real-session")
+    only = state.open_handle_session()
 
     for call in range(3):
         assert get_session_data(_era_ctx("2026-07-28", f"uuid-{call}")) is only
