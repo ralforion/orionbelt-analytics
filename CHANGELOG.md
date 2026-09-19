@@ -24,7 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   place to adapt when MCP Logging, deprecated in the 2026-07-28 revision, goes
   away. A test fails if a handler calls the context directly again.
 
+- **`SEMANTIC_NAMING_MODE` replaces `ENABLE_SAMPLING`.** `suggest_semantic_names`
+  now picks its source of rename suggestions through one seam with three
+  strategies: client sampling (today's path), input-required (the multi
+  round-trip replacement, which needs FastMCP 4 and until then falls back),
+  and review (the client model proposes the names itself). Modes: `auto`
+  (default, unchanged behaviour), `input_required`, `review`. A context that
+  offers no `sample` at all, which is what FastMCP 4 looks like, lands on
+  the review path cleanly. No change to the tool's response.
+
 ### Deprecated
+- **`ENABLE_SAMPLING`.** Still honoured when `SEMANTIC_NAMING_MODE` is unset:
+  `false` maps to `review` and logs a warning. MCP deprecated Sampling itself
+  in its 2026-07-28 revision.
 - **`MCP_TRANSPORT=sse`.** The MCP specification deprecated the HTTP+SSE
   transport in its 2026-07-28 revision. The server now logs a warning at
   startup when it is selected; it will be removed in a future release. Use

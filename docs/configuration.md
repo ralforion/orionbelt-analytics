@@ -62,14 +62,18 @@ AUTO_CLEANUP_ON_STARTUP=false
 # last update (not file mtime). Ignored for the false and all modes.
 WORKSPACE_MAX_AGE_DAYS=30
 
-# MCP Sampling
-# ------------
-# Allow the server to call back through the client's LLM (MCP sampling) for
-# tasks like generating semantic-rename suggestions inside suggest_semantic_names.
-# Requires a sampling-capable client (e.g. OrionBelt Chat). Clients without
-# sampling support (e.g. Claude Desktop) silently fall back to the legacy
-# manual-review path. Set to false to force the legacy path everywhere.
-ENABLE_SAMPLING=true
+# Semantic naming mode
+# --------------------
+# How suggest_semantic_names obtains rename suggestions for cryptic names:
+#   auto            best path the client supports (default). Today that is MCP
+#                   sampling when the client offers it, else the review path.
+#   input_required  the multi round-trip replacement for sampling. Needs
+#                   FastMCP 4; until then it behaves like review.
+#   review          never ask the client's model from the server. The client
+#                   model reads the cryptic names and calls
+#                   apply_semantic_names itself. Works with every client.
+# ENABLE_SAMPLING is the deprecated predecessor: false maps to review.
+SEMANTIC_NAMING_MODE=auto
 
 # MCP Transport Configuration
 # Options: http, sse (Server-Sent Events)
@@ -306,13 +310,23 @@ Ontology, schema and R2RML **files** are additionally pruned by count as they ar
 
 ---
 
-## MCP Sampling
+## Semantic Naming Mode
 
-`ENABLE_SAMPLING` (default `true`) controls whether the server is allowed to call back through the client's LLM via the MCP `sampling/createMessage` capability.
+`SEMANTIC_NAMING_MODE` (default `auto`) controls how `suggest_semantic_names` obtains rename suggestions for cryptic identifiers.
+
+| Mode | Behaviour |
+|---|---|
+| `auto` | The best path the client supports. Today: call back through the client's LLM via MCP `sampling/createMessage` when the context offers it, otherwise the review path. |
+| `input_required` | The multi round-trip replacement for sampling, where the tool returns the request and is called again with the answer. Needs FastMCP 4. Until then the server logs a warning and uses the review path. |
+| `review` | The server never asks the client's model. The host LLM inspects the cryptic lists and calls `apply_semantic_names` with its own suggestions. Works with every client in every protocol era. |
+
+**Why a mode and not a switch.** MCP deprecated Sampling in its 2026-07-28 revision, and FastMCP 4 removes `ctx.sample`. The three paths sit behind one seam in the handler so the path can change with the protocol while the tool's response shape stays the same.
+
+**`ENABLE_SAMPLING` is deprecated.** It is still honoured when `SEMANTIC_NAMING_MODE` is unset: `false` maps to `review`, and the server logs a deprecation warning at startup.
 
 **Where it is used:** `suggest_semantic_names`. When sampling is available, the server asks the host LLM to produce rename suggestions for cryptic identifiers and returns them as a `suggestions: {old_name: new_name}` map alongside the existing cryptic-name lists. Without sampling, the response shape is unchanged: the host LLM is expected to inspect the cryptic lists and call `apply_semantic_names` with its own suggestions.
 
-**Capability detection is implicit.** The server attempts `ctx.sample(...)` and falls back to the legacy path on any failure — including the case where the client never advertised the capability. There is no separate handshake to configure.
+**Capability detection is implicit.** In `auto` mode the server attempts `ctx.sample(...)` and falls back to the review path on any failure — including the case where the client never advertised the capability, and a context that has no `sample` at all. There is no separate handshake to configure.
 
 **Client compatibility:**
 
@@ -323,7 +337,7 @@ Ontology, schema and R2RML **files** are additionally pruned by count as they ar
 | Claude Code | No | Falls back silently to manual review path |
 | Generic pydantic-ai clients | Depends on agent wiring | Works when `agent.set_mcp_sampling_model()` (or equivalent) is called |
 
-**Disabling:** set `ENABLE_SAMPLING=false` to force the legacy path even when the client supports sampling. Useful for cost control, deterministic regression testing, or when a particular host LLM produces poor rename suggestions.
+**Disabling:** set `SEMANTIC_NAMING_MODE=review` to force the review path even when the client supports sampling. Useful for cost control, deterministic regression testing, or when a particular host LLM produces poor rename suggestions.
 
 **Logging:** sampling activity is logged at INFO/WARNING with elapsed time and item counts -- look for lines starting with `MCP sampling:` in the server log to verify the path the request took.
 
