@@ -7,6 +7,7 @@ import re
 from enum import StrEnum
 from typing import Any
 
+import mcp.types as mcp_types
 from fastmcp import Context
 
 from ..config import config_manager
@@ -16,7 +17,13 @@ from ..lifecycle.metadata import update_workspace_section
 from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
-from ..utils import is_client_disconnect, notify_client, utc_now, write_text_file
+from ..utils import (
+    is_client_disconnect,
+    is_stateless_era,
+    notify_client,
+    utc_now,
+    write_text_file,
+)
 from .ontology_generation import _build_minimal_graph_summary
 
 logger = logging.getLogger(__name__)
@@ -100,79 +107,122 @@ class NamingStrategy(StrEnum):
     The seam between the tool and whatever produces the names, so the path can
     change with the protocol without touching the tool:
 
-    - ``CLIENT_SAMPLING``: ask the client's model through ``ctx.sample``. MCP
-      deprecated Sampling in its 2026-07-28 revision and FastMCP 4 removes
-      ``ctx.sample`` in every protocol era.
-    - ``INPUT_REQUIRED``: the multi round-trip replacement, where the tool
-      returns the request and is called again with the answer. Needs FastMCP 4;
-      not implemented yet.
+    - ``INPUT_REQUIRED``: ask the client's model through a multi round-trip
+      request (MCP 2026-07-28, SEP-2322). The tool returns the request instead
+      of a result; the client fulfils it and calls the tool again with the
+      answer. Replaces ``ctx.sample``, which FastMCP 4 removed in every
+      protocol era.
     - ``REVIEW``: no server-side suggestions. The client model reads the
       cryptic names and calls ``apply_semantic_names`` itself. Works with
-      every client in every era.
+      every client in every era, and is the durable path: MCP deprecated
+      Sampling itself, also when carried by a multi round-trip request.
     """
 
-    CLIENT_SAMPLING = "client_sampling"
     INPUT_REQUIRED = "input_required"
     REVIEW = "review"
+
+
+# Key of the one request a round trip carries, and of its answer.
+_RENAMES_KEY = "renames"
+
+_RENAME_SYSTEM_PROMPT = (
+    "You are an expert ontology and information-architecture designer. "
+    "Produce concise, business-friendly OWL labels — not literal "
+    "column names. Respond with one JSON object only."
+)
+
+
+def _client_can_answer(ctx: Context) -> bool:
+    """Whether a multi round-trip sampling request would come back answered.
+
+    It has to be known before asking. The result type only exists from MCP
+    2026-07-28 on -- returning it to a handshake-era client is an error -- and
+    a modern client without a model fails *after* the first round, on its own
+    side, where the server can no longer fall back to the review path.
+    """
+    if not is_stateless_era(ctx):
+        return False
+    try:
+        session = ctx.session
+        return bool(
+            session.check_client_capability(
+                mcp_types.ClientCapabilities(sampling=mcp_types.SamplingCapability())
+            )
+        )
+    except Exception as e:
+        logger.debug(f"Could not read the client's sampling capability: {e}")
+        return False
 
 
 def _select_naming_strategy(ctx: Context, mode: str) -> NamingStrategy:
     """Pick the strategy for this request from the configured mode.
 
     Args:
-        ctx: FastMCP request context; inspected for what it can do.
+        ctx: FastMCP request context; inspected for what the client can do.
         mode: ``SEMANTIC_NAMING_MODE``: ``auto``, ``input_required`` or
             ``review``.
 
     Returns:
-        The strategy to use. Never one the running FastMCP cannot serve.
+        The strategy to use. Never one this client cannot complete.
     """
     if mode == "review":
         return NamingStrategy.REVIEW
+    if _client_can_answer(ctx):
+        return NamingStrategy.INPUT_REQUIRED
     if mode == "input_required":
         logger.warning(
-            "SEMANTIC_NAMING_MODE=input_required needs FastMCP 4 (multi "
-            "round-trip requests); using the review path"
+            "SEMANTIC_NAMING_MODE=input_required, but this client cannot answer "
+            "a multi round-trip sampling request (it needs MCP 2026-07-28 and "
+            "the sampling capability); using the review path"
         )
-        return NamingStrategy.REVIEW
-    # auto: the best path this context offers. A context without ``sample`` is
-    # what FastMCP 4 looks like until the input-required path exists.
-    if callable(getattr(ctx, "sample", None)):
-        return NamingStrategy.CLIENT_SAMPLING
-    logger.info("Context offers no sampling; using the review path")
+    else:
+        logger.info("Client cannot answer a sampling request; using the review path")
     return NamingStrategy.REVIEW
 
 
-async def _request_rename_suggestions(
-    ctx: Context,
+def _rename_items(
     cryptic_classes: list,
     cryptic_props_by_table: dict[str, list],
     cryptic_relationships: list,
-) -> dict[str, Any] | None:
-    """Get rename suggestions by the configured strategy, or ``None``.
+) -> list[str]:
+    items: list[str] = [f"CLASS  {c}" for c in cryptic_classes]
+    for table, cols in cryptic_props_by_table.items():
+        items.extend(f"PROP   {table}.{col}" for col in cols)
+    items.extend(f"REL    {r}" for r in cryptic_relationships)
+    return items
 
-    ``None`` means the caller returns the review payload, where the client
-    model proposes the names itself.
-    """
-    mode = config_manager.get_server_config().semantic_naming_mode
-    strategy = _select_naming_strategy(ctx, mode)
-    if strategy is NamingStrategy.CLIENT_SAMPLING:
-        return await _suggest_via_client_sampling(
-            ctx,
-            cryptic_classes=cryptic_classes,
-            cryptic_props_by_table=cryptic_props_by_table,
-            cryptic_relationships=cryptic_relationships,
+
+def _ask_client_model(items: list[str]) -> mcp_types.InputRequiredResult:
+    """First round: the request for the client's model, returned as the result."""
+    logger.info("MCP sampling: requesting rename suggestions for %d items", len(items))
+    request = mcp_types.CreateMessageRequest(
+        params=mcp_types.CreateMessageRequestParams(
+            messages=[
+                mcp_types.SamplingMessage(
+                    role="user",
+                    content=mcp_types.TextContent(
+                        type="text", text=_build_rename_prompt(items)
+                    ),
+                )
+            ],
+            system_prompt=_RENAME_SYSTEM_PROMPT,
+            temperature=0.2,
+            max_tokens=8000,
         )
-    return None
+    )
+    return mcp_types.InputRequiredResult(input_requests={_RENAMES_KEY: request})
 
 
-async def _suggest_via_client_sampling(
-    ctx: Context,
-    cryptic_classes: list,
-    cryptic_props_by_table: dict[str, list],
-    cryptic_relationships: list,
-) -> dict[str, Any] | None:
-    """Ask the host LLM (via MCP sampling) for ontology-shaped rename suggestions.
+def _client_model_answer(ctx: Context) -> Any | None:
+    """Second round: the answer to :func:`_ask_client_model`, if this is it."""
+    responses = getattr(ctx, "input_responses", None)
+    if not isinstance(responses, dict):
+        return None
+    return responses.get(_RENAMES_KEY)
+
+
+def _suggestions_from_answer(answer: Any) -> dict[str, Any] | None:
+    """Parse the client model's answer into ``apply_semantic_names`` format.
 
     Returns the structured payload that ``apply_semantic_names`` consumes
     natively::
@@ -184,76 +234,31 @@ async def _suggest_via_client_sampling(
           "relationships": [{"original_name", "suggested_name", "description"}],
         }
 
-    Returns ``None`` if the client doesn't support sampling or the call fails — caller falls back to the legacy review-then-apply
-    payload.
+    Returns ``None`` if nothing usable came back -- the caller falls back to
+    the review payload.
     """
-    if not (cryptic_classes or cryptic_props_by_table or cryptic_relationships):
-        return {"classes": [], "properties": [], "relationships": []}
-
-    items: list[str] = [f"CLASS  {c}" for c in cryptic_classes]
-    for table, cols in cryptic_props_by_table.items():
-        items.extend(f"PROP   {table}.{col}" for col in cols)
-    items.extend(f"REL    {r}" for r in cryptic_relationships)
-
-    logger.info(
-        "MCP sampling: requesting rename suggestions for %d items "
-        "(%d classes, %d properties, %d relationships)",
-        len(items),
-        len(cryptic_classes),
-        sum(len(v) for v in cryptic_props_by_table.values()),
-        len(cryptic_relationships),
-    )
-    started = utc_now()
-
-    prompt = _build_rename_prompt(items)
-
-    try:
-        result = await ctx.sample(
-            messages=prompt,
-            system_prompt=(
-                "You are an expert ontology and information-architecture designer. "
-                "Produce concise, business-friendly OWL labels — not literal "
-                "column names. Respond with one JSON object only."
-            ),
-            temperature=0.2,
-            max_tokens=8000,
-        )
-    except Exception as e:
-        logger.warning(
-            "MCP sampling unavailable or failed after %.2fs (%s: %s) — "
-            "falling back to manual review path",
-            (utc_now() - started).total_seconds(),
-            type(e).__name__,
-            str(e)[:200],
-        )
-        return None
-
-    elapsed = (utc_now() - started).total_seconds()
-    raw_text = getattr(result, "text", None) or ""
-    parsed = _parse_rename_json(raw_text)
-    suggestions = _normalize_structured_suggestions(parsed)
-    total = (
-        len(suggestions.get("classes") or [])
-        + len(suggestions.get("properties") or [])
-        + len(suggestions.get("relationships") or [])
-    )
-    if total == 0:
+    content = getattr(answer, "content", None)
+    blocks = content if isinstance(content, list) else [content]
+    raw_text = "".join(getattr(block, "text", None) or "" for block in blocks)
+    suggestions = _normalize_structured_suggestions(_parse_rename_json(raw_text))
+    counts = {
+        kind: len(suggestions.get(kind) or [])
+        for kind in ("classes", "properties", "relationships")
+    }
+    if not any(counts.values()):
         logger.info(
-            "MCP sampling returned no usable suggestions (%.2fs, %d chars text)",
-            elapsed,
+            "MCP sampling returned no usable suggestions (%d chars text)",
             len(raw_text),
         )
         return None
-
     logger.info(
         "MCP sampling: received %d suggestions (%d classes, %d properties, "
-        "%d relationships) in %.2fs (model=%s)",
-        total,
-        len(suggestions.get("classes") or []),
-        len(suggestions.get("properties") or []),
-        len(suggestions.get("relationships") or []),
-        elapsed,
-        getattr(result, "model", "unknown"),
+        "%d relationships) (model=%s)",
+        sum(counts.values()),
+        counts["classes"],
+        counts["properties"],
+        counts["relationships"],
+        getattr(answer, "model", "unknown"),
     )
     return suggestions
 
@@ -415,7 +420,7 @@ async def suggest_semantic_names(
     ctx: Context,
     ontology_file: str | None,
     services: "HandlerContext",
-) -> dict[str, Any]:
+) -> dict[str, Any] | mcp_types.InputRequiredResult:
     """Extract and analyze names from a generated ontology."""
     try:
         try:
@@ -477,12 +482,22 @@ async def suggest_semantic_names(
         )
         summary = extraction_result["summary"]
 
-        sampled_suggestions = await _request_rename_suggestions(
-            ctx,
-            cryptic_classes=cryptic_classes,
-            cryptic_props_by_table=cryptic_props_by_table,
-            cryptic_relationships=cryptic_relationships,
-        )
+        # The client's model proposes the names when it can be asked. That takes
+        # two rounds of this same call: the first returns the request, the
+        # second arrives with the answer and gets here again, the cryptic
+        # names re-derived from the same ontology file.
+        sampled_suggestions = None
+        mode = config_manager.get_server_config().semantic_naming_mode
+        if _select_naming_strategy(ctx, mode) is NamingStrategy.INPUT_REQUIRED:
+            answer = _client_model_answer(ctx)
+            if answer is not None:
+                sampled_suggestions = _suggestions_from_answer(answer)
+            elif total_cryptic:
+                return _ask_client_model(
+                    _rename_items(
+                        cryptic_classes, cryptic_props_by_table, cryptic_relationships
+                    )
+                )
 
         if sampled_suggestions and any(
             sampled_suggestions.get(k)

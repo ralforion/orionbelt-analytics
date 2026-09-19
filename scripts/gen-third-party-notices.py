@@ -58,6 +58,9 @@ NOTICES_PATH = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
 # found on disk, which is what makes a Linux CI run and a macOS dev run agree.
 PLATFORM_ONLY: dict[str, str] = {
     "colorama": "BSD-3-Clause",
+    # Emscripten/Pyodide only (httpx2 pulls it under sys_platform ==
+    # "emscripten"); never in the Docker image. Read from its LICENSE.md.
+    "httpx2-jsfetch": "BSD-3-Clause",
     "jeepney": "MIT",
     "pywin32": "PSF-2.0",
     "pywin32-ctypes": "BSD-3-Clause",
