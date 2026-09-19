@@ -217,7 +217,7 @@ DATABRICKS_SCHEMA=default
 | `ONTOLOGY_BASE_URI` | `http://example.com/ontology/` | Base URI for generated RDF ontologies |
 | `R2RML_BASE_IRI` | `http://mycompany.com/` | Base IRI for R2RML subject templates |
 | `OUTPUT_DIR` | `tmp` | Directory for generated files (relative to project root) |
-| `MCP_TRANSPORT` | `http` | MCP transport mode: `http` or `sse` |
+| `MCP_TRANSPORT` | `http` | MCP transport mode: `http`, or `sse` (deprecated) |
 | `MCP_SERVER_HOST` | `localhost` | Host address the server binds to |
 | `MCP_SERVER_PORT` | `9000` | Port the server listens on |
 | `SESSION_IDLE_TIMEOUT_SECONDS` | `1800` | Idle timeout before session eviction (0 to disable) |
@@ -361,7 +361,11 @@ MCP_SERVER_PORT=9000
 }
 ```
 
-### `sse` (legacy)
+### `sse` (deprecated)
+
+> **Deprecated.** The MCP specification deprecated the HTTP+SSE transport in
+> its 2026-07-28 revision, and the server logs a warning at startup when this
+> mode is selected. It will be removed in a future release. Use `http`.
 
 Server-Sent Events transport for backward compatibility with older MCP clients. Use this mode for LibreChat integration or other clients that do not support streamable HTTP.
 

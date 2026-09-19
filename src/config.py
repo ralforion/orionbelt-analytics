@@ -188,6 +188,14 @@ class ConfigManager:
                 f"Invalid MCP_TRANSPORT='{config.mcp_transport}'. "
                 f"Must be one of: {', '.join(sorted(valid_transports))}"
             )
+        if config.mcp_transport == "sse":
+            # The HTTP+SSE transport has been superseded since MCP 2025-03-26
+            # and is formally Deprecated in the 2026-07-28 revision.
+            logger.warning(
+                "MCP_TRANSPORT=sse is deprecated and will be removed in a future "
+                "release: the MCP specification has deprecated the HTTP+SSE "
+                "transport. Switch to MCP_TRANSPORT=http (streamable HTTP)."
+            )
 
         # Validate port range
         if not (1 <= config.mcp_server_port <= 65535):

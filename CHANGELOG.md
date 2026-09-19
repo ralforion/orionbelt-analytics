@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step of the stateless-protocol plan; a connection handle as a tool argument
   follows.
 
+### Deprecated
+- **`MCP_TRANSPORT=sse`.** The MCP specification deprecated the HTTP+SSE
+  transport in its 2026-07-28 revision. The server now logs a warning at
+  startup when it is selected; it will be removed in a future release. Use
+  `http` (streamable HTTP).
+
 ### Fixed
 - **A reconnecting client lost the RDF store.** The Oxigraph store was opened
   once per MCP session, but its RocksDB directory is per connection and takes
