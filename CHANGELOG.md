@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
   a fresh one per request, which would otherwise open an empty session on
   every call.
+- **`cleanup_workspace` asks before it deletes.** It removes every ontology
+  version, the RDF store and the saved semantic models of a connection, for
+  everyone using that database, and used to do so on a model's say-so alone. A
+  client that advertises elicitation is now asked to confirm with a checkbox
+  the user has to tick; declining, dismissing or accepting without ticking
+  cancels, and nothing is deleted. On MCP 2026-07-28 the question is a multi
+  round-trip request, on earlier revisions the tool waits for the answer, and
+  in both it is asked before the connection's writer lock is taken. A client
+  that cannot be asked keeps the old behaviour. `ask_to_confirm` in
+  `src/handlers/confirmation.py` is reusable for other tools.
 - **Cache hints for clients on MCP 2026-07-28.** The tool list, the resource
   list and resource reads now carry a `private` cache hint of
   `MCP_CACHE_TTL_SECONDS` (default 300, `0` to disable), so a client need not
