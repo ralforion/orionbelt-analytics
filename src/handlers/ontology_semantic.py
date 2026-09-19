@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from enum import StrEnum
 from typing import Any
 
 from fastmcp import Context
@@ -15,7 +16,7 @@ from ..lifecycle.metadata import update_workspace_section
 from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
-from ..utils import is_client_disconnect, safe_ctx_info, utc_now, write_text_file
+from ..utils import is_client_disconnect, notify_client, utc_now, write_text_file
 from .ontology_generation import _build_minimal_graph_summary
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,79 @@ def semantic_context_entries(
     return entries
 
 
-async def _maybe_sample_rename_suggestions(
+class NamingStrategy(StrEnum):
+    """How suggest_semantic_names obtains rename suggestions.
+
+    The seam between the tool and whatever produces the names, so the path can
+    change with the protocol without touching the tool:
+
+    - ``CLIENT_SAMPLING``: ask the client's model through ``ctx.sample``. MCP
+      deprecated Sampling in its 2026-07-28 revision and FastMCP 4 removes
+      ``ctx.sample`` in every protocol era.
+    - ``INPUT_REQUIRED``: the multi round-trip replacement, where the tool
+      returns the request and is called again with the answer. Needs FastMCP 4;
+      not implemented yet.
+    - ``REVIEW``: no server-side suggestions. The client model reads the
+      cryptic names and calls ``apply_semantic_names`` itself. Works with
+      every client in every era.
+    """
+
+    CLIENT_SAMPLING = "client_sampling"
+    INPUT_REQUIRED = "input_required"
+    REVIEW = "review"
+
+
+def _select_naming_strategy(ctx: Context, mode: str) -> NamingStrategy:
+    """Pick the strategy for this request from the configured mode.
+
+    Args:
+        ctx: FastMCP request context; inspected for what it can do.
+        mode: ``SEMANTIC_NAMING_MODE``: ``auto``, ``input_required`` or
+            ``review``.
+
+    Returns:
+        The strategy to use. Never one the running FastMCP cannot serve.
+    """
+    if mode == "review":
+        return NamingStrategy.REVIEW
+    if mode == "input_required":
+        logger.warning(
+            "SEMANTIC_NAMING_MODE=input_required needs FastMCP 4 (multi "
+            "round-trip requests); using the review path"
+        )
+        return NamingStrategy.REVIEW
+    # auto: the best path this context offers. A context without ``sample`` is
+    # what FastMCP 4 looks like until the input-required path exists.
+    if callable(getattr(ctx, "sample", None)):
+        return NamingStrategy.CLIENT_SAMPLING
+    logger.info("Context offers no sampling; using the review path")
+    return NamingStrategy.REVIEW
+
+
+async def _request_rename_suggestions(
+    ctx: Context,
+    cryptic_classes: list,
+    cryptic_props_by_table: dict[str, list],
+    cryptic_relationships: list,
+) -> dict[str, Any] | None:
+    """Get rename suggestions by the configured strategy, or ``None``.
+
+    ``None`` means the caller returns the review payload, where the client
+    model proposes the names itself.
+    """
+    mode = config_manager.get_server_config().semantic_naming_mode
+    strategy = _select_naming_strategy(ctx, mode)
+    if strategy is NamingStrategy.CLIENT_SAMPLING:
+        return await _suggest_via_client_sampling(
+            ctx,
+            cryptic_classes=cryptic_classes,
+            cryptic_props_by_table=cryptic_props_by_table,
+            cryptic_relationships=cryptic_relationships,
+        )
+    return None
+
+
+async def _suggest_via_client_sampling(
     ctx: Context,
     cryptic_classes: list,
     cryptic_props_by_table: dict[str, list],
@@ -111,16 +184,9 @@ async def _maybe_sample_rename_suggestions(
           "relationships": [{"original_name", "suggested_name", "description"}],
         }
 
-    Returns ``None`` if sampling is disabled, the client doesn't support it,
-    or the call fails — caller falls back to the legacy review-then-apply
+    Returns ``None`` if the client doesn't support sampling or the call fails — caller falls back to the legacy review-then-apply
     payload.
     """
-    if not config_manager.get_server_config().enable_sampling:
-        logger.info(
-            "MCP sampling disabled (ENABLE_SAMPLING=false) — using legacy review path"
-        )
-        return None
-
     if not (cryptic_classes or cryptic_props_by_table or cryptic_relationships):
         return {"classes": [], "properties": [], "relationships": []}
 
@@ -411,7 +477,7 @@ async def suggest_semantic_names(
         )
         summary = extraction_result["summary"]
 
-        sampled_suggestions = await _maybe_sample_rename_suggestions(
+        sampled_suggestions = await _request_rename_suggestions(
             ctx,
             cryptic_classes=cryptic_classes,
             cryptic_props_by_table=cryptic_props_by_table,
@@ -426,7 +492,7 @@ async def suggest_semantic_names(
                 len(sampled_suggestions.get(k) or [])
                 for k in ("classes", "properties", "relationships")
             )
-            await safe_ctx_info(
+            await notify_client(
                 ctx,
                 f"Found {total_cryptic} cryptic names; "
                 f"server pre-filled {sampled_total} suggestions via MCP sampling — "
@@ -449,7 +515,7 @@ async def suggest_semantic_names(
                 "next_tool": "apply_semantic_names",
             }
 
-        await safe_ctx_info(
+        await notify_client(
             ctx,
             f"Found {total_cryptic} cryptic names to review; "
             f"next call should be apply_semantic_names with your suggestions",
@@ -622,7 +688,9 @@ async def apply_semantic_names(
         relationships_updated = len(name_suggestions.get("relationships", []))
         total_updated = classes_updated + properties_updated + relationships_updated
 
-        await ctx.info(f"Applied {total_updated} semantic name changes to ontology")
+        await notify_client(
+            ctx, f"Applied {total_updated} semantic name changes to ontology"
+        )
 
         # Mirror the new vocabulary into GraphRAG. Without this the enrichment
         # is invisible to search: those vectors come from raw schema metadata,

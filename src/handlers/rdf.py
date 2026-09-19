@@ -21,7 +21,7 @@ from ..lifecycle.metadata import (
 )
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
-from ..utils import read_text_file, utc_now
+from ..utils import notify_client, read_text_file, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +86,9 @@ async def store_ontology_in_rdf(
             ontology_ttl=ontology_ttl, graph_uri=graph_uri, schema_name=effective_schema
         )
 
-        await ctx.info(
-            f"Stored ontology for schema '{effective_schema}' in RDF store: {triple_count} triples"
+        await notify_client(
+            ctx,
+            f"Stored ontology for schema '{effective_schema}' in RDF store: {triple_count} triples",
         )
 
         # Update workspace: mark ontology as persisted + write rdf_store
@@ -182,7 +183,7 @@ async def query_sparql(
     try:
         if query_type == "ASK":
             result = store.query_sparql_ask(sparql_query)
-            await ctx.info(f"SPARQL ASK query returned: {result}")
+            await notify_client(ctx, f"SPARQL ASK query returned: {result}")
             return {
                 "success": True,
                 "query_type": "ASK",
@@ -191,7 +192,7 @@ async def query_sparql(
             }
         elif query_type == "CONSTRUCT":
             result = await asyncio.to_thread(store.query_sparql_construct, sparql_query)
-            await ctx.info("SPARQL CONSTRUCT query completed")
+            await notify_client(ctx, "SPARQL CONSTRUCT query completed")
             return {
                 "success": True,
                 "query_type": "CONSTRUCT",
@@ -200,7 +201,7 @@ async def query_sparql(
             }
         else:
             results = store.query_sparql(sparql_query, timeout_seconds=timeout_seconds)
-            await ctx.info(f"SPARQL query returned {len(results)} results")
+            await notify_client(ctx, f"SPARQL query returned {len(results)} results")
             return {
                 "success": True,
                 "query_type": "SELECT",
@@ -258,8 +259,8 @@ async def add_rdf_knowledge(
             subject=subject, predicate=predicate, object=object_value, metadata=metadata
         )
 
-        await ctx.info(
-            f"Added knowledge triple: <{subject}> <{predicate}> {object_value}"
+        await notify_client(
+            ctx, f"Added knowledge triple: <{subject}> <{predicate}> {object_value}"
         )
 
         return (
@@ -295,7 +296,7 @@ async def list_tables_sparql(
 
         tables = store.list_tables_sparql(schema_graph)
 
-        await ctx.info(f"Found {len(tables)} tables via SPARQL")
+        await notify_client(ctx, f"Found {len(tables)} tables via SPARQL")
 
         return {
             "success": True,
@@ -326,7 +327,7 @@ async def find_columns_by_type_sparql(
     try:
         columns = store.find_columns_by_type(data_type, schema_graph)
 
-        await ctx.info(f"Found {len(columns)} {data_type} columns via SPARQL")
+        await notify_client(ctx, f"Found {len(columns)} {data_type} columns via SPARQL")
 
         return {
             "success": True,

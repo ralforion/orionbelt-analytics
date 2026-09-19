@@ -8,6 +8,7 @@ from fastmcp import Context
 
 from ..exceptions import ConnectionError, ParameterError, ValidationError
 from ..handler_context import HandlerContext
+from ..utils import notify_client
 
 logger = logging.getLogger(__name__)
 
@@ -173,15 +174,16 @@ async def validate_sql_syntax(
                 f"SQL validation successful: {sql_query[:100]}{'...' if len(sql_query) > 100 else ''}"
             )
             validation_result["next_tool"] = "execute_sql_query"
-            await ctx.info(
-                "SQL validation passed; next call should be execute_sql_query"
+            await notify_client(
+                ctx, "SQL validation passed; next call should be execute_sql_query"
             )
         else:
             logger.info(
                 f"SQL validation failed: {validation_result.get('error', 'Unknown validation error')}"
             )
-            await ctx.info(
-                "SQL validation failed; fix the query and try validate_sql_syntax again"
+            await notify_client(
+                ctx,
+                "SQL validation failed; fix the query and try validate_sql_syntax again",
             )
 
         return validation_result
@@ -380,16 +382,21 @@ async def execute_sql_query(
             row_count = result.get("row_count", 0)
             if row_count > 0:
                 result["next_tool"] = "generate_chart"
-                await ctx.info(
-                    f"SQL query executed successfully with {row_count} rows; next call should be generate_chart for visualization"
+                await notify_client(
+                    ctx,
+                    f"SQL query executed successfully with {row_count} rows; next call should be generate_chart for visualization",
                 )
             else:
-                await ctx.info("SQL query executed successfully but returned no rows")
+                await notify_client(
+                    ctx, "SQL query executed successfully but returned no rows"
+                )
         else:
             logger.warning(
                 f"SQL query execution failed: {result.get('error', 'Unknown error')}"
             )
-            await ctx.info("SQL query execution failed; review error and try again")
+            await notify_client(
+                ctx, "SQL query execution failed; review error and try again"
+            )
 
         return result
 

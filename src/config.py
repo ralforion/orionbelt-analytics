@@ -20,6 +20,45 @@ from .constants import (
 logger = logging.getLogger(__name__)
 
 
+SEMANTIC_NAMING_MODES = ("auto", "input_required", "review")
+
+
+def _resolve_semantic_naming_mode() -> str:
+    """Read SEMANTIC_NAMING_MODE, honouring the deprecated ENABLE_SAMPLING.
+
+    ``SEMANTIC_NAMING_MODE`` wins when set. Otherwise ``ENABLE_SAMPLING=false``
+    still means what it always did -- never ask the client's model -- which is
+    the ``review`` mode.
+
+    Returns:
+        One of :data:`SEMANTIC_NAMING_MODES`.
+    """
+    raw = os.getenv("SEMANTIC_NAMING_MODE")
+    if raw is not None and raw.strip():
+        mode = raw.strip().lower()
+        if mode in SEMANTIC_NAMING_MODES:
+            return mode
+        logger.warning(
+            f"Invalid SEMANTIC_NAMING_MODE='{raw}'. Must be one of: "
+            f"{', '.join(SEMANTIC_NAMING_MODES)}. Defaulting to 'auto'."
+        )
+        return "auto"
+
+    legacy = os.getenv("ENABLE_SAMPLING")
+    if legacy is None:
+        return "auto"
+    disabled = legacy.strip().lower() != "true"
+    # Every .env copied from the old template carries ENABLE_SAMPLING=true, so
+    # only the value that actually changes behaviour is worth a warning.
+    logger.log(
+        logging.WARNING if disabled else logging.INFO,
+        "ENABLE_SAMPLING is deprecated; use SEMANTIC_NAMING_MODE "
+        "(auto | input_required | review). ENABLE_SAMPLING=false maps to "
+        "'review'.",
+    )
+    return "review" if disabled else "auto"
+
+
 @dataclass
 class ServerConfig:
     """Server configuration settings."""
@@ -32,7 +71,10 @@ class ServerConfig:
     session_idle_timeout: int = DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS
     session_scan_interval: int = DEFAULT_SESSION_SCAN_INTERVAL_SECONDS
     chart_return_binary: bool = False
-    enable_sampling: bool = True
+    # How suggest_semantic_names obtains rename suggestions: "auto" (best path
+    # the client supports), "input_required" (multi round-trip request; needs
+    # FastMCP 4) or "review" (the client model proposes names itself).
+    semantic_naming_mode: str = "auto"
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
@@ -123,7 +165,7 @@ class ConfigManager:
                 ),
                 chart_return_binary=os.getenv("CHART_RETURN_BINARY", "false").lower()
                 == "true",
-                enable_sampling=os.getenv("ENABLE_SAMPLING", "true").lower() == "true",
+                semantic_naming_mode=_resolve_semantic_naming_mode(),
             )
             logger.info("Server configuration loaded")
         return self._server_config
@@ -187,6 +229,14 @@ class ConfigManager:
             raise ValueError(
                 f"Invalid MCP_TRANSPORT='{config.mcp_transport}'. "
                 f"Must be one of: {', '.join(sorted(valid_transports))}"
+            )
+        if config.mcp_transport == "sse":
+            # The HTTP+SSE transport has been superseded since MCP 2025-03-26
+            # and is formally Deprecated in the 2026-07-28 revision.
+            logger.warning(
+                "MCP_TRANSPORT=sse is deprecated and will be removed in a future "
+                "release: the MCP specification has deprecated the HTTP+SSE "
+                "transport. Switch to MCP_TRANSPORT=http (streamable HTTP)."
             )
 
         # Validate port range
