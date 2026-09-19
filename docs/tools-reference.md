@@ -64,7 +64,7 @@ Every tool accepts one optional argument that is not repeated in the tables belo
 
 1. The `connection` handle, if given. A handle that names no live session is an error (`unknown_connection`); it never falls back to somebody else's session.
 2. The MCP transport session, if the client has one.
-3. The only live session on the server, if there is exactly one. This forgives a model that drops its handle on a single-user server. With several sessions it would be a guess, so the call fails with `session_required` and says to pass `connection`. Set `SESSIONLESS_FALLBACK=none` to disable this rule.
+3. The only live session that was itself opened without a transport session, if there is exactly one. This forgives a model that drops its handle on a single-user server. A session that belongs to a transport session is never a candidate: its client identifies itself on every request, so a caller who does not cannot be that client. With several candidates it would be a guess, so the call fails with `session_required` and says to pass `connection`. The first time the rule places a caller, the server logs a warning. **If several people share the server, set `SESSIONLESS_FALLBACK=none`**: otherwise a client that calls a tool before `connect_database`, without a handle, lands in the one other user's session.
 
 **What a handle separates.** Each handle is a user session of its own: current schema, active or custom-loaded ontology, applied semantic names and the OBQC validator are private to it. Sessions on the same database share what describes the database: the connection, the schema cache and the GraphRAG index. A handle is an address, not a secret -- it does not authenticate anyone.
 

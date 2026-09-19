@@ -49,6 +49,7 @@ class HandlerContext:
     server_state: Any = None
     get_connection_fingerprint: Callable[..., Any] = _unset_service
     clear_session_state: Callable[..., Any] = _unset_service
+    aclear_session_state: Callable[..., Any] = _unset_service
     auto_initialize_graphrag_background: Callable[..., Any] = _unset_service
     add_resource: Callable[..., Any] = _unset_service
 

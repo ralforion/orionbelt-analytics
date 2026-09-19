@@ -13,7 +13,12 @@ import pytest
 
 from src.handler_context import HandlerContext
 from src.handlers import connection as connection_handler
-from src.server_state import ServerState, _clear_session_state, _server_state
+from src.server_state import (
+    ServerState,
+    _clear_session_state,
+    _server_state,
+    aclear_session_state,
+)
 from src.session import SessionData
 
 
@@ -232,6 +237,7 @@ def _services(state: ServerState, session: SessionData, own: FakeManager):
         get_session_db_manager=get_session_db_manager,
         get_connection_fingerprint=_get_connection_fingerprint,
         clear_session_state=_clear_session_state,
+        aclear_session_state=aclear_session_state,
         server_state=state,
     )
 
@@ -557,3 +563,59 @@ async def test_a_connection_change_by_the_last_holder_cancels_its_init_tasks():
         assert _server_state.get_runtime("conn-cancel") is None
     finally:
         _server_state.cleanup_session("runtime-cancel")
+
+
+async def test_a_connection_change_waits_for_cancelled_init_tasks_to_stop(
+    monkeypatch,
+):
+    """A cancelled task keeps running until its next suspension point. The old
+    database's RDF store must not be released while it is still unwinding."""
+    import asyncio
+
+    state = ServerState()
+    monkeypatch.setattr("src.server_state._server_state", state)
+    session = state.get_session("a")
+    state.bind_session(session, "conn-1", _connected())
+    order: list[str] = []
+
+    async def init() -> None:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.05)  # finishing what it was in the middle of
+            order.append("init task stopped")
+            raise
+
+    store = Mock(name="oxigraph_store")
+    store.close.side_effect = lambda: order.append("store released")
+    session.oxigraph_store = store
+    task = asyncio.create_task(init())
+    session.graphrag.track_init_task(task)
+    await asyncio.sleep(0)
+
+    await aclear_session_state(session, reason="connection change")
+
+    assert order == ["init task stopped", "store released"]
+    assert task.cancelled()
+    assert session.runtime is None
+
+
+async def test_a_connection_change_cancels_nothing_other_sessions_still_need(
+    monkeypatch,
+):
+    import asyncio
+
+    state = ServerState()
+    monkeypatch.setattr("src.server_state._server_state", state)
+    leaver, stays = state.get_session("a"), state.get_session("b")
+    state.bind_session(leaver, "conn-1", _connected())
+    state.bind_session(stays, "conn-1", _connected())
+    task = asyncio.create_task(asyncio.sleep(3600))
+    leaver.graphrag.track_init_task(task)
+
+    await aclear_session_state(leaver, reason="connection change")
+    await asyncio.sleep(0)
+
+    assert not task.cancelled()
+    assert task in stays.graphrag.init_tasks
+    task.cancel()
