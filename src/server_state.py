@@ -59,8 +59,38 @@ def normalize_handle(raw: object) -> str | None:
     return handle or None
 
 
+# First MCP revision without protocol-level sessions. Revisions are ISO dates,
+# so they compare as strings.
+_SESSIONLESS_SINCE = "2026-07-28"
+
+
+def _protocol_version(ctx: Context) -> str | None:
+    """The MCP protocol revision this request was made under, if known."""
+    try:
+        request_context = getattr(ctx, "request_context", None)
+    except Exception as e:  # outside a request, some FastMCP versions raise
+        logger.debug(f"No request context to read the protocol version from: {e}")
+        return None
+    version = getattr(request_context, "protocol_version", None)
+    if not isinstance(version, str):
+        session = getattr(request_context, "session", None)
+        version = getattr(session, "protocol_version", None)
+    return version if isinstance(version, str) else None
+
+
 def _transport_session_id(ctx: Context) -> str | None:
-    """The MCP session ID of this request, or None in the sessionless era."""
+    """The MCP session ID of this request, or None if it has no real session.
+
+    From revision 2026-07-28 on there is no transport session, but FastMCP 4
+    still reports a ``ctx.session_id`` there: a fresh UUID on every request
+    (verified against 4.0.5; its upgrade guide says ``None``). Trusting it would
+    give each call a new, empty session and never reach the connection handle
+    or the actionable error. The protocol revision is the dependable signal, so
+    in the sessionless era the ID is disregarded.
+    """
+    version = _protocol_version(ctx)
+    if version is not None and version >= _SESSIONLESS_SINCE:
+        return None
     session_id = getattr(ctx, "session_id", None)
     return str(session_id) if session_id else None
 
@@ -86,13 +116,13 @@ def get_session_id(ctx: Context) -> str:
     Raises:
         SessionRequiredError: If the request carries no session ID.
     """
-    session_id = getattr(ctx, "session_id", None)
-    if session_id:
-        return str(session_id)
+    session_id = _transport_session_id(ctx)
+    if session_id is not None:
+        return session_id
     raise SessionRequiredError(
         "This request carries no MCP session, so the server cannot tell whose "
-        "state it belongs to. Connect with a client that keeps an MCP session "
-        "(protocol 2025-11-25 or earlier)."
+        "state it belongs to. Pass the connection handle from connect_database "
+        "as the `connection` argument."
     )
 
 

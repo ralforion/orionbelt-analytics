@@ -31,6 +31,24 @@ from src.server_state import (
 HANDLE = re.compile(r"^ob_[a-km-np-z2-9]{6}$")
 
 
+# FastMCP 4's client speaks the sessionless 2026-07-28 era unless told
+# otherwise; FastMCP 3's only knows the handshake era and has no such switch.
+def _client_knows_eras() -> bool:
+    try:
+        Client(mcp, mode="legacy")
+    except TypeError:
+        return False
+    return True
+
+
+CLIENT_KNOWS_ERAS = _client_knows_eras()
+
+
+def _handshake_era_client() -> Client:
+    """A client that keeps an MCP transport session, on either FastMCP."""
+    return Client(mcp, mode="legacy") if CLIENT_KNOWS_ERAS else Client(mcp)
+
+
 def _ctx(session_id: str | None = None) -> types.SimpleNamespace:
     return types.SimpleNamespace(session_id=session_id)
 
@@ -266,7 +284,7 @@ async def test_a_sessionless_client_works_through_its_handle(sessionless_era):
 async def test_a_client_with_a_transport_session_is_told_its_handle_once(
     duckdb_workspace,
 ):
-    async with Client(mcp) as client:
+    async with _handshake_era_client() as client:
         connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
         handle = _handle_in(connected.data)
         reset = await client.call_tool("reset_cache", {})
@@ -301,3 +319,71 @@ def test_an_invalid_fallback_setting_keeps_the_default(monkeypatch, caplog):
 
     assert ConfigManager().get_server_config().sessionless_fallback == "sole_session"
     assert "SESSIONLESS_FALLBACK" in caplog.text
+
+
+# --- telling the eras apart ---
+
+
+def _era_ctx(version: object, session_id: str = "per-request-uuid"):
+    request_context = types.SimpleNamespace(protocol_version=version)
+    return types.SimpleNamespace(session_id=session_id, request_context=request_context)
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("2025-11-25", "per-request-uuid"),  # handshake era: a real session
+        ("2026-07-28", None),  # FastMCP 4 mints this ID per request
+        ("2027-01-15", None),  # later revisions stay sessionless
+        (None, "per-request-uuid"),  # FastMCP 3 does not report a revision
+    ],
+)
+def test_the_session_id_is_disregarded_in_the_sessionless_era(version, expected):
+    assert state_module._transport_session_id(_era_ctx(version)) == expected
+
+
+def test_the_revision_is_also_read_from_the_server_session():
+    session = types.SimpleNamespace(protocol_version="2026-07-28")
+    ctx = types.SimpleNamespace(
+        session_id="per-request-uuid",
+        request_context=types.SimpleNamespace(session=session),
+    )
+
+    assert state_module._transport_session_id(ctx) is None
+
+
+def test_a_per_request_id_does_not_open_a_session_per_call(state, monkeypatch):
+    """The failure this guards against: every modern call landing in a new,
+    empty session because its throwaway ID looked like a real one."""
+    _fallback(monkeypatch, "sole_session")
+    only = state.get_session("real-session")
+
+    for call in range(3):
+        assert get_session_data(_era_ctx("2026-07-28", f"uuid-{call}")) is only
+
+    assert state.session_count == 1
+
+
+@pytest.mark.skipif(
+    not CLIENT_KNOWS_ERAS, reason="needs a client that speaks MCP 2026-07-28"
+)
+async def test_a_real_sessionless_client_works_through_its_handle(duckdb_workspace):
+    """The same journey with nothing patched: FastMCP 4 reports a fresh
+    ``ctx.session_id`` on every modern request, and it must not be believed."""
+    state = duckdb_workspace
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = _handle_in(connected.data)
+        assert state.session_count == 1
+
+        schemas = await client.call_tool("list_schemas", {"connection": handle})
+        assert "main" in schemas.data
+        assert (await client.call_tool("list_schemas", {})).data == schemas.data
+        assert state.session_count == 1  # no session per request
+
+        second = _handle_in(
+            (await client.call_tool("connect_database", {"db_type": "duckdb"})).data
+        )
+        assert second != handle
+        with pytest.raises(ToolError, match="connection"):
+            await client.call_tool("list_schemas", {})
