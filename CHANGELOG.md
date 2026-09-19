@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A connection handle, so a client without a transport session can work.**
+  MCP 2026-07-28 removed protocol-level sessions and tells servers with state
+  to mint a handle and take it back as an ordinary tool argument.
+  `connect_database` now returns one (`ob_k2m9qa`), and all 28 tools accept it
+  as the optional `connection` argument. A call finds its session by the
+  handle, else by the MCP transport session, else -- unless
+  `SESSIONLESS_FALLBACK=none` -- as the only live session that was itself opened
+  without a transport session (never one that belongs to a transport session;
+  logged as a warning on first use; multi-user deployments should set `none`).
+  A handle that names no live session is an error (`unknown_connection`) and
+  never lands in another session. Each handle is a user session of its own,
+  with its own current schema and ontology state; sessions on one database
+  still share the connection, schema cache and GraphRAG index. Clients on
+  protocol versions up to 2025-11-25 keep working unchanged and are told their
+  handle once, by `connect_database`. The handle is an address, not
+  authentication.
+  A caller that cannot be placed gets a plain refusal: the two session errors
+  cross the tool boundary as `ToolError`, so the message that says how to
+  recover reaches the model verbatim, survives `mask_error_details`, and is
+  logged without a stack trace.
+  The sessionless era is recognised by the protocol revision of the request,
+  not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
+  a fresh one per request, which would otherwise open an empty session on
+  every call.
+
 ### Changed
 - **A request without an MCP session is refused, not pooled.** `get_session_id`
   used to fall back to a literal `"default_session"` (and before that to the
@@ -16,6 +42,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manager. It now raises `SessionRequiredError` (`session_required`). First
   step of the stateless-protocol plan; a connection handle as a tool argument
   follows.
+- **The database manager and schema cache are shared per connection.** They
+  were owned per MCP session, although the manager connects with the server's
+  own credentials and the cache is a set of facts about the database. A
+  `ConnectionRuntime` per connection ID now holds both, and `ServerState` binds
+  sessions to it: a second client on the same database joins a warm cache and
+  an open connection instead of rebuilding them, and the manager is
+  disconnected when the last session leaves. `connect_database` on a session
+  that shares a runtime connects a fresh manager rather than reconnecting the
+  shared one under the other sessions, and replaces the shared one only if it
+  has lost its connection. Groundwork for clients without a transport session.
+- **GraphRAG is shared per connection too; ontology state is not.** The
+  GraphRAG manager, an index built from the schema, moved onto the same
+  `ConnectionRuntime`. A GraphRAG initialisation keeps running when the session
+  that started it closes while others still hold the runtime, and its result
+  lands in the shared state; it is cancelled with the last holder. Ontology
+  state stays per session on purpose: which ontology is active, a custom one
+  from `load_my_ontology`, applied semantic names and the OBQC validator are a
+  user's choices, and two people on one database may work with different
+  ones. The current schema is per session as well.
+- **Tools that rewrite shared state or the workspace are serialized per connection.**
+  `discover_schema`, `generate_ontology`, `apply_semantic_names`,
+  `load_my_ontology`, `reset_cache`, `cleanup_workspace`, `cleanup_old_versions`
+  and the workspace restore inside `connect_database` hold the runtime's writer
+  lock. Readers take no lock, and different databases do not wait for each
+  other.
 - **Progress messages go through one function.** All 64 `ctx.info` /
   `ctx.error` calls in the handlers now use `notify_client` in `src/utils.py`
   (the former `safe_ctx_info`, generalized). A notification that cannot be
@@ -43,6 +94,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http` (streamable HTTP).
 
 ### Fixed
+- **Background initialisation stays with the database it was started for.**
+  GraphRAG initialisation and `AUTO_ONTOLOGY` generation outlive the tool call
+  that started them, and read the session lazily all the way through. A session
+  that connected to another database meanwhile pointed them at the new
+  database: the old database's index was installed as the new one's GraphRAG,
+  its ontology loaded into the new database's RDF store and named as the
+  session's ontology, and its metadata written into the wrong workspace. With
+  GraphRAG shared per connection that would have reached every session on the
+  new database. The work now takes its GraphRAG state and connection ID once,
+  up front; the ontology task leaves a session that moved on alone, and still
+  writes the file and metadata where they belong. A connection change also
+  waits for the init tasks it cancels before the old RDF store is released.
 - **A reconnecting client lost the RDF store.** The Oxigraph store was opened
   once per MCP session, but its RocksDB directory is per connection and takes
   exactly one handle. A new session on the same database (a chat client

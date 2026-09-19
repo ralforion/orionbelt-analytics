@@ -2,20 +2,33 @@
 
 import logging
 import os
+from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import Any
 
 from fastmcp import Context
 
 from ..constants import SUPPORTED_DB_TYPES
+from ..database_manager import DatabaseManager
 from ..exceptions import ConnectionError, ValidationError
 from ..handler_context import HandlerContext
 from ..lifecycle.metadata import mutate_workspace_metadata
 from ..paths import OUTPUT_DIR
+from ..session import ConnectionRuntime, SessionData
 from ..utils import notify_client, utc_now
 from ..workspace import detect_workspace, format_workspace_summary
 from .workspace import _format_restore_summary, _restore_workspace_core
 
 logger = logging.getLogger(__name__)
+
+
+def _restore_lock(
+    services: "HandlerContext", session: Any
+) -> AbstractAsyncContextManager[Any]:
+    """The connection's writer lock, or a no-op without a registry."""
+    if services.server_state is None:
+        return nullcontext()
+    lock: AbstractAsyncContextManager[Any] = services.server_state.writer_lock(session)
+    return lock
 
 
 async def connect_database(
@@ -48,7 +61,16 @@ async def connect_database(
             f"Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
         ).to_response()
 
-    db_manager = services.get_session_db_manager(ctx)
+    # A session sharing a connection runtime connects with a fresh manager:
+    # reconnecting the shared one in place would swap the engine out from under
+    # every other session using it. ServerState.bind_session then decides
+    # whether the fresh manager is redundant or replaces a dead one.
+    shares_runtime = services.provides("get_session_data") and isinstance(
+        getattr(services.get_session_data(ctx), "runtime", None), ConnectionRuntime
+    )
+    db_manager = (
+        DatabaseManager() if shares_runtime else services.get_session_db_manager(ctx)
+    )
     success = False
     db_name = ""
 
@@ -284,13 +306,30 @@ async def connect_database(
             logger.info(
                 f"Connection changed (old: {session.connection_id[:8]}..., new: {new_conn_id[:8]}...)"
             )
-            services.clear_session_state(session, reason="connection change")
+            # Awaited where it can be: background init started on the old
+            # database is cancelled if nobody else needs it, and must have
+            # stopped before the old database's RDF store is released.
+            if services.provides("aclear_session_state"):
+                await services.aclear_session_state(session, reason="connection change")
+            else:
+                services.clear_session_state(session, reason="connection change")
         elif not session.connection_id:
             logger.info(f"Initial connection established: {new_conn_id[:8]}...")
 
         session.connection_id = new_conn_id
         session.connected_at = utc_now()
-        session.clear_schema_cache()
+
+        # Join the runtime every session on this database shares. Its schema
+        # cache describes the database, not this client, so it is only reset
+        # when nobody else is relying on it.
+        shared_with_others = False
+        if services.server_state is not None and isinstance(session, SessionData):
+            runtime = services.server_state.bind_session(
+                session, new_conn_id, db_manager
+            )
+            shared_with_others = runtime.holders > 1
+        if not shared_with_others:
+            session.clear_schema_cache()
 
         await notify_client(ctx, f"Connected to {db_type}: {db_name}")
 
@@ -311,9 +350,11 @@ async def connect_database(
         workspace = detect_workspace(new_conn_id)
         if workspace and services.provides("get_oxigraph_store"):
             try:
-                restore_result = await _restore_workspace_core(
-                    ctx, session, new_conn_id, None, services
-                )
+                # Restoring writes into state other sessions may be using.
+                async with _restore_lock(services, session):
+                    restore_result = await _restore_workspace_core(
+                        ctx, session, new_conn_id, None, services
+                    )
                 if restore_result:
                     response += "\n\n" + _format_restore_summary(restore_result)
                 else:
@@ -328,6 +369,12 @@ async def connect_database(
 
         return response
     else:
+        if db_manager is not services.get_session_data(ctx).db_manager:
+            # A fresh manager that never connected; the shared one is untouched.
+            try:
+                db_manager.disconnect()
+            except Exception as e:
+                logger.debug(f"Discarding failed connect manager: {e}")
         await notify_client(
             ctx, "Database connection failed; check credentials and try again"
         )

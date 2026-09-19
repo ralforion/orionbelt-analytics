@@ -59,6 +59,21 @@ def _resolve_semantic_naming_mode() -> str:
     return "review" if disabled else "auto"
 
 
+SESSIONLESS_FALLBACKS = ("sole_session", "none")
+
+
+def _resolve_sessionless_fallback() -> str:
+    """Read SESSIONLESS_FALLBACK, defaulting to ``sole_session``."""
+    raw = os.getenv("SESSIONLESS_FALLBACK", "sole_session").strip().lower()
+    if raw in SESSIONLESS_FALLBACKS:
+        return raw
+    logger.warning(
+        f"Invalid SESSIONLESS_FALLBACK='{raw}'. Must be one of: "
+        f"{', '.join(SESSIONLESS_FALLBACKS)}. Defaulting to 'sole_session'."
+    )
+    return "sole_session"
+
+
 @dataclass
 class ServerConfig:
     """Server configuration settings."""
@@ -75,6 +90,11 @@ class ServerConfig:
     # the client supports), "input_required" (multi round-trip request; needs
     # FastMCP 4) or "review" (the client model proposes names itself).
     semantic_naming_mode: str = "auto"
+    # What a request with neither a transport session nor a connection handle
+    # resolves to: "sole_session" (the only live session, if there is exactly
+    # one) or "none" (always an error). Use "none" when several people share
+    # the server and must never land in each other's session by omission.
+    sessionless_fallback: str = "sole_session"
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
@@ -166,6 +186,7 @@ class ConfigManager:
                 chart_return_binary=os.getenv("CHART_RETURN_BINARY", "false").lower()
                 == "true",
                 semantic_naming_mode=_resolve_semantic_naming_mode(),
+                sessionless_fallback=_resolve_sessionless_fallback(),
             )
             logger.info("Server configuration loaded")
         return self._server_config

@@ -178,6 +178,42 @@ class SchemaState:
         self.ontology = OntologyState()
 
 
+class ConnectionRuntime:
+    """Facts about one database, shared by every session connected to it.
+
+    The line runs between what the *database* is and what a *user* is doing
+    with it. Shared here: the database manager (it connects with the server's
+    own credentials), the schema cache (tables, columns and keys as the
+    database reports them) and GraphRAG (an index built from that schema).
+    Owning those per session meant every reconnect and every second tab
+    rebuilt them.
+
+    Deliberately not shared: ontology state. Which ontology is active, a
+    custom one brought in with ``load_my_ontology``, the semantic names applied
+    to it and the OBQC validator built from it are a user's choices. Two
+    people on one database may work with different ontologies, and one of them
+    changing theirs must not swap the other's validator mid-conversation. That
+    state stays on ``SessionData``, as does the current-schema pointer.
+
+    The registry in ``ServerState`` keeps one runtime per connection ID and
+    counts the sessions bound to it.
+    """
+
+    def __init__(self, connection_id: str) -> None:
+        self.connection_id = connection_id
+        self.db_manager: Any | None = None  # DatabaseManager
+        self.schema_cache = SchemaCache()
+        self.graphrag = GraphRAGState()
+        # Serializes the tools that rewrite this state or the connection's
+        # workspace on disk, which every session on the database shares
+        # whatever it keeps in memory (discover_schema, generate_ontology,
+        # apply_semantic_names, load_my_ontology, reset_cache,
+        # cleanup_workspace, cleanup_old_versions, and the restore on connect).
+        self.lock = asyncio.Lock()
+        self.holders = 0  # sessions currently bound; managed by ServerState
+        self.created_at: datetime = utc_now()
+
+
 class SessionData:
     """Per-session data storage with multi-schema support.
 
@@ -191,12 +227,24 @@ class SessionData:
         self.schema_cache = SchemaCache()
         self.rdf_store = RDFStoreState()
 
+        # Shared per-connection state, once ServerState has bound this session
+        # to it. Unbound (tests, no registry) the session owns private copies.
+        self.runtime: ConnectionRuntime | None = None
+
         # Connection-scoped state (shared across schemas)
         self.graphrag = GraphRAGState()
 
         # Multi-schema state (ontology is per-schema)
         self._schema_states: dict[str, SchemaState] = {}
         self._current_schema: str | None = None
+
+        # The name a client without a transport session uses to come back to
+        # this session: minted by ServerState, passed as the `connection` tool
+        # argument. An address, not a secret.
+        self.handle: str | None = None
+        # Whether the log has already said that a caller without session or
+        # handle was placed here (the sole-session fallback). Once is enough.
+        self.fallback_noted: bool = False
 
         # Activity tracking for idle eviction
         self.created_at: datetime = utc_now()
@@ -286,15 +334,50 @@ class SessionData:
         """Internal helper: get or create current SchemaState."""
         return self.get_or_create_schema_state()
 
-    # Connection properties (session-scoped, unchanged)
+    # --- Shared connection runtime ---
+
+    def bind_runtime(self, runtime: ConnectionRuntime) -> None:
+        """Share ``runtime``'s state instead of this session's private copies.
+
+        Only ``ServerState`` calls this; it owns the holder count.
+        """
+        self.runtime = runtime
+        self.schema_cache = runtime.schema_cache
+        self.graphrag = runtime.graphrag
+        # Whatever manager this session brought is the runtime's business now.
+        self.connection.db_manager = None
+
+    def unbind_runtime(self, detach: bool = True) -> None:
+        """Leave the runtime, leaving the shared state intact.
+
+        Args:
+            detach: True for a session that lives on (a connection change): it
+                gets private, empty state back. False for a session being torn
+                down: it keeps its references, so background work it started
+                still lands in the shared state the other sessions read,
+                rather than in objects nobody will look at again.
+        """
+        self.runtime = None
+        if not detach:
+            return
+        self.schema_cache = SchemaCache()
+        self.graphrag = GraphRAGState()
+        self.connection.db_manager = None
+
+    # Connection properties
 
     @property
     def db_manager(self) -> Any | None:
+        if self.runtime is not None:
+            return self.runtime.db_manager
         return self.connection.db_manager
 
     @db_manager.setter
     def db_manager(self, value: Any | None) -> None:
-        self.connection.db_manager = value
+        if self.runtime is not None:
+            self.runtime.db_manager = value
+        else:
+            self.connection.db_manager = value
 
     @property
     def connection_id(self) -> str | None:
