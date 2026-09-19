@@ -576,3 +576,135 @@ class TestGraphRAGIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
+
+
+# --- ambiguous join paths ---
+
+
+def _table(name: str, foreign_keys: list[tuple[str, str, str]]) -> dict:
+    return {
+        "name": name,
+        "schema": "public",
+        "columns": [],
+        "foreign_keys": [
+            {"column": c, "referenced_table": t, "referenced_column": rc}
+            for c, t, rc in foreign_keys
+        ],
+    }
+
+
+@pytest.fixture
+def two_routes_to_region():
+    """An order reaches a region through its customer or through its warehouse.
+    Both routes are two joins long, and they answer different questions."""
+    return [
+        _table("regions", []),
+        _table("customers", [("region_id", "regions", "id")]),
+        _table("warehouses", [("region_id", "regions", "id")]),
+        _table(
+            "orders",
+            [
+                ("customer_id", "customers", "id"),
+                ("warehouse_id", "warehouses", "id"),
+            ],
+        ),
+    ]
+
+
+class TestAmbiguousJoinPaths:
+    def test_an_equally_short_route_is_reported_not_dropped(self, two_routes_to_region):
+        retriever = GraphRetriever()
+        retriever.build_graph(two_routes_to_region)
+
+        chosen = retriever.find_join_path("orders", "regions")
+        alternatives = retriever.find_alternative_join_paths(
+            "orders", "regions", chosen=chosen
+        )
+
+        via = {chosen[0]["to_table"]} | {alt[0]["to_table"] for alt in alternatives}
+        assert via == {"customers", "warehouses"}
+        assert len(alternatives) == 1
+        assert [j["to_table"] for j in alternatives[0]][-1] == "regions"
+        # Join columns follow the foreign keys, whichever way they point.
+        first = alternatives[0][0]
+        assert first["from_table"] == "orders" and first["to_column"] == "id"
+
+    def test_a_single_route_has_no_alternatives(self, sample_tables):
+        retriever = GraphRetriever()
+        retriever.build_graph(sample_tables)
+
+        chosen = retriever.find_join_path("order_items", "customers", max_hops=3)
+
+        assert (
+            retriever.find_alternative_join_paths(
+                "order_items", "customers", chosen=chosen
+            )
+            == []
+        )
+
+    def test_a_longer_route_is_not_an_alternative(self, two_routes_to_region):
+        """Only ties count: a detour is not a rival reading of the question."""
+        tables = [
+            *two_routes_to_region,
+            _table("carriers", [("warehouse_id", "warehouses", "id")]),
+        ]
+        retriever = GraphRetriever()
+        retriever.build_graph(tables)
+
+        chosen = retriever.find_join_path("carriers", "regions")
+
+        assert [j["to_table"] for j in chosen] == ["warehouses", "regions"]
+        assert (
+            retriever.find_alternative_join_paths("carriers", "regions", chosen=chosen)
+            == []
+        )
+
+    def test_unknown_tables_have_no_alternatives(self, two_routes_to_region):
+        retriever = GraphRetriever()
+        retriever.build_graph(two_routes_to_region)
+
+        assert retriever.find_alternative_join_paths("orders", "nowhere", []) == []
+
+
+class TestJoinPathToolReportsAmbiguity:
+    """The tool result says whether the path was the only one of its length."""
+
+    @staticmethod
+    async def _call(tables, from_table, to_table):
+        from unittest.mock import AsyncMock, Mock
+
+        from src.handler_context import HandlerContext
+        from src.handlers import graphrag as graphrag_handler
+
+        retriever = GraphRetriever()
+        retriever.build_graph(tables)
+        session = Mock()
+        session.graphrag_initialized = True
+        session.graphrag_manager.graph_retriever = retriever
+        ctx = Mock()
+        ctx.info = AsyncMock()
+        services = HandlerContext(
+            get_session_data=lambda _ctx: session,
+            create_error_response=lambda message, kind: {"error": message},
+        )
+        return await graphrag_handler.graphrag_find_join_path(
+            ctx, from_table, to_table, 12, services
+        )
+
+    async def test_two_equally_short_routes(self, two_routes_to_region):
+        result = await self._call(two_routes_to_region, "orders", "regions")
+
+        assert result["success"] is True
+        assert result["ambiguous"] is True
+        assert len(result["alternatives"]) == 1
+        routes = {result["path"][1], result["alternatives"][0]["path"][1]}
+        assert routes == {"customers", "warehouses"}
+        assert result["alternatives"][0]["path"][-1] == "regions"
+        assert "ask the user" in result["ambiguity_note"]
+
+    async def test_the_only_route(self, sample_tables):
+        result = await self._call(sample_tables, "order_items", "customers")
+
+        assert result["ambiguous"] is False  # an answer, not an absence
+        assert "alternatives" not in result
+        assert "ambiguity_note" not in result

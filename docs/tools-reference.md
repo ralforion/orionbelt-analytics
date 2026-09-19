@@ -575,13 +575,16 @@ Discover a join path between two tables using GraphRAG graph traversal.
 | `max_hops` | integer | No | `3` | Maximum number of joins allowed in the path |
 
 **Returns:**
-- On success: `success`, `from`, `to`, `hops`, `path` (ordered table list), and `joins` (per-hop join specifications)
+- On success: `success`, `from`, `to`, `hops`, `path` (ordered table list), `joins` (per-hop join specifications), and `ambiguous`
+- When `ambiguous` is `true`: also `alternatives` (each with its own `path` and `joins`) and an `ambiguity_note`
 - When no path is found: `success: false`, `from`, `to`, and a `message`
 
 **Key Features:**
 - Requires GraphRAG initialization (`discover_schema` first)
 - Helps construct multi-table joins without manually reasoning over foreign keys
 - Returns the concrete join conditions for each hop
+- **Says when the path is not the only one.** The tool returns *a* shortest path. When other routes are exactly as short -- an order reaching a region through its customer or through its warehouse -- they are listed as `alternatives`, because they generally answer different questions. `ambiguous` is always present, so `false` is a definite answer. Longer detours are not reported, and two foreign keys between the *same* pair of tables are not distinguished (the graph keeps one edge per table pair)
+- The choice is left to the conversation on purpose: explaining why two routes differ takes words, so the model should say which route the question implies or ask the user, rather than the tool forcing a pick-one form
 
 ---
 
