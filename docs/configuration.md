@@ -346,7 +346,7 @@ Everyone else gets the review path, with an unchanged response shape.
 
 **Disabling:** set `SEMANTIC_NAMING_MODE=review` to force the review path even when the client supports sampling. Useful for cost control, deterministic regression testing, or when a particular host LLM produces poor rename suggestions.
 
-**Logging:** sampling activity is logged at INFO/WARNING with elapsed time and item counts -- look for lines starting with `MCP sampling:` in the server log to verify the path the request took.
+**Logging:** look for lines starting with `MCP sampling:` in the server log to verify the path a request took: one when the request is handed to the client (with the item count) and one when the answer is parsed (with the suggestion counts and the model name). The two rounds are separate requests, so no elapsed time is logged. When the review path is chosen instead, a line says why: `Client cannot answer a sampling request; using the review path`, or a warning if `SEMANTIC_NAMING_MODE=input_required` asked for more than the client can do.
 
 ---
 
