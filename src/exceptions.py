@@ -23,6 +23,7 @@ class ErrorType(StrEnum):
     DEPENDENCY = "dependency_error"
     OBQC = "obqc_error"
     SESSION = "session_required"
+    UNKNOWN_CONNECTION = "unknown_connection"
 
 
 class OrionBeltError(Exception):
@@ -95,6 +96,12 @@ class SessionRequiredError(OrionBeltError):
     """The request cannot be attributed to any client's state."""
 
     error_type = ErrorType.SESSION
+
+
+class UnknownConnectionError(OrionBeltError):
+    """A connection handle that names no live session."""
+
+    error_type = ErrorType.UNKNOWN_CONNECTION
 
 
 class DependencyError(OrionBeltError):

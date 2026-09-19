@@ -44,6 +44,14 @@ connect_database(
 - ✅ Credentials encrypted with master password
 - ✅ Connection fingerprint created (prevents data collisions)
 - ✅ Session initialized
+- ✅ Connection handle returned (e.g. `ob_k2m9qa`)
+
+**Keep the connection handle.** Every tool accepts it as the optional
+`connection` argument. A client that keeps an MCP session never needs it. If
+any call fails with `session_required` or asks for a connection, pass the
+handle on that call and on every call after it. If a call fails with
+`unknown_connection`, the session expired: call `connect_database` again and
+use the new handle.
 
 **Next:** List available schemas
 

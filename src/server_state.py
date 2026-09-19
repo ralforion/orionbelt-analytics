@@ -14,8 +14,10 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 from collections.abc import Iterator
 from contextlib import AbstractAsyncContextManager, contextmanager, nullcontext
+from contextvars import ContextVar, Token
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -24,7 +26,7 @@ from fastmcp import Context
 from pydantic import BaseModel
 
 from .database_manager import DatabaseManager
-from .exceptions import SessionRequiredError
+from .exceptions import SessionRequiredError, UnknownConnectionError
 from .obqc_validator import OBQCValidator
 from .ontology_generator import OntologyGenerator
 from .oxigraph_store import OXIGRAPH_AVAILABLE, OxigraphStoreManager
@@ -33,6 +35,34 @@ from .session import ConnectionRuntime, SessionData
 from .utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+# A connection handle looks like ``ob_k2m9qa``. The alphabet leaves out the
+# characters a model or a person confuses when copying one (l/1, o/0).
+_HANDLE_PREFIX = "ob_"
+_HANDLE_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
+_HANDLE_LENGTH = 6
+
+# The handle the current tool call runs under, set by the registration layer
+# for the length of the call. A context variable, because handlers resolve
+# their session from ``ctx`` alone and every request runs in its own context.
+_requested_handle: ContextVar[str | None] = ContextVar(
+    "orionbelt_connection_handle", default=None
+)
+
+
+def normalize_handle(raw: object) -> str | None:
+    """Trim and lowercase a handle argument; blank or missing means none."""
+    if not isinstance(raw, str):
+        return None
+    handle = raw.strip().lower()
+    return handle or None
+
+
+def _transport_session_id(ctx: Context) -> str | None:
+    """The MCP session ID of this request, or None in the sessionless era."""
+    session_id = getattr(ctx, "session_id", None)
+    return str(session_id) if session_id else None
 
 
 def get_session_id(ctx: Context) -> str:
@@ -179,6 +209,74 @@ class ServerState:
         self._stores: dict[Path, _StoreHandle] = {}
         self._removing_stores: dict[Path, int] = {}
         self._runtimes: dict[str, ConnectionRuntime] = {}
+        self._handles: dict[str, str] = {}  # connection handle -> session key
+
+    # --- Connection handles ---
+
+    def _mint_handle(self) -> str:
+        while True:
+            handle = _HANDLE_PREFIX + "".join(
+                secrets.choice(_HANDLE_ALPHABET) for _ in range(_HANDLE_LENGTH)
+            )
+            if handle not in self._handles:
+                return handle
+
+    def _register(self, session_key: str) -> SessionData:
+        session = SessionData()
+        session.handle = self._mint_handle()
+        self._handles[session.handle] = session_key
+        self._sessions[session_key] = session
+        return session
+
+    def open_handle_session(self) -> SessionData:
+        """Start a session for a client that has no transport session.
+
+        Its handle is the only name it has; the client passes it back as the
+        ``connection`` tool argument.
+        """
+        handle = self._mint_handle()
+        session = SessionData()
+        session.handle = handle
+        key = f"handle:{handle}"
+        self._handles[handle] = key
+        self._sessions[key] = session
+        self._ensure_eviction_task()
+        logger.debug(f"Opened handle session: {handle}")
+        return session
+
+    def session_for_handle(self, handle: str) -> SessionData:
+        """The live session a handle names.
+
+        Raises:
+            UnknownConnectionError: If no live session has this handle. Never
+                falls back to another session: a mistyped handle must not land
+                in someone else's state.
+        """
+        key = self._handles.get(handle)
+        if key is None or key not in self._sessions:
+            raise UnknownConnectionError(
+                f"Unknown or expired connection handle '{handle}'. Call "
+                "connect_database to get a new one, then pass it as the "
+                "`connection` argument."
+            )
+        return self.get_session(key)
+
+    def peek_session(self, session_key: str) -> SessionData | None:
+        """An existing session, without creating one or counting as activity."""
+        return self._sessions.get(session_key)
+
+    def peek_handle(self, handle: str) -> SessionData | None:
+        """The session a handle names, or None; never raises."""
+        key = self._handles.get(handle)
+        return self._sessions.get(key) if key is not None else None
+
+    def sole_session(self) -> SessionData | None:
+        """The only live session, if there is exactly one."""
+        if len(self._sessions) != 1:
+            return None
+        session = next(iter(self._sessions.values()))
+        session.touch()
+        return session
 
     # --- Shared connection runtimes ---
 
@@ -391,7 +489,7 @@ class ServerState:
     def get_session(self, session_id: str) -> SessionData:
         """Get or create session data for a given session ID."""
         if session_id not in self._sessions:
-            self._sessions[session_id] = SessionData()
+            self._register(session_id)
             logger.debug(f"Created new session: {session_id}")
         session = self._sessions[session_id]
         session.touch()
@@ -460,6 +558,9 @@ class ServerState:
             except Exception as e:
                 logger.warning(f"Error closing Oxigraph for session {session_id}: {e}")
 
+        handle = getattr(session, "handle", None)
+        if isinstance(handle, str):
+            self._handles.pop(handle, None)
         del self._sessions[session_id]
         logger.debug(f"Cleaned up session: {session_id}")
 
@@ -584,9 +685,88 @@ _server_state = ServerState()
 
 
 def get_session_data(ctx: Context) -> SessionData:
-    """Get session data for the current context."""
-    session_id = get_session_id(ctx)
-    return _server_state.get_session(session_id)
+    """Resolve the session this request belongs to.
+
+    In order: the connection handle the call was made with, the MCP transport
+    session, then -- unless ``SESSIONLESS_FALLBACK=none`` -- the only live
+    session if there is exactly one. The last rule forgives a model that drops
+    its handle on a single-user server; with several sessions it would be a
+    guess, so it is an error instead.
+
+    Raises:
+        UnknownConnectionError: The handle names no live session.
+        SessionRequiredError: Nothing identifies the caller.
+    """
+    handle = _requested_handle.get()
+    if handle is not None:
+        return _server_state.session_for_handle(handle)
+
+    session_id = _transport_session_id(ctx)
+    if session_id is not None:
+        return _server_state.get_session(session_id)
+
+    if _sessionless_fallback_enabled():
+        sole = _server_state.sole_session()
+        if sole is not None:
+            return sole
+
+    raise SessionRequiredError(
+        "This request carries neither an MCP session nor a connection handle, "
+        "so the server cannot tell whose state it belongs to. Call "
+        "connect_database and pass the connection handle it returns as the "
+        "`connection` argument of every following call."
+    )
+
+
+def _sessionless_fallback_enabled() -> bool:
+    from .config import config_manager
+
+    return config_manager.get_server_config().sessionless_fallback == "sole_session"
+
+
+def begin_connection_scope(
+    ctx: Context, handle_argument: object, mint: bool
+) -> "Token[str | None]":
+    """Run the current tool call under the connection handle it was given.
+
+    Args:
+        ctx: FastMCP request context.
+        handle_argument: The tool's ``connection`` argument, if any.
+        mint: True for ``connect_database``: a caller with neither a handle
+            nor a transport session gets a new session and handle, because
+            it is about to need one.
+
+    Returns:
+        Token for :func:`end_connection_scope`.
+
+    Raises:
+        UnknownConnectionError: The handle names no live session. Raised here,
+            before the tool has done anything.
+    """
+    handle = normalize_handle(handle_argument)
+    if handle is not None:
+        _server_state.session_for_handle(handle)
+    elif mint and _transport_session_id(ctx) is None:
+        handle = _server_state.open_handle_session().handle
+    return _requested_handle.set(handle)
+
+
+def end_connection_scope(token: "Token[str | None]") -> None:
+    """Leave the scope opened by :func:`begin_connection_scope`."""
+    _requested_handle.reset(token)
+
+
+def peek_current_session(ctx: Context) -> SessionData | None:
+    """The session this request resolved to, without creating or raising."""
+    handle = _requested_handle.get()
+    if handle is not None:
+        return _server_state.peek_handle(handle)
+    session_id = _transport_session_id(ctx)
+    if session_id is not None:
+        return _server_state.peek_session(session_id)
+    if _sessionless_fallback_enabled():
+        return _server_state.sole_session()
+    return None
 
 
 def get_session_db_manager(ctx: Context) -> DatabaseManager:
@@ -594,7 +774,7 @@ def get_session_db_manager(ctx: Context) -> DatabaseManager:
     session = get_session_data(ctx)
     if session.db_manager is None:
         session.db_manager = DatabaseManager()
-        logger.debug(f"Created new DatabaseManager for session: {get_session_id(ctx)}")
+        logger.debug(f"Created new DatabaseManager for session: {session.handle}")
     return cast(DatabaseManager, session.db_manager)
 
 
@@ -633,7 +813,7 @@ def get_session_obqc_validator(ctx: Context) -> OBQCValidator | None:
             )
 
         session.obqc_validator.load_ontology(ontology_generator.graph, base_uri)
-        logger.debug(f"Initialized OBQC validator for session: {get_session_id(ctx)}")
+        logger.debug(f"Initialized OBQC validator for session: {session.handle}")
 
     # Registered outside the creation branch, and on every call: views may be
     # discovered after the validator was built, and without them every query

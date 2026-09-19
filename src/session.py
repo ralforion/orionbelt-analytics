@@ -238,6 +238,11 @@ class SessionData:
         self._schema_states: dict[str, SchemaState] = {}
         self._current_schema: str | None = None
 
+        # The name a client without a transport session uses to come back to
+        # this session: minted by ServerState, passed as the `connection` tool
+        # argument. An address, not a secret.
+        self.handle: str | None = None
+
         # Activity tracking for idle eviction
         self.created_at: datetime = utc_now()
         self.last_activity: datetime = utc_now()

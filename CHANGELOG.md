@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A connection handle, so a client without a transport session can work.**
+  MCP 2026-07-28 removed protocol-level sessions and tells servers with state
+  to mint a handle and take it back as an ordinary tool argument.
+  `connect_database` now returns one (`ob_k2m9qa`), and all 28 tools accept it
+  as the optional `connection` argument. A call finds its session by the
+  handle, else by the MCP transport session, else -- unless
+  `SESSIONLESS_FALLBACK=none` -- by being the only live session on the server.
+  A handle that names no live session is an error (`unknown_connection`) and
+  never lands in another session. Each handle is a user session of its own,
+  with its own current schema and ontology state; sessions on one database
+  still share the connection, schema cache and GraphRAG index. Clients on
+  protocol versions up to 2025-11-25 keep working unchanged and are told their
+  handle once, by `connect_database`. The handle is an address, not
+  authentication.
+
 ### Changed
 - **A request without an MCP session is refused, not pooled.** `get_session_id`
   used to fall back to a literal `"default_session"` (and before that to the
