@@ -32,6 +32,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
   a fresh one per request, which would otherwise open an empty session on
   every call.
+- **`graphrag_find_join_path` says when the path is not the only one.** It
+  returned *a* shortest path and picked silently when several routes were
+  equally short, although an order reaching a region through its customer or
+  through its warehouse are two different questions. The result now carries
+  `ambiguous` (always) and, when true, the `alternatives` with their joins and
+  a note telling the model not to pick silently. Longer detours are not
+  reported.
+- **The user decides when the model overrides a fan-trap block.**
+  `allow_fan_out=True` lets a model run a query OBQC blocked, and the inflated
+  totals then arrive with only a warning. When that override actually
+  downgrades a blocking finding, a client that advertises elicitation is now
+  asked, naming the tables, whether to accept inflated totals. A no, or a
+  dismissed question, withdraws the override: the query fails with the normal
+  blocking verdict and `obqc_issues` tells the model to restructure rather than
+  retry. A yes is recorded in the warning as "accepted by the user". Nobody is
+  asked when nothing was overridden; a client that cannot be asked keeps the
+  old behaviour. OBQC itself is untouched and stays deterministic.
+- **`cleanup_workspace` asks before it deletes.** It removes every ontology
+  version, the RDF store and the saved semantic models of a connection, for
+  everyone using that database, and used to do so on a model's say-so alone. A
+  client that advertises elicitation is now asked to confirm with a checkbox
+  the user has to tick; declining, dismissing or accepting without ticking
+  cancels, and nothing is deleted. On MCP 2026-07-28 the question is a multi
+  round-trip request, on earlier revisions the tool waits for the answer, and
+  in both it is asked before the connection's writer lock is taken. A client
+  that cannot be asked keeps the old behaviour. `ask_to_confirm` in
+  `src/handlers/confirmation.py` is reusable for other tools.
+- **Cache hints for clients on MCP 2026-07-28.** The tool list, the resource
+  list and resource reads now carry a `private` cache hint of
+  `MCP_CACHE_TTL_SECONDS` (default 300, `0` to disable), so a client need not
+  fetch them again on every turn. All of it is safe to keep: tools and skill
+  files change only with a release, and every chart widget has its own URI.
+  Handshake-era clients receive no hint.
 
 ### Changed
 - **A request without an MCP session is refused, not pooled.** `get_session_id`
@@ -74,7 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aborts the tool whose result was still on its way. It is also the single
   place to adapt when MCP Logging, deprecated in the 2026-07-28 revision, goes
   away. A test fails if a handler calls the context directly again.
-
+  On FastMCP 4 the messages still travel through MCP Logging, which 2026-07-28
+  deprecated; the SDK's per-connection warning about it is filtered, and only
+  that one.
 - **FastMCP 4 and MCP SDK 2.** `fastmcp[apps]>=4.0.5,<5`, which brings MCP
   2026-07-28. One server now serves both protocol eras and negotiates per
   client; clients on 2025-11-25 and earlier keep their transport session, and

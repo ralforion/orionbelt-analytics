@@ -144,10 +144,12 @@ def _client_can_answer(ctx: Context) -> bool:
         return False
     try:
         session = ctx.session
-        return bool(
+        # `is True`: a real bool from FastMCP, never a test double's yes.
+        return (
             session.check_client_capability(
                 mcp_types.ClientCapabilities(sampling=mcp_types.SamplingCapability())
             )
+            is True
         )
     except Exception as e:
         logger.debug(f"Could not read the client's sampling capability: {e}")

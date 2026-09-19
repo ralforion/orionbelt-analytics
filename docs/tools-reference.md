@@ -451,13 +451,15 @@ Delete all workspace files for the current database connection and clear session
 
 **Parameters:** None
 
-**Returns:** Markdown-formatted summary of what was removed.
+**Returns:** Markdown-formatted summary of what was removed, or a note that the cleanup was cancelled and nothing was deleted.
 
 **Key Features:**
 - Removes the workspace directory (`tmp/{connection_id}/`), Oxigraph RDF store, and ChromaDB vector store
 - Clears all in-memory session state (schema cache, ontology, GraphRAG, RDF store)
 - Database connection stays active -- call `discover_schema()` to start fresh
-- Safe: only affects the current connection's workspace, not other sessions
+- Scoped to the current connection's workspace. That workspace is shared: every session on the same database loses the schema cache, GraphRAG index and RDF store too, and restores nothing on its next connect. Other connections are untouched
+
+**Confirmation.** A client that advertises the MCP elicitation capability is asked to confirm first, with a checkbox the user has to tick. Declining, dismissing the question, or accepting without ticking the box all cancel the cleanup. On MCP 2026-07-28 the question travels as a multi round-trip request (the tool returns it and is called again with the answer); on earlier revisions the tool waits for the answer. The question is asked before the connection's writer lock is taken, so a slow answer holds nobody up. A client that cannot be asked is not asked, and the cleanup proceeds as it always did.
 
 ---
 
@@ -573,13 +575,16 @@ Discover a join path between two tables using GraphRAG graph traversal.
 | `max_hops` | integer | No | `3` | Maximum number of joins allowed in the path |
 
 **Returns:**
-- On success: `success`, `from`, `to`, `hops`, `path` (ordered table list), and `joins` (per-hop join specifications)
+- On success: `success`, `from`, `to`, `hops`, `path` (ordered table list), `joins` (per-hop join specifications), and `ambiguous`
+- When `ambiguous` is `true`: also `alternatives` (each with its own `path` and `joins`) and an `ambiguity_note`
 - When no path is found: `success: false`, `from`, `to`, and a `message`
 
 **Key Features:**
 - Requires GraphRAG initialization (`discover_schema` first)
 - Helps construct multi-table joins without manually reasoning over foreign keys
 - Returns the concrete join conditions for each hop
+- **Says when the path is not the only one.** The tool returns *a* shortest path. When other routes are exactly as short -- an order reaching a region through its customer or through its warehouse -- they are listed as `alternatives`, because they generally answer different questions. `ambiguous` is always present, so `false` is a definite answer. Longer detours are not reported, and two foreign keys between the *same* pair of tables are not distinguished (the graph keeps one edge per table pair)
+- The choice is left to the conversation on purpose: explaining why two routes differ takes words, so the model should say which route the question implies or ask the user, rather than the tool forcing a pick-one form
 
 ---
 

@@ -14,6 +14,7 @@ import functools
 import inspect
 import logging
 import os
+import warnings
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Annotated, Any, Literal
@@ -22,6 +23,7 @@ from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Image
+from mcp import MCPDeprecationWarning
 from mcp.types import InputRequiredResult
 from pydantic import Field
 
@@ -29,6 +31,7 @@ from . import __name__ as SERVER_NAME
 from . import __version__
 
 # --- Centralized path and env loading (Task 1 & 2) ---
+from .config import resolve_mcp_cache_ttl
 from .paths import ensure_output_dir, get_env_file_path
 
 # Load environment variables using centralized path resolution (Task 1: C4 fix)
@@ -58,9 +61,41 @@ ensure_output_dir()
 
 # --- MCP Server Setup ---
 
+
+def _silence_logging_deprecation() -> None:
+    """Drop the one deprecation warning an operator can do nothing about.
+
+    Progress messages reach the client through MCP Logging, which the
+    2026-07-28 revision deprecated with a removal window of at least twelve
+    months. FastMCP 4 keeps sending them on purpose and the MCP SDK warns on
+    every connection that does. Every message this server sends goes through
+    ``notify_client`` in ``src/utils.py``; that function is what changes when
+    Logging goes, and until then the warning is noise in the server log. Only
+    this message is filtered: any other MCP deprecation still shows.
+    """
+    warnings.filterwarnings(
+        "ignore",
+        message=r"The logging capability is deprecated",
+        category=MCPDeprecationWarning,
+    )
+
+
+_silence_logging_deprecation()
+
+# Cache hints (MCP 2026-07-28, SEP-2549) let a client keep the tool list, the
+# resource list and resource reads instead of fetching them again on every
+# turn. All three are safe to keep here: the tool list and the skill files only
+# change with a release, and every chart widget has a URI of its own, so a
+# cached read can never be a stale chart. One hint covers them all, and chart
+# reads carry a user's data, hence "private": a shared intermediary must not
+# serve one user's cached result to another.
+_CACHE_TTL = resolve_mcp_cache_ttl()
+
 mcp = FastMCP(
     name=SERVER_NAME,
     version=__version__,
+    cache_ttl=_CACHE_TTL or None,
+    cache_scope="private" if _CACHE_TTL else None,
     instructions="""
 # OrionBelt Analytics - AI-Powered Database Intelligence
 
@@ -622,7 +657,7 @@ async def execute_sql_query(
     checklist_completed: bool = False,
     query_intent: _ShortText | None = None,
     allow_fan_out: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, Any] | InputRequiredResult:
     """Execute SQL query with built-in syntax validation, security checks, OBQC
     validation, and fan-trap protection.
 
@@ -658,7 +693,8 @@ async def execute_sql_query(
         allow_fan_out: Execute even when OBQC finds a fan-trap. Aggregates read
             across a 1:many join are inflated, so only set this when the
             multiplied rows are what you want (or you have verified the join is
-            1:1 in practice). The finding is still reported, as a warning
+            1:1 in practice). Where the client supports it the user is asked to
+            confirm; if they decline, restructure the query instead of retrying. The finding is still reported, as a warning
             instead of a blocking error, and `obqc_fan_trap` names the tables.
     """
     return await _h_query.execute_sql_query(
@@ -723,18 +759,27 @@ async def generate_chart(
 
 @mcp.tool()
 @_connection_aware()
-async def cleanup_workspace(ctx: Context) -> str | dict[str, Any]:
+async def cleanup_workspace(
+    ctx: Context,
+) -> str | dict[str, Any] | InputRequiredResult:
     """Delete all workspace files for the current database connection and clear session state.
 
     Removes schema JSON, ontology TTL, R2RML mappings, GraphRAG data, ChromaDB vectors,
     Oxigraph RDF store, semantic models, and metadata for this connection.
     The database connection itself remains active.
 
+    A client that supports elicitation is asked to confirm first; if the user
+    declines, nothing is deleted. Other clients are not asked.
+
     Use this to start fresh or free disk space. Requires an active connection.
 
     Returns:
-        Summary of what was removed
+        Summary of what was removed, or that the cleanup was cancelled
     """
+    # Asked outside the writer lock: the answer may take a person a while.
+    unconfirmed = await _h_workspace.confirm_cleanup(ctx, services=_services())
+    if unconfirmed is not None:
+        return unconfirmed
     async with _writer_lock(ctx):
         return await _h_workspace.cleanup_workspace(
             ctx,

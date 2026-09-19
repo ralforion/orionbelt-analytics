@@ -8,6 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import mcp.types as mcp_types
 from fastmcp import Context
 
 from ..database_manager import TableInfo
@@ -31,6 +32,7 @@ from ..utils import (
     utc_now,
     write_text_file,
 )
+from .confirmation import Confirmation, ask_to_confirm
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +287,46 @@ def _format_restore_summary(result: dict[str, Any]) -> str:
         lines.append("Use get_semantic_model(model_name) to retrieve model YAML.")
 
     return "\n".join(lines)
+
+
+async def confirm_cleanup(
+    ctx: Context,
+    services: "HandlerContext",
+) -> str | mcp_types.InputRequiredResult | None:
+    """Ask before ``cleanup_workspace`` deletes everything, where that is possible.
+
+    Runs *before* the connection's writer lock is taken: in the handshake era
+    the question blocks until a person answers, and nobody else's
+    ``discover_schema`` should wait on that.
+
+    Returns:
+        ``None`` to go ahead -- confirmed, or a client that cannot be asked,
+        which gets the behaviour it always had. Otherwise what the tool must
+        return instead of cleaning up: the question itself (first round of a
+        2026-07-28 request), or the message that nothing was deleted.
+    """
+    session = services.get_session_data(ctx)
+    if not session.connection_id:
+        return None  # nothing to delete; cleanup_workspace reports that itself
+
+    outcome = await ask_to_confirm(
+        ctx,
+        key="cleanup_workspace",
+        message=(
+            "This permanently deletes the whole workspace of connection "
+            f"{session.connection_id[:8]}...: schema files, every ontology "
+            "version, R2RML mappings, GraphRAG data, the RDF store and saved "
+            "semantic models, for everyone using this database. The database "
+            "itself is not touched."
+        ),
+        field_title="Yes, delete the workspace",
+    )
+    if isinstance(outcome, mcp_types.InputRequiredResult):
+        return outcome
+    if outcome is Confirmation.DECLINED:
+        await notify_client(ctx, "Workspace cleanup cancelled")
+        return "Workspace cleanup cancelled. Nothing was deleted."
+    return None
 
 
 async def cleanup_workspace(
