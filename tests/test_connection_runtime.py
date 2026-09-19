@@ -290,3 +290,156 @@ async def test_reconnecting_never_touches_the_manager_others_are_using(
     assert session.db_manager is shared
     assert len(fresh_managers) == 1
     assert fresh_managers[0].disconnects == 1  # redundant, so let go
+
+
+# --- ontology state, GraphRAG and the writer lock (shared per connection) ---
+
+
+def _two_sessions_on_one_connection(state: ServerState):
+    first, second = state.get_session("a"), state.get_session("b")
+    state.bind_session(first, "conn-1", _connected())
+    state.bind_session(second, "conn-1", _connected())
+    return first, second
+
+
+def test_ontology_state_is_shared_but_the_current_schema_is_not():
+    state = ServerState()
+    first, second = _two_sessions_on_one_connection(state)
+
+    first.set_current_schema("public")
+    first.ontology_file = "ontology_public.ttl"
+    second.set_current_schema("analytics")
+    second.ontology_file = "ontology_analytics.ttl"
+
+    # Each session keeps its own pointer...
+    assert first.current_schema == "public"
+    assert second.current_schema == "analytics"
+    assert first.ontology_file == "ontology_public.ttl"
+    # ...into knowledge both can reach.
+    assert second.get_schema_state("public").ontology.ontology_file == (
+        "ontology_public.ttl"
+    )
+    second.set_current_schema("public")
+    assert second.ontology_file == "ontology_public.ttl"
+
+
+def test_the_obqc_validator_and_graphrag_manager_are_built_once():
+    state = ServerState()
+    first, second = _two_sessions_on_one_connection(state)
+    validator, graphrag = Mock(name="validator"), Mock(name="graphrag")
+
+    first.set_current_schema("public")
+    first.obqc_validator = validator
+    first.graphrag_manager = graphrag
+    first.graphrag_initialized = True
+
+    second.set_current_schema("public")
+    assert second.obqc_validator is validator
+    assert second.graphrag_manager is graphrag
+    assert second.graphrag_initialized is True
+
+
+def test_a_connection_change_leaves_the_others_ontology_state_alone():
+    first = _server_state.get_session("runtime-onto-a")
+    second = _server_state.get_session("runtime-onto-b")
+    try:
+        _server_state.bind_session(first, "conn-onto", _connected())
+        _server_state.bind_session(second, "conn-onto", _connected())
+        first.set_current_schema("public")
+        first.ontology_file = "ontology_public.ttl"
+        first.graphrag_manager = Mock(name="graphrag")
+
+        _clear_session_state(first, reason="connection change")
+
+        assert first.ontology_file is None
+        assert first.graphrag_manager is None
+        second.set_current_schema("public")
+        assert second.ontology_file == "ontology_public.ttl"
+        assert second.graphrag_manager is not None
+    finally:
+        _server_state.cleanup_session("runtime-onto-a")
+        _server_state.cleanup_session("runtime-onto-b")
+
+
+async def test_shared_init_tasks_outlive_one_leaving_session():
+    """Closing one of two sessions must not cancel the GraphRAG init the other
+    is waiting for; closing the last one must."""
+    import asyncio
+
+    state = ServerState()
+    first, second = _two_sessions_on_one_connection(state)
+    started = asyncio.Event()
+
+    async def init():
+        started.set()
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(init())
+    first.graphrag.track_init_task(task)
+    await started.wait()
+
+    await state.aclose_session("a")
+    assert not task.cancelled()
+    assert task in second.graphrag.init_tasks
+
+    await state.aclose_session("b")
+    assert task.cancelled()
+
+
+async def test_work_started_by_a_dying_session_still_lands_in_shared_state():
+    state = ServerState()
+    first, second = _two_sessions_on_one_connection(state)
+    first.set_current_schema("public")
+
+    await state.aclose_session("a")
+    # A background task holding `first` finishes after the session is gone.
+    first.ontology_file = "ontology_public.ttl"
+
+    second.set_current_schema("public")
+    assert second.ontology_file == "ontology_public.ttl"
+
+
+async def test_the_writer_lock_serializes_sessions_on_one_connection():
+    import asyncio
+
+    state = ServerState()
+    first, second = _two_sessions_on_one_connection(state)
+    elsewhere = state.get_session("c")
+    state.bind_session(elsewhere, "conn-2", _connected("hr"))
+    order: list[str] = []
+
+    async def writer(name: str, session: SessionData) -> None:
+        async with state.writer_lock(session):
+            order.append(f"{name}:in")
+            await asyncio.sleep(0.01)
+            order.append(f"{name}:out")
+
+    await asyncio.gather(writer("first", first), writer("second", second))
+    assert order == ["first:in", "first:out", "second:in", "second:out"]
+
+    # Another connection is not held up, and an unbound session takes no lock.
+    async with state.writer_lock(first):
+        await asyncio.wait_for(writer("elsewhere", elsewhere), timeout=1)
+        await asyncio.wait_for(writer("unbound", SessionData()), timeout=1)
+
+
+async def test_a_writing_tool_waits_for_the_connections_lock(monkeypatch):
+    import asyncio
+
+    import src.main as main_module
+    from src.main import _h_schema, reset_cache
+
+    state = ServerState()
+    first, second = _two_sessions_on_one_connection(state)
+    monkeypatch.setattr(main_module, "_server_state", state)
+    monkeypatch.setattr(main_module, "get_session_data", lambda _ctx: second)
+    handler = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(_h_schema, "reset_cache", handler)
+
+    async with state.writer_lock(first):
+        call = asyncio.create_task(reset_cache(Mock(), "schema"))
+        await asyncio.sleep(0.05)
+        handler.assert_not_awaited()  # another client is rewriting this state
+
+    assert await call == {"success": True}
+    handler.assert_awaited_once()

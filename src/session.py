@@ -194,6 +194,16 @@ class ConnectionRuntime:
         self.connection_id = connection_id
         self.db_manager: Any | None = None  # DatabaseManager
         self.schema_cache = SchemaCache()
+        # Per-schema ontology state, OBQC validator included. Which schema is
+        # *current* stays with each session; what is known about a schema is
+        # shared.
+        self.schema_states: dict[str, SchemaState] = {}
+        self.graphrag = GraphRAGState()
+        # Serializes the tools that rewrite this state (discover_schema,
+        # generate_ontology, apply_semantic_names, load_my_ontology,
+        # cleanup_workspace, cleanup_old_versions, and the restore on connect).
+        # A session boundary used to hide those races; sharing exposes them.
+        self.lock = asyncio.Lock()
         self.holders = 0  # sessions currently bound; managed by ServerState
         self.created_at: datetime = utc_now()
 
@@ -319,13 +329,28 @@ class SessionData:
         """
         self.runtime = runtime
         self.schema_cache = runtime.schema_cache
+        self._schema_states = runtime.schema_states
+        self.graphrag = runtime.graphrag
         # Whatever manager this session brought is the runtime's business now.
         self.connection.db_manager = None
 
-    def unbind_runtime(self) -> None:
-        """Go back to private, empty state, leaving the shared state intact."""
+    def unbind_runtime(self, detach: bool = True) -> None:
+        """Leave the runtime, leaving the shared state intact.
+
+        Args:
+            detach: True for a session that lives on (a connection change): it
+                gets private, empty state back. False for a session being torn
+                down: it keeps its references, so background work it started
+                still lands in the shared state the other sessions read,
+                rather than in objects nobody will look at again.
+        """
         self.runtime = None
+        if not detach:
+            return
         self.schema_cache = SchemaCache()
+        self._schema_states = {}
+        self._current_schema = None
+        self.graphrag = GraphRAGState()
         self.connection.db_manager = None
 
     # Connection properties

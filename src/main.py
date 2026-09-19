@@ -12,6 +12,7 @@ modules so this file stays mostly decorators + delegation:
 
 import logging
 import os
+from contextlib import AbstractAsyncContextManager
 from typing import Annotated, Any, Literal
 
 from dotenv import load_dotenv
@@ -142,6 +143,16 @@ from .tool_types import (  # noqa: E402
 )
 
 
+def _writer_lock(ctx: Context) -> AbstractAsyncContextManager[Any]:
+    """Lock held by the tools that rewrite shared per-connection state.
+
+    Sessions on the same database share schema, ontology and GraphRAG state, so
+    two clients running ``discover_schema`` or ``cleanup_workspace`` at once
+    would interleave. Readers take no lock.
+    """
+    return _server_state.writer_lock(get_session_data(ctx))
+
+
 def _services() -> HandlerContext:
     """Build the per-request service bundle handed to handler functions.
 
@@ -217,7 +228,8 @@ async def reset_cache(
     Returns:
         Dictionary with status and cleared cache types
     """
-    return await _h_schema.reset_cache(ctx, cache_type, services=_services())
+    async with _writer_lock(ctx):
+        return await _h_schema.reset_cache(ctx, cache_type, services=_services())
 
 
 @mcp.tool()
@@ -235,12 +247,13 @@ async def discover_schema(
         lightweight: If True (default), return minimal data (table names, FK relationships, fan-trap warnings).
                      If False, return full schema with all column details.
     """
-    return await _h_schema.discover_schema(
-        ctx,
-        schema_name,
-        lightweight,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_schema.discover_schema(
+            ctx,
+            schema_name,
+            lightweight,
+            services=_services(),
+        )
 
 
 @mcp.tool()
@@ -289,15 +302,16 @@ async def generate_ontology(
     Returns:
         Ontology TTL or status message
     """
-    return await _h_ontology.generate_ontology(
-        ctx,
-        schema_info,
-        schema_name,
-        base_uri,
-        auto_persist,
-        graph_uri,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_ontology.generate_ontology(
+            ctx,
+            schema_info,
+            schema_name,
+            base_uri,
+            auto_persist,
+            graph_uri,
+            services=_services(),
+        )
 
 
 @mcp.tool()
@@ -356,13 +370,14 @@ async def apply_semantic_names(
         ontology_file: The ontology filename from generate_ontology response
         save_to_file: Whether to save the updated ontology to a file
     """
-    return await _h_ontology.apply_semantic_names(
-        ctx,
-        suggestions,
-        ontology_file,
-        save_to_file,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_ontology.apply_semantic_names(
+            ctx,
+            suggestions,
+            ontology_file,
+            save_to_file,
+            services=_services(),
+        )
 
 
 @mcp.tool()
@@ -389,15 +404,16 @@ async def load_my_ontology(
     Returns:
         Dictionary with ontology information and status
     """
-    return await _h_ontology.load_my_ontology(
-        ctx,
-        import_folder,
-        auto_persist,
-        graph_uri,
-        ontology_content=ontology_content,
-        file_name=file_name,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_ontology.load_my_ontology(
+            ctx,
+            import_folder,
+            auto_persist,
+            graph_uri,
+            ontology_content=ontology_content,
+            file_name=file_name,
+            services=_services(),
+        )
 
 
 @mcp.tool()
@@ -577,10 +593,11 @@ async def cleanup_workspace(ctx: Context) -> str | dict[str, Any]:
     Returns:
         Summary of what was removed
     """
-    return await _h_workspace.cleanup_workspace(
-        ctx,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_workspace.cleanup_workspace(
+            ctx,
+            services=_services(),
+        )
 
 
 @mcp.tool()
@@ -603,12 +620,13 @@ async def cleanup_old_versions(
         schema_name: Schema whose history to prune (last analyzed schema if omitted)
         dry_run: Report what would be deleted without deleting it (default True)
     """
-    return await _h_workspace.cleanup_old_versions(
-        ctx,
-        schema_name,
-        dry_run,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_workspace.cleanup_old_versions(
+            ctx,
+            schema_name,
+            dry_run,
+            services=_services(),
+        )
 
 
 @mcp.tool()
