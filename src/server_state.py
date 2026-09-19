@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractAsyncContextManager, contextmanager, nullcontext
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -227,25 +227,46 @@ class ServerState:
             self._disconnect_manager(current, "stale")
         return runtime
 
-    def unbind_session(self, session: SessionData) -> None:
+    def unbind_session(self, session: SessionData, detach: bool = True) -> None:
         """Detach ``session`` from its runtime; close it after the last holder.
 
         Args:
             session: Session to detach. A session with no runtime is a no-op.
+            detach: Passed to :meth:`SessionData.unbind_runtime`. False when
+                the session itself is being torn down.
         """
         runtime = session.runtime
         # isinstance, not a None check: a test double's attribute is a Mock.
         if not isinstance(runtime, ConnectionRuntime):
             return
-        session.unbind_runtime()
+        session.unbind_runtime(detach=detach)
         runtime.holders -= 1
         if runtime.holders > 0:
             return
         self._runtimes.pop(runtime.connection_id, None)
+        # Nobody is left to read what these would produce.
+        for task in list(runtime.graphrag.init_tasks):
+            if not task.done():
+                task.cancel()
         if runtime.db_manager is not None:
             self._disconnect_manager(runtime.db_manager, "last holder left")
             runtime.db_manager = None
         logger.info(f"Closed connection runtime {runtime.connection_id[:8]}...")
+
+    def writer_lock(self, session: Any) -> AbstractAsyncContextManager[Any]:
+        """The lock a tool must hold while it rewrites shared connection state.
+
+        Args:
+            session: The calling session.
+
+        Returns:
+            The runtime's lock, or a no-op context for a session that shares
+            nothing (unbound, or a test double).
+        """
+        runtime = getattr(session, "runtime", None)
+        if isinstance(runtime, ConnectionRuntime):
+            return runtime.lock
+        return nullcontext()
 
     def get_runtime(self, connection_id: str) -> ConnectionRuntime | None:
         """The live runtime for ``connection_id``, if any session holds one."""
@@ -401,6 +422,12 @@ class ServerState:
         if session is None:
             return []
 
+        # The init tasks belong to the shared runtime. While other sessions
+        # hold it they are still waiting for this initialisation to finish.
+        runtime = session.runtime
+        if isinstance(runtime, ConnectionRuntime) and runtime.holders > 1:
+            return []
+
         pending = [t for t in session.graphrag.init_tasks if not t.done()]
         for task in pending:
             task.cancel()
@@ -419,7 +446,9 @@ class ServerState:
 
         if session.runtime is not None:
             # Shared manager: the runtime disconnects it with its last holder.
-            self.unbind_session(session)
+            # No detach: the session is going away, and work it started should
+            # still land in the state the remaining sessions share.
+            self.unbind_session(session, detach=False)
         elif session.db_manager:
             try:
                 session.db_manager.disconnect()

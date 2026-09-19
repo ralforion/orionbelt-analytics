@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that shares a runtime connects a fresh manager rather than reconnecting the
   shared one under the other sessions, and replaces the shared one only if it
   has lost its connection. Groundwork for clients without a transport session.
+- **Ontology state and GraphRAG are shared per connection too.** The
+  per-schema ontology state, with its OBQC validator, and the GraphRAG manager
+  moved onto the same `ConnectionRuntime`. Which schema is *current* remains
+  per session. A GraphRAG initialisation keeps running when the session that
+  started it closes while others still hold the runtime, and its result lands
+  in the shared state; it is cancelled with the last holder.
+- **Tools that rewrite shared state are serialized per connection.**
+  `discover_schema`, `generate_ontology`, `apply_semantic_names`,
+  `load_my_ontology`, `reset_cache`, `cleanup_workspace`, `cleanup_old_versions`
+  and the workspace restore inside `connect_database` hold the runtime's writer
+  lock. Readers take no lock, and different databases do not wait for each
+  other.
 - **Progress messages go through one function.** All 64 `ctx.info` /
   `ctx.error` calls in the handlers now use `notify_client` in `src/utils.py`
   (the former `safe_ctx_info`, generalized). A notification that cannot be

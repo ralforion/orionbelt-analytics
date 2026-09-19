@@ -2,6 +2,7 @@
 
 import logging
 import os
+from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import Any
 
 from fastmcp import Context
@@ -18,6 +19,16 @@ from ..workspace import detect_workspace, format_workspace_summary
 from .workspace import _format_restore_summary, _restore_workspace_core
 
 logger = logging.getLogger(__name__)
+
+
+def _restore_lock(
+    services: "HandlerContext", session: Any
+) -> AbstractAsyncContextManager[Any]:
+    """The connection's writer lock, or a no-op without a registry."""
+    if services.server_state is None:
+        return nullcontext()
+    lock: AbstractAsyncContextManager[Any] = services.server_state.writer_lock(session)
+    return lock
 
 
 async def connect_database(
@@ -333,9 +344,11 @@ async def connect_database(
         workspace = detect_workspace(new_conn_id)
         if workspace and services.provides("get_oxigraph_store"):
             try:
-                restore_result = await _restore_workspace_core(
-                    ctx, session, new_conn_id, None, services
-                )
+                # Restoring writes into state other sessions may be using.
+                async with _restore_lock(services, session):
+                    restore_result = await _restore_workspace_core(
+                        ctx, session, new_conn_id, None, services
+                    )
                 if restore_result:
                     response += "\n\n" + _format_restore_summary(restore_result)
                 else:
