@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocol versions up to 2025-11-25 keep working unchanged and are told their
   handle once, by `connect_database`. The handle is an address, not
   authentication.
+  The sessionless era is recognised by the protocol revision of the request,
+  not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
+  a fresh one per request, which would otherwise open an empty session on
+  every call.
 
 ### Changed
 - **A request without an MCP session is refused, not pooled.** `get_session_id`
