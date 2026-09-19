@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **A request without an MCP session is refused, not pooled.** `get_session_id`
+  used to fall back to a literal `"default_session"` (and before that to the
+  session object's memory address). FastMCP 3 never takes that path inside a
+  request, but the sessionless 2026-07-28 protocol era does: every such client
+  would have shared one database manager, one ontology state and one GraphRAG
+  manager. It now raises `SessionRequiredError` (`session_required`). First
+  step of the stateless-protocol plan; a connection handle as a tool argument
+  follows.
+
 ### Fixed
 - **A reconnecting client lost the RDF store.** The Oxigraph store was opened
   once per MCP session, but its RocksDB directory is per connection and takes

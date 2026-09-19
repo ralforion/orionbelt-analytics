@@ -24,6 +24,7 @@ from fastmcp import Context
 from pydantic import BaseModel
 
 from .database_manager import DatabaseManager
+from .exceptions import SessionRequiredError
 from .obqc_validator import OBQCValidator
 from .ontology_generator import OntologyGenerator
 from .oxigraph_store import OXIGRAPH_AVAILABLE, OxigraphStoreManager
@@ -35,13 +36,34 @@ logger = logging.getLogger(__name__)
 
 
 def get_session_id(ctx: Context) -> str:
-    """Get a unique session identifier from context."""
-    if hasattr(ctx, "session_id") and ctx.session_id:
-        return str(ctx.session_id)
-    if hasattr(ctx, "session") and ctx.session:
-        return f"session_{id(ctx.session)}"
-    logger.warning("Could not determine session ID from context, using default_session")
-    return "default_session"
+    """Get the identifier that keys this request's server-side state.
+
+    Fails rather than guessing. All per-client state hangs off this value, so a
+    shared fallback would hand one client another client's database manager,
+    ontology and GraphRAG state. FastMCP 3 always supplies a session ID inside a
+    request; a request without one is what the sessionless 2026-07-28 protocol
+    era looks like, and it must not be folded into a common bucket. The
+    object-identity fallback is gone for the same reason: a memory address is
+    reused once its session is collected, so it could resurrect a stranger's
+    state.
+
+    Args:
+        ctx: FastMCP request context.
+
+    Returns:
+        The MCP session ID.
+
+    Raises:
+        SessionRequiredError: If the request carries no session ID.
+    """
+    session_id = getattr(ctx, "session_id", None)
+    if session_id:
+        return str(session_id)
+    raise SessionRequiredError(
+        "This request carries no MCP session, so the server cannot tell whose "
+        "state it belongs to. Connect with a client that keeps an MCP session "
+        "(protocol 2025-11-25 or earlier)."
+    )
 
 
 def _get_connection_fingerprint(db_manager: DatabaseManager) -> str:
