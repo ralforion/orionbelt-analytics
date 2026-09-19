@@ -9,6 +9,7 @@ import contextlib
 import logging
 from collections import defaultdict, deque
 from collections.abc import Callable
+from itertools import pairwise
 from typing import Any
 
 import networkx as nx
@@ -115,6 +116,81 @@ class GraphRetriever:
             f"{self.graph.number_of_edges()} edges)"
         )
 
+    def _joins_along(self, path: list[str]) -> list[dict[str, Any]]:
+        """Join specifications for a path of table names, in path order."""
+        joins = []
+        for left_table, right_table in pairwise(path):
+            # Edge data is the FK relationship, stored in the FK's direction.
+            if self.graph.has_edge(left_table, right_table):
+                edge_data = self.graph[left_table][right_table]
+                joins.append(
+                    {
+                        "from_table": left_table,
+                        "to_table": right_table,
+                        "from_column": edge_data["column"],
+                        "to_column": edge_data["referenced_column"],
+                        "join_type": "INNER",
+                    }
+                )
+            elif self.graph.has_edge(right_table, left_table):
+                edge_data = self.graph[right_table][left_table]
+                joins.append(
+                    {
+                        "from_table": left_table,
+                        "to_table": right_table,
+                        "from_column": edge_data["referenced_column"],
+                        "to_column": edge_data["column"],
+                        "join_type": "INNER",
+                    }
+                )
+        return joins
+
+    def find_alternative_join_paths(
+        self,
+        from_table: str,
+        to_table: str,
+        chosen: list[dict[str, Any]],
+        limit: int = 5,
+    ) -> list[list[dict[str, Any]]]:
+        """Other join paths exactly as short as the one ``find_join_path`` chose.
+
+        ``find_join_path`` returns *a* shortest path. When several routes are
+        equally short -- an order reaching a region through its customer or
+        through its warehouse -- it picks one silently, and the two generally
+        answer different questions. This reports the ones it did not pick, so
+        the choice can be made knowingly.
+
+        Two foreign keys between the *same* pair of tables are not seen here:
+        the graph keeps one edge per table pair.
+
+        Args:
+            from_table: Source table.
+            to_table: Target table.
+            chosen: The joins ``find_join_path`` returned.
+            limit: Most alternatives to report.
+
+        Returns:
+            Join specifications of each other shortest path; empty when the
+            chosen path is the only one of its length.
+        """
+        if from_table not in self.graph or to_table not in self.graph:
+            return []
+        chosen_tables = [from_table, *(join["to_table"] for join in chosen)]
+        alternatives: list[list[dict[str, Any]]] = []
+        try:
+            undirected = self.graph.to_undirected()
+            for path in nx.all_shortest_paths(
+                undirected, source=from_table, target=to_table
+            ):
+                if len(path) != len(chosen_tables) or path == chosen_tables:
+                    continue
+                alternatives.append(self._joins_along(path))
+                if len(alternatives) >= limit:
+                    break
+        except nx.NetworkXNoPath:
+            return []
+        return alternatives
+
     def find_join_path(
         self, from_table: str, to_table: str, max_hops: int = 12
     ) -> list[dict[str, Any]] | None:
@@ -179,37 +255,7 @@ class GraphRetriever:
                 )
                 return None
 
-            # Build join specifications
-            joins = []
-            for i in range(len(path) - 1):
-                left_table = path[i]
-                right_table = path[i + 1]
-
-                # Get edge data (FK relationship)
-                if self.graph.has_edge(left_table, right_table):
-                    edge_data = self.graph[left_table][right_table]
-                    joins.append(
-                        {
-                            "from_table": left_table,
-                            "to_table": right_table,
-                            "from_column": edge_data["column"],
-                            "to_column": edge_data["referenced_column"],
-                            "join_type": "INNER",
-                        }
-                    )
-                elif self.graph.has_edge(right_table, left_table):
-                    edge_data = self.graph[right_table][left_table]
-                    joins.append(
-                        {
-                            "from_table": left_table,
-                            "to_table": right_table,
-                            "from_column": edge_data["referenced_column"],
-                            "to_column": edge_data["column"],
-                            "join_type": "INNER",
-                        }
-                    )
-
-            return joins
+            return self._joins_along(path)
 
         except Exception as e:
             logger.error(f"Error finding join path: {e}")

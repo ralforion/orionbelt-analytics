@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
   a fresh one per request, which would otherwise open an empty session on
   every call.
+- **`graphrag_find_join_path` says when the path is not the only one.** It
+  returned *a* shortest path and picked silently when several routes were
+  equally short, although an order reaching a region through its customer or
+  through its warehouse are two different questions. The result now carries
+  `ambiguous` (always) and, when true, the `alternatives` with their joins and
+  a note telling the model not to pick silently. Longer detours are not
+  reported.
 - **The user decides when the model overrides a fan-trap block.**
   `allow_fan_out=True` lets a model run a query OBQC blocked, and the inflated
   totals then arrive with only a warning. When that override actually
