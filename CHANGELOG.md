@@ -26,13 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that shares a runtime connects a fresh manager rather than reconnecting the
   shared one under the other sessions, and replaces the shared one only if it
   has lost its connection. Groundwork for clients without a transport session.
-- **Ontology state and GraphRAG are shared per connection too.** The
-  per-schema ontology state, with its OBQC validator, and the GraphRAG manager
-  moved onto the same `ConnectionRuntime`. Which schema is *current* remains
-  per session. A GraphRAG initialisation keeps running when the session that
-  started it closes while others still hold the runtime, and its result lands
-  in the shared state; it is cancelled with the last holder.
-- **Tools that rewrite shared state are serialized per connection.**
+- **GraphRAG is shared per connection too; ontology state is not.** The
+  GraphRAG manager, an index built from the schema, moved onto the same
+  `ConnectionRuntime`. A GraphRAG initialisation keeps running when the session
+  that started it closes while others still hold the runtime, and its result
+  lands in the shared state; it is cancelled with the last holder. Ontology
+  state stays per session on purpose: which ontology is active, a custom one
+  from `load_my_ontology`, applied semantic names and the OBQC validator are a
+  user's choices, and two people on one database may work with different
+  ones. The current schema is per session as well.
+- **Tools that rewrite shared state or the workspace are serialized per connection.**
   `discover_schema`, `generate_ontology`, `apply_semantic_names`,
   `load_my_ontology`, `reset_cache`, `cleanup_workspace`, `cleanup_old_versions`
   and the workspace restore inside `connect_database` hold the runtime's writer

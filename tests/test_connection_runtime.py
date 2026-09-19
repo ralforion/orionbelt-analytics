@@ -292,7 +292,7 @@ async def test_reconnecting_never_touches_the_manager_others_are_using(
     assert fresh_managers[0].disconnects == 1  # redundant, so let go
 
 
-# --- ontology state, GraphRAG and the writer lock (shared per connection) ---
+# --- what is shared (GraphRAG, the writer lock) and what is not (ontology) ---
 
 
 def _two_sessions_on_one_connection(state: ServerState):
@@ -302,60 +302,65 @@ def _two_sessions_on_one_connection(state: ServerState):
     return first, second
 
 
-def test_ontology_state_is_shared_but_the_current_schema_is_not():
+def test_each_session_keeps_its_own_ontology_on_a_shared_database():
+    """Which ontology is active is a user's choice, not a database fact. One
+    user loading or renaming theirs must not swap the other's mid-conversation,
+    even for the same schema."""
+    state = ServerState()
+    first, second = _two_sessions_on_one_connection(state)
+    first.set_current_schema("public")
+    second.set_current_schema("public")
+
+    first.ontology_file = "ontology_public_v3.ttl"
+    first.loaded_ontology = "<generated ttl>"
+    first.obqc_validator = Mock(name="validator-for-generated")
+    second.loaded_ontology = "<custom ttl from load_my_ontology>"
+    second.ontology_enriched = True
+
+    assert first.loaded_ontology == "<generated ttl>"
+    assert first.ontology_enriched is False
+    assert second.ontology_file is None
+    assert second.obqc_validator is None  # builds its own, from its own ontology
+
+
+def test_the_current_schema_is_per_session():
     state = ServerState()
     first, second = _two_sessions_on_one_connection(state)
 
     first.set_current_schema("public")
-    first.ontology_file = "ontology_public.ttl"
     second.set_current_schema("analytics")
-    second.ontology_file = "ontology_analytics.ttl"
 
-    # Each session keeps its own pointer...
     assert first.current_schema == "public"
     assert second.current_schema == "analytics"
-    assert first.ontology_file == "ontology_public.ttl"
-    # ...into knowledge both can reach.
-    assert second.get_schema_state("public").ontology.ontology_file == (
-        "ontology_public.ttl"
-    )
-    second.set_current_schema("public")
-    assert second.ontology_file == "ontology_public.ttl"
 
 
-def test_the_obqc_validator_and_graphrag_manager_are_built_once():
+def test_graphrag_is_an_index_of_the_database_and_is_built_once():
     state = ServerState()
     first, second = _two_sessions_on_one_connection(state)
-    validator, graphrag = Mock(name="validator"), Mock(name="graphrag")
+    graphrag = Mock(name="graphrag")
 
-    first.set_current_schema("public")
-    first.obqc_validator = validator
     first.graphrag_manager = graphrag
     first.graphrag_initialized = True
 
-    second.set_current_schema("public")
-    assert second.obqc_validator is validator
     assert second.graphrag_manager is graphrag
     assert second.graphrag_initialized is True
 
 
-def test_a_connection_change_leaves_the_others_ontology_state_alone():
+def test_a_connection_change_leaves_the_others_state_alone():
     first = _server_state.get_session("runtime-onto-a")
     second = _server_state.get_session("runtime-onto-b")
     try:
         _server_state.bind_session(first, "conn-onto", _connected())
         _server_state.bind_session(second, "conn-onto", _connected())
-        first.set_current_schema("public")
-        first.ontology_file = "ontology_public.ttl"
         first.graphrag_manager = Mock(name="graphrag")
+        second.set_current_schema("public")
+        second.ontology_file = "ontology_public.ttl"
 
         _clear_session_state(first, reason="connection change")
 
-        assert first.ontology_file is None
         assert first.graphrag_manager is None
-        second.set_current_schema("public")
-        assert second.ontology_file == "ontology_public.ttl"
         assert second.graphrag_manager is not None
+        assert second.ontology_file == "ontology_public.ttl"
     finally:
         _server_state.cleanup_session("runtime-onto-a")
         _server_state.cleanup_session("runtime-onto-b")
@@ -389,14 +394,14 @@ async def test_shared_init_tasks_outlive_one_leaving_session():
 async def test_work_started_by_a_dying_session_still_lands_in_shared_state():
     state = ServerState()
     first, second = _two_sessions_on_one_connection(state)
-    first.set_current_schema("public")
+    graphrag = Mock(name="graphrag")
 
     await state.aclose_session("a")
-    # A background task holding `first` finishes after the session is gone.
-    first.ontology_file = "ontology_public.ttl"
+    # A GraphRAG init holding `first` finishes after the session is gone.
+    first.graphrag_manager = graphrag
+    first.graphrag_initialized = True
 
-    second.set_current_schema("public")
-    assert second.ontology_file == "ontology_public.ttl"
+    assert second.graphrag_manager is graphrag
 
 
 async def test_the_writer_lock_serializes_sessions_on_one_connection():
