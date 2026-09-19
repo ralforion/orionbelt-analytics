@@ -179,30 +179,36 @@ class SchemaState:
 
 
 class ConnectionRuntime:
-    """State derived from one database, shared by every session connected to it.
+    """Facts about one database, shared by every session connected to it.
 
-    Almost nothing a session holds is about the client: the database manager
-    connects with the server's own credentials, and the schema cache is a set
-    of facts about that database. Owning them per session meant every
-    reconnect and every second tab rebuilt them, and it cannot work at all for
-    a client without a transport session (MCP 2026-07-28). The registry in
-    ``ServerState`` keeps one runtime per connection ID and counts the sessions
-    bound to it.
+    The line runs between what the *database* is and what a *user* is doing
+    with it. Shared here: the database manager (it connects with the server's
+    own credentials), the schema cache (tables, columns and keys as the
+    database reports them) and GraphRAG (an index built from that schema).
+    Owning those per session meant every reconnect and every second tab
+    rebuilt them.
+
+    Deliberately not shared: ontology state. Which ontology is active, a
+    custom one brought in with ``load_my_ontology``, the semantic names applied
+    to it and the OBQC validator built from it are a user's choices. Two
+    people on one database may work with different ontologies, and one of them
+    changing theirs must not swap the other's validator mid-conversation. That
+    state stays on ``SessionData``, as does the current-schema pointer.
+
+    The registry in ``ServerState`` keeps one runtime per connection ID and
+    counts the sessions bound to it.
     """
 
     def __init__(self, connection_id: str) -> None:
         self.connection_id = connection_id
         self.db_manager: Any | None = None  # DatabaseManager
         self.schema_cache = SchemaCache()
-        # Per-schema ontology state, OBQC validator included. Which schema is
-        # *current* stays with each session; what is known about a schema is
-        # shared.
-        self.schema_states: dict[str, SchemaState] = {}
         self.graphrag = GraphRAGState()
-        # Serializes the tools that rewrite this state (discover_schema,
-        # generate_ontology, apply_semantic_names, load_my_ontology,
+        # Serializes the tools that rewrite this state or the connection's
+        # workspace on disk, which every session on the database shares
+        # whatever it keeps in memory (discover_schema, generate_ontology,
+        # apply_semantic_names, load_my_ontology, reset_cache,
         # cleanup_workspace, cleanup_old_versions, and the restore on connect).
-        # A session boundary used to hide those races; sharing exposes them.
         self.lock = asyncio.Lock()
         self.holders = 0  # sessions currently bound; managed by ServerState
         self.created_at: datetime = utc_now()
@@ -329,7 +335,6 @@ class SessionData:
         """
         self.runtime = runtime
         self.schema_cache = runtime.schema_cache
-        self._schema_states = runtime.schema_states
         self.graphrag = runtime.graphrag
         # Whatever manager this session brought is the runtime's business now.
         self.connection.db_manager = None
@@ -348,8 +353,6 @@ class SessionData:
         if not detach:
             return
         self.schema_cache = SchemaCache()
-        self._schema_states = {}
-        self._current_schema = None
         self.graphrag = GraphRAGState()
         self.connection.db_manager = None
 
