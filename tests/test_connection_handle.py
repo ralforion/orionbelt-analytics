@@ -387,3 +387,27 @@ async def test_a_real_sessionless_client_works_through_its_handle(duckdb_workspa
         assert second != handle
         with pytest.raises(ToolError, match="connection"):
             await client.call_tool("list_schemas", {})
+
+
+# --- refusals at the tool boundary ---
+
+
+async def test_a_refusal_reaches_the_model_verbatim_and_without_a_stack_trace(
+    sessionless_era, caplog
+):
+    """FastMCP wraps and logs a stack trace for any exception but its own
+    ToolError. A model that forgets its handle would write one on every call,
+    and ``mask_error_details`` would replace the message that says how to
+    recover."""
+    async with Client(mcp) as client:
+        await client.call_tool("connect_database", {"db_type": "duckdb"})
+        await client.call_tool("connect_database", {"db_type": "duckdb"})
+        with caplog.at_level("DEBUG"):
+            with pytest.raises(ToolError) as bare:
+                await client.call_tool("list_schemas", {})
+            with pytest.raises(ToolError) as unknown:
+                await client.call_tool("list_schemas", {"connection": "ob_zzzzzz"})
+
+    assert str(bare.value).startswith("This request carries neither")
+    assert str(unknown.value).startswith("Unknown or expired connection handle")
+    assert not [r for r in caplog.records if r.exc_info]

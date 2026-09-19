@@ -20,6 +20,7 @@ from typing import Annotated, Any, Literal
 
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Image
 from pydantic import Field
 
@@ -102,6 +103,13 @@ from .resources import register_resources  # noqa: E402
 register_resources(mcp)
 
 
+# --- Session state and per-request helpers (extracted to server_state) ---
+# ServerState and _calculate_schema_hash are re-exported for tests that import
+# them from main; F401 is suppressed for this re-export block.
+from .exceptions import (  # noqa: E402
+    SessionRequiredError,
+    UnknownConnectionError,
+)
 from .handler_context import HandlerContext  # noqa: E402
 
 # --- Handler imports (Task 7: C1/S2) ---
@@ -114,10 +122,6 @@ from .handlers import query as _h_query  # noqa: E402
 from .handlers import rdf as _h_rdf  # noqa: E402
 from .handlers import schema as _h_schema  # noqa: E402
 from .handlers import workspace as _h_workspace  # noqa: E402
-
-# --- Session state and per-request helpers (extracted to server_state) ---
-# ServerState and _calculate_schema_hash are re-exported for tests that import
-# them from main; F401 is suppressed for this re-export block.
 from .server_state import (  # noqa: E402, F401
     ServerState,
     _calculate_schema_hash,
@@ -195,14 +199,27 @@ def _connection_aware(mint: bool = False) -> Callable[[_ToolFunction], _ToolFunc
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             handle_argument = kwargs.pop("connection", None)
             ctx: Any = kwargs.get("ctx", args[0] if args else None)
-            token = begin_connection_scope(ctx, handle_argument, mint)
             try:
-                result = await fn(*args, **kwargs)
-                return _echo_handle(
-                    ctx, result, explicit=handle_argument is not None, announce=mint
-                )
-            finally:
-                end_connection_scope(token)
+                token = begin_connection_scope(ctx, handle_argument, mint)
+                try:
+                    result = await fn(*args, **kwargs)
+                    # Inside the scope: the echo resolves the session by the
+                    # same handle the call ran under.
+                    return _echo_handle(
+                        ctx,
+                        result,
+                        explicit=handle_argument is not None,
+                        announce=mint,
+                    )
+                finally:
+                    end_connection_scope(token)
+            except (SessionRequiredError, UnknownConnectionError) as e:
+                # A caller that cannot be placed is an ordinary refusal, not a
+                # fault. As a ToolError its message reaches the model verbatim,
+                # survives mask_error_details, and is logged without the stack
+                # trace FastMCP gives any other exception -- which a model that
+                # forgets its handle would otherwise write on every call.
+                raise ToolError(str(e)) from e
 
         # FastMCP builds the input schema from the signature and annotations.
         # Dropping __wrapped__ keeps it from looking through to ``fn``'s.

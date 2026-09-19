@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocol versions up to 2025-11-25 keep working unchanged and are told their
   handle once, by `connect_database`. The handle is an address, not
   authentication.
+  A caller that cannot be placed gets a plain refusal: the two session errors
+  cross the tool boundary as `ToolError`, so the message that says how to
+  recover reaches the model verbatim, survives `mask_error_details`, and is
+  logged without a stack trace.
   The sessionless era is recognised by the protocol revision of the request,
   not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
   a fresh one per request, which would otherwise open an empty session on
