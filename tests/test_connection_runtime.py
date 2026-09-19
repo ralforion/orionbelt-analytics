@@ -448,3 +448,112 @@ async def test_a_writing_tool_waits_for_the_connections_lock(monkeypatch):
 
     assert await call == {"success": True}
     handler.assert_awaited_once()
+
+
+# --- the less travelled paths ---
+
+
+class FailingManager(FakeManager):
+    """A manager whose connect attempt fails, e.g. a password that changed."""
+
+    def connect_postgresql(self, **kwargs: object) -> bool:
+        return False
+
+
+async def test_a_failed_reconnect_leaves_the_shared_manager_alone(
+    postgres_env, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(connection_handler, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(connection_handler, "detect_workspace", lambda _cid: None)
+    monkeypatch.setattr(connection_handler, "mutate_workspace_metadata", AsyncMock())
+    state = ServerState()
+    session, other = state.get_session("a"), state.get_session("b")
+    shared = FakeManager()
+    ctx = Mock()
+    ctx.info = AsyncMock()
+    services = _services(state, session, shared)
+    await connection_handler.connect_database(ctx, "postgresql", services)
+    state.bind_session(other, session.connection_id, _connected())
+    failed: list[FailingManager] = []
+
+    def failing_manager() -> FailingManager:
+        failed.append(FailingManager())
+        return failed[-1]
+
+    monkeypatch.setattr(connection_handler, "DatabaseManager", failing_manager)
+
+    result = await connection_handler.connect_database(ctx, "postgresql", services)
+
+    assert result["error_type"] == "connection_error"
+    assert failed[0].disconnects == 1  # the attempt is cleaned up...
+    assert shared.connected and shared.disconnects == 0  # ...the shared one is not
+    assert session.db_manager is shared and other.db_manager is shared
+    assert session.runtime.holders == 2
+
+
+async def test_connecting_to_another_database_moves_the_session(
+    postgres_env, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(connection_handler, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(connection_handler, "detect_workspace", lambda _cid: None)
+    monkeypatch.setattr(connection_handler, "mutate_workspace_metadata", AsyncMock())
+    monkeypatch.setattr(connection_handler, "DatabaseManager", FakeManager)
+    state = ServerState()
+    # The handler clears state through the module-level helper, which unbinds
+    # through the module-level registry.
+    monkeypatch.setattr("src.server_state._server_state", state)
+    session, stays = state.get_session("a"), state.get_session("b")
+    sales = FakeManager()
+    ctx = Mock()
+    ctx.info = AsyncMock()
+    services = _services(state, session, sales)
+    await connection_handler.connect_database(ctx, "postgresql", services)
+    sales_id = session.connection_id
+    state.bind_session(stays, sales_id, _connected())
+    session.cache_schema_analysis("public", ["orders"])
+
+    monkeypatch.setenv("POSTGRES_DATABASE", "hr")
+    await connection_handler.connect_database(ctx, "postgresql", services)
+
+    assert session.connection_id != sales_id
+    assert session.runtime is not stays.runtime
+    assert session.get_cached_schema("public") is None  # a different database
+    assert stays.get_cached_schema("public") == ["orders"]  # untouched
+    assert sales.connected  # `stays` still holds the sales runtime
+    assert state.get_runtime(sales_id).holders == 1
+
+
+def test_a_manager_whose_health_check_raises_counts_as_dead():
+    class Broken(FakeManager):
+        def is_connected(self) -> bool:
+            raise RuntimeError("driver exploded")
+
+    state = ServerState()
+    first, second = state.get_session("a"), state.get_session("b")
+    broken, fresh = Broken(), _connected()
+    state.bind_session(first, "conn-1", broken)
+
+    state.bind_session(second, "conn-1", fresh)
+
+    assert first.db_manager is fresh
+    assert broken.disconnects == 1
+
+
+async def test_a_connection_change_by_the_last_holder_cancels_its_init_tasks():
+    """Teardown cancels init tasks before it unbinds. A connection change does
+    not pass through teardown, so closing the runtime has to do it."""
+    import asyncio
+
+    session = _server_state.get_session("runtime-cancel")
+    try:
+        _server_state.bind_session(session, "conn-cancel", _connected())
+        task = asyncio.create_task(asyncio.sleep(3600))
+        session.graphrag.track_init_task(task)
+
+        _clear_session_state(session, reason="connection change")
+        await asyncio.sleep(0)
+
+        assert task.cancelled()
+        assert _server_state.get_runtime("conn-cancel") is None
+    finally:
+        _server_state.cleanup_session("runtime-cancel")
