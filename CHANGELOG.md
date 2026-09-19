@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
   a fresh one per request, which would otherwise open an empty session on
   every call.
+- **The user decides when the model overrides a fan-trap block.**
+  `allow_fan_out=True` lets a model run a query OBQC blocked, and the inflated
+  totals then arrive with only a warning. When that override actually
+  downgrades a blocking finding, a client that advertises elicitation is now
+  asked, naming the tables, whether to accept inflated totals. A no, or a
+  dismissed question, withdraws the override: the query fails with the normal
+  blocking verdict and `obqc_issues` tells the model to restructure rather than
+  retry. A yes is recorded in the warning as "accepted by the user". Nobody is
+  asked when nothing was overridden; a client that cannot be asked keeps the
+  old behaviour. OBQC itself is untouched and stays deterministic.
 - **`cleanup_workspace` asks before it deletes.** It removes every ontology
   version, the RDF store and the saved semantic models of a connection, for
   everyone using that database, and used to do so on a model's say-so alone. A

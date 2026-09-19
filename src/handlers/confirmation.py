@@ -32,12 +32,16 @@ class Confirmation(StrEnum):
 
 def _client_can_be_asked(ctx: Context) -> bool:
     try:
-        return bool(
+        # `is True`, not truthiness: FastMCP answers with a real bool, and
+        # anything else -- a test double that says yes to everything -- is not
+        # a client that can be asked.
+        return (
             ctx.session.check_client_capability(
                 mcp_types.ClientCapabilities(
                     elicitation=mcp_types.ElicitationCapability()
                 )
             )
+            is True
         )
     except Exception as e:
         logger.debug(f"Could not read the client's elicitation capability: {e}")
