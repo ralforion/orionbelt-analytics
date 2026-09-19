@@ -80,7 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aborts the tool whose result was still on its way. It is also the single
   place to adapt when MCP Logging, deprecated in the 2026-07-28 revision, goes
   away. A test fails if a handler calls the context directly again.
-
+  On FastMCP 4 the messages still travel through MCP Logging, which 2026-07-28
+  deprecated; the SDK's per-connection warning about it is filtered, and only
+  that one.
 - **FastMCP 4 and MCP SDK 2.** `fastmcp[apps]>=4.0.5,<5`, which brings MCP
   2026-07-28. One server now serves both protocol eras and negotiates per
   client; clients on 2025-11-25 and earlier keep their transport session, and

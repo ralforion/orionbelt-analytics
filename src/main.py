@@ -14,6 +14,7 @@ import functools
 import inspect
 import logging
 import os
+import warnings
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Annotated, Any, Literal
@@ -22,6 +23,7 @@ from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Image
+from mcp import MCPDeprecationWarning
 from mcp.types import InputRequiredResult
 from pydantic import Field
 
@@ -58,6 +60,27 @@ ensure_output_dir()
 
 
 # --- MCP Server Setup ---
+
+
+def _silence_logging_deprecation() -> None:
+    """Drop the one deprecation warning an operator can do nothing about.
+
+    Progress messages reach the client through MCP Logging, which the
+    2026-07-28 revision deprecated with a removal window of at least twelve
+    months. FastMCP 4 keeps sending them on purpose and the MCP SDK warns on
+    every connection that does. Every message this server sends goes through
+    ``notify_client`` in ``src/utils.py``; that function is what changes when
+    Logging goes, and until then the warning is noise in the server log. Only
+    this message is filtered: any other MCP deprecation still shows.
+    """
+    warnings.filterwarnings(
+        "ignore",
+        message=r"The logging capability is deprecated",
+        category=MCPDeprecationWarning,
+    )
+
+
+_silence_logging_deprecation()
 
 # Cache hints (MCP 2026-07-28, SEP-2549) let a client keep the tool list, the
 # resource list and resource reads instead of fetching them again on every
