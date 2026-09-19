@@ -178,6 +178,26 @@ class SchemaState:
         self.ontology = OntologyState()
 
 
+class ConnectionRuntime:
+    """State derived from one database, shared by every session connected to it.
+
+    Almost nothing a session holds is about the client: the database manager
+    connects with the server's own credentials, and the schema cache is a set
+    of facts about that database. Owning them per session meant every
+    reconnect and every second tab rebuilt them, and it cannot work at all for
+    a client without a transport session (MCP 2026-07-28). The registry in
+    ``ServerState`` keeps one runtime per connection ID and counts the sessions
+    bound to it.
+    """
+
+    def __init__(self, connection_id: str) -> None:
+        self.connection_id = connection_id
+        self.db_manager: Any | None = None  # DatabaseManager
+        self.schema_cache = SchemaCache()
+        self.holders = 0  # sessions currently bound; managed by ServerState
+        self.created_at: datetime = utc_now()
+
+
 class SessionData:
     """Per-session data storage with multi-schema support.
 
@@ -190,6 +210,10 @@ class SessionData:
         self.connection = ConnectionState()
         self.schema_cache = SchemaCache()
         self.rdf_store = RDFStoreState()
+
+        # Shared per-connection state, once ServerState has bound this session
+        # to it. Unbound (tests, no registry) the session owns private copies.
+        self.runtime: ConnectionRuntime | None = None
 
         # Connection-scoped state (shared across schemas)
         self.graphrag = GraphRAGState()
@@ -286,15 +310,38 @@ class SessionData:
         """Internal helper: get or create current SchemaState."""
         return self.get_or_create_schema_state()
 
-    # Connection properties (session-scoped, unchanged)
+    # --- Shared connection runtime ---
+
+    def bind_runtime(self, runtime: ConnectionRuntime) -> None:
+        """Share ``runtime``'s state instead of this session's private copies.
+
+        Only ``ServerState`` calls this; it owns the holder count.
+        """
+        self.runtime = runtime
+        self.schema_cache = runtime.schema_cache
+        # Whatever manager this session brought is the runtime's business now.
+        self.connection.db_manager = None
+
+    def unbind_runtime(self) -> None:
+        """Go back to private, empty state, leaving the shared state intact."""
+        self.runtime = None
+        self.schema_cache = SchemaCache()
+        self.connection.db_manager = None
+
+    # Connection properties
 
     @property
     def db_manager(self) -> Any | None:
+        if self.runtime is not None:
+            return self.runtime.db_manager
         return self.connection.db_manager
 
     @db_manager.setter
     def db_manager(self, value: Any | None) -> None:
-        self.connection.db_manager = value
+        if self.runtime is not None:
+            self.runtime.db_manager = value
+        else:
+            self.connection.db_manager = value
 
     @property
     def connection_id(self) -> str | None:

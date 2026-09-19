@@ -7,10 +7,12 @@ from typing import Any
 from fastmcp import Context
 
 from ..constants import SUPPORTED_DB_TYPES
+from ..database_manager import DatabaseManager
 from ..exceptions import ConnectionError, ValidationError
 from ..handler_context import HandlerContext
 from ..lifecycle.metadata import mutate_workspace_metadata
 from ..paths import OUTPUT_DIR
+from ..session import ConnectionRuntime, SessionData
 from ..utils import notify_client, utc_now
 from ..workspace import detect_workspace, format_workspace_summary
 from .workspace import _format_restore_summary, _restore_workspace_core
@@ -48,7 +50,16 @@ async def connect_database(
             f"Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
         ).to_response()
 
-    db_manager = services.get_session_db_manager(ctx)
+    # A session sharing a connection runtime connects with a fresh manager:
+    # reconnecting the shared one in place would swap the engine out from under
+    # every other session using it. ServerState.bind_session then decides
+    # whether the fresh manager is redundant or replaces a dead one.
+    shares_runtime = services.provides("get_session_data") and isinstance(
+        getattr(services.get_session_data(ctx), "runtime", None), ConnectionRuntime
+    )
+    db_manager = (
+        DatabaseManager() if shares_runtime else services.get_session_db_manager(ctx)
+    )
     success = False
     db_name = ""
 
@@ -290,7 +301,18 @@ async def connect_database(
 
         session.connection_id = new_conn_id
         session.connected_at = utc_now()
-        session.clear_schema_cache()
+
+        # Join the runtime every session on this database shares. Its schema
+        # cache describes the database, not this client, so it is only reset
+        # when nobody else is relying on it.
+        shared_with_others = False
+        if services.server_state is not None and isinstance(session, SessionData):
+            runtime = services.server_state.bind_session(
+                session, new_conn_id, db_manager
+            )
+            shared_with_others = runtime.holders > 1
+        if not shared_with_others:
+            session.clear_schema_cache()
 
         await notify_client(ctx, f"Connected to {db_type}: {db_name}")
 
@@ -328,6 +350,12 @@ async def connect_database(
 
         return response
     else:
+        if db_manager is not services.get_session_data(ctx).db_manager:
+            # A fresh manager that never connected; the shared one is untouched.
+            try:
+                db_manager.disconnect()
+            except Exception as e:
+                logger.debug(f"Discarding failed connect manager: {e}")
         await notify_client(
             ctx, "Database connection failed; check credentials and try again"
         )
