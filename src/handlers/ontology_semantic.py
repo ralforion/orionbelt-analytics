@@ -15,7 +15,7 @@ from ..lifecycle.metadata import update_workspace_section
 from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
-from ..utils import is_client_disconnect, safe_ctx_info, utc_now, write_text_file
+from ..utils import is_client_disconnect, notify_client, utc_now, write_text_file
 from .ontology_generation import _build_minimal_graph_summary
 
 logger = logging.getLogger(__name__)
@@ -426,7 +426,7 @@ async def suggest_semantic_names(
                 len(sampled_suggestions.get(k) or [])
                 for k in ("classes", "properties", "relationships")
             )
-            await safe_ctx_info(
+            await notify_client(
                 ctx,
                 f"Found {total_cryptic} cryptic names; "
                 f"server pre-filled {sampled_total} suggestions via MCP sampling — "
@@ -449,7 +449,7 @@ async def suggest_semantic_names(
                 "next_tool": "apply_semantic_names",
             }
 
-        await safe_ctx_info(
+        await notify_client(
             ctx,
             f"Found {total_cryptic} cryptic names to review; "
             f"next call should be apply_semantic_names with your suggestions",
@@ -622,7 +622,9 @@ async def apply_semantic_names(
         relationships_updated = len(name_suggestions.get("relationships", []))
         total_updated = classes_updated + properties_updated + relationships_updated
 
-        await ctx.info(f"Applied {total_updated} semantic name changes to ontology")
+        await notify_client(
+            ctx, f"Applied {total_updated} semantic name changes to ontology"
+        )
 
         # Mirror the new vocabulary into GraphRAG. Without this the enrichment
         # is invisible to search: those vectors come from raw schema metadata,

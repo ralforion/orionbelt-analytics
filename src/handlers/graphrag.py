@@ -21,7 +21,7 @@ from ..lifecycle.metadata import (
 from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
-from ..utils import utc_now, write_text_file
+from ..utils import notify_client, utc_now, write_text_file
 
 logger = logging.getLogger(__name__)
 
@@ -478,9 +478,10 @@ async def initialize_graphrag(
             except Exception as e:
                 logger.warning(f"Failed to write workspace metadata: {e}")
 
-        await ctx.info(
+        await notify_client(
+            ctx,
             f"GraphRAG initialized for schema '{eff_schema}' with {len(tables_dict)} tables "
-            f"(total: {total_tables} tables across {len(schemas)} schema(s))"
+            f"(total: {total_tables} tables across {len(schemas)} schema(s))",
         )
 
         return (
@@ -529,7 +530,7 @@ async def graphrag_search(
             query=query, top_k=top_k, element_type=element_type
         )
 
-        await ctx.info(f"Found {len(results)} results for query: {query}")
+        await notify_client(ctx, f"Found {len(results)} results for query: {query}")
 
         return {
             "success": True,
@@ -568,11 +569,12 @@ async def graphrag_add_semantic_context(
         )
 
         if result.get("searchable"):
-            await ctx.info(f"Indexed semantic context for {target}")
+            await notify_client(ctx, f"Indexed semantic context for {target}")
         else:
-            await ctx.info(
+            await notify_client(
+                ctx,
                 f"Stored semantic context for {target}, but it is not "
-                "searchable under the current embedding backend"
+                "searchable under the current embedding backend",
             )
 
         return {
@@ -617,10 +619,11 @@ async def graphrag_query_context(
             query=query, max_tables=max_tables, max_columns=max_columns
         )
 
-        await ctx.info(
+        await notify_client(
+            ctx,
             f"Generated context: {len(context['relevant_tables'])} tables, "
             f"{len(context['relevant_columns'])} columns, "
-            f"~{context['token_estimate']} tokens"
+            f"~{context['token_estimate']} tokens",
         )
 
         return {
@@ -676,8 +679,8 @@ async def graphrag_find_join_path(
             if join["to_table"] not in path:
                 path.append(join["to_table"])
 
-        await ctx.info(
-            f"Found {len(join_path)}-hop path from {from_table} to {to_table}"
+        await notify_client(
+            ctx, f"Found {len(join_path)}-hop path from {from_table} to {to_table}"
         )
 
         return {
@@ -723,8 +726,9 @@ async def reachable_from(
             )
             return err
 
-        await ctx.info(
-            f"{len(result['tables'])} dimension-capable tables reachable from '{table}'"
+        await notify_client(
+            ctx,
+            f"{len(result['tables'])} dimension-capable tables reachable from '{table}'",
         )
         return {
             "success": True,
@@ -774,8 +778,8 @@ async def measurable_from(
             )
             return err
 
-        await ctx.info(
-            f"{len(result['tables'])} measure-capable tables for anchor '{table}'"
+        await notify_client(
+            ctx, f"{len(result['tables'])} measure-capable tables for anchor '{table}'"
         )
         return {
             "success": True,
@@ -904,8 +908,8 @@ async def plan_composite_query(
     else:
         guidance = "Could not determine a leg root."
 
-    await ctx.info(
-        f"CFL decomposition: cfl_required={cfl_required}, {len(legs)} leg(s)"
+    await notify_client(
+        ctx, f"CFL decomposition: cfl_required={cfl_required}, {len(legs)} leg(s)"
     )
     return {
         "success": True,
@@ -935,7 +939,9 @@ async def graphrag_overview(
     try:
         overview = session.graphrag_manager.get_schema_overview()
 
-        await ctx.info(f"Generated schema overview for: {overview['schema_name']}")
+        await notify_client(
+            ctx, f"Generated schema overview for: {overview['schema_name']}"
+        )
 
         return {"success": True, "overview": overview}
 

@@ -11,7 +11,7 @@ from ..exceptions import ConnectionError, ValidationError
 from ..handler_context import HandlerContext
 from ..lifecycle.metadata import mutate_workspace_metadata
 from ..paths import OUTPUT_DIR
-from ..utils import utc_now
+from ..utils import notify_client, utc_now
 from ..workspace import detect_workspace, format_workspace_summary
 from .workspace import _format_restore_summary, _restore_workspace_core
 
@@ -292,7 +292,7 @@ async def connect_database(
         session.connected_at = utc_now()
         session.clear_schema_cache()
 
-        await ctx.info(f"Connected to {db_type}: {db_name}")
+        await notify_client(ctx, f"Connected to {db_type}: {db_name}")
 
         # Write workspace connection info
         try:
@@ -328,7 +328,9 @@ async def connect_database(
 
         return response
     else:
-        await ctx.info("Database connection failed; check credentials and try again")
+        await notify_client(
+            ctx, "Database connection failed; check credentials and try again"
+        )
         return ConnectionError(
             f"Failed to connect to {db_type} database: {db_name}"
         ).to_response()
@@ -347,9 +349,9 @@ async def list_schemas(ctx: Context, services: "HandlerContext") -> list[str]:
     db_manager = services.get_session_db_manager(ctx)
     schemas = db_manager.get_schemas()
     if schemas:
-        await ctx.info(
-            f"Found {len(schemas)} schemas; next call should be discover_schema"
+        await notify_client(
+            ctx, f"Found {len(schemas)} schemas; next call should be discover_schema"
         )
     else:
-        await ctx.info("No schemas found")
+        await notify_client(ctx, "No schemas found")
     return schemas if schemas else []

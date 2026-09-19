@@ -14,7 +14,7 @@ from ..constants import OBA_NAMESPACE
 from ..handler_context import HandlerContext
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import PROJECT_ROOT
-from ..utils import read_text_file, write_text_file
+from ..utils import notify_client, read_text_file, write_text_file
 
 logger = logging.getLogger(__name__)
 
@@ -254,24 +254,28 @@ async def load_my_ontology(
                     logger.info(
                         f"Auto-persisted ontology to Oxigraph: {triple_count} triples in graph <{graph_uri}>"
                     )
-                    await ctx.info(
-                        f"Ontology loaded and stored in RDF database with {triple_count:,} triples; ready for SPARQL queries"
+                    await notify_client(
+                        ctx,
+                        f"Ontology loaded and stored in RDF database with {triple_count:,} triples; ready for SPARQL queries",
                     )
                 else:
                     logger.warning("Oxigraph store not available for auto-persist")
-                    await ctx.info(
-                        f"Ontology loaded with {classes_count} classes; ready for SQL generation"
+                    await notify_client(
+                        ctx,
+                        f"Ontology loaded with {classes_count} classes; ready for SQL generation",
                     )
             except Exception as e:
                 logger.warning(
                     f"Auto-persist to Oxigraph failed: {e}, ontology still available in session state"
                 )
-                await ctx.info(
-                    f"Ontology loaded with {classes_count} classes; ready for SQL generation"
+                await notify_client(
+                    ctx,
+                    f"Ontology loaded with {classes_count} classes; ready for SQL generation",
                 )
         else:
-            await ctx.info(
-                f"Ontology loaded with {classes_count} classes; ready for SQL generation"
+            await notify_client(
+                ctx,
+                f"Ontology loaded with {classes_count} classes; ready for SQL generation",
             )
 
         response: dict[str, Any] = {

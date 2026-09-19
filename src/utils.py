@@ -125,20 +125,34 @@ async def write_json_file(
     await asyncio.to_thread(_write)
 
 
-async def safe_ctx_info(ctx: Any, message: str) -> None:
-    """Send an MCP info notification without ever propagating transport errors.
+async def notify_client(ctx: Any, message: str, level: str = "info") -> None:
+    """Send a progress or error notification to the client, never raising.
 
-    A notification failing (e.g. ``anyio.ClosedResourceError`` because the
-    client already closed the session) must not abort the tool call — the
-    real result still has to flow back through the framework's response path.
-    Logs failures at debug level since they are usually benign client
-    disconnects.
+    The single seam for server-to-client messages. Every handler reports
+    through here rather than calling ``ctx.info`` directly, for two reasons:
+
+    - A notification failing (e.g. ``anyio.ClosedResourceError`` because the
+      client already closed the session) must not abort the tool call -- the
+      real result still has to flow back through the framework's response
+      path. Failures are logged at debug level since they are usually benign
+      client disconnects.
+    - MCP deprecated its Logging feature in the 2026-07-28 revision, where a
+      message may only be sent for a request that opted in. When that lands,
+      this function is the one place that changes.
+
+    Args:
+        ctx: FastMCP request context, or ``None`` outside a request (background
+            work), in which case nothing is sent.
+        message: Text for the client.
+        level: ``"info"`` or ``"error"``; the ``Context`` method to call.
     """
+    if ctx is None:
+        return
     try:
-        await ctx.info(message)
+        await getattr(ctx, level)(message)
     except Exception as exc:
         logging.getLogger(__name__).debug(
-            "ctx.info send failed (%s); continuing", type(exc).__name__
+            "ctx.%s send failed (%s); continuing", level, type(exc).__name__
         )
 
 

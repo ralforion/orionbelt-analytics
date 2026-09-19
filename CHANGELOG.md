@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manager. It now raises `SessionRequiredError` (`session_required`). First
   step of the stateless-protocol plan; a connection handle as a tool argument
   follows.
+- **Progress messages go through one function.** All 64 `ctx.info` /
+  `ctx.error` calls in the handlers now use `notify_client` in `src/utils.py`
+  (the former `safe_ctx_info`, generalized). A notification that cannot be
+  delivered, typically because the client already disconnected, no longer
+  aborts the tool whose result was still on its way. It is also the single
+  place to adapt when MCP Logging, deprecated in the 2026-07-28 revision, goes
+  away. A test fails if a handler calls the context directly again.
 
 ### Deprecated
 - **`MCP_TRANSPORT=sse`.** The MCP specification deprecated the HTTP+SSE
