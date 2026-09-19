@@ -29,6 +29,7 @@ from . import __name__ as SERVER_NAME
 from . import __version__
 
 # --- Centralized path and env loading (Task 1 & 2) ---
+from .config import resolve_mcp_cache_ttl
 from .paths import ensure_output_dir, get_env_file_path
 
 # Load environment variables using centralized path resolution (Task 1: C4 fix)
@@ -58,9 +59,20 @@ ensure_output_dir()
 
 # --- MCP Server Setup ---
 
+# Cache hints (MCP 2026-07-28, SEP-2549) let a client keep the tool list, the
+# resource list and resource reads instead of fetching them again on every
+# turn. All three are safe to keep here: the tool list and the skill files only
+# change with a release, and every chart widget has a URI of its own, so a
+# cached read can never be a stale chart. One hint covers them all, and chart
+# reads carry a user's data, hence "private": a shared intermediary must not
+# serve one user's cached result to another.
+_CACHE_TTL = resolve_mcp_cache_ttl()
+
 mcp = FastMCP(
     name=SERVER_NAME,
     version=__version__,
+    cache_ttl=_CACHE_TTL or None,
+    cache_scope="private" if _CACHE_TTL else None,
     instructions="""
 # OrionBelt Analytics - AI-Powered Database Intelligence
 
