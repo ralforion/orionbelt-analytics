@@ -214,3 +214,82 @@ async def test_auto_ontology_still_updates_a_session_that_stayed(
     store.load_ontology.assert_called_once()
     session.set_current_schema("public")
     assert session.ontology_file.startswith("ontology_public_")
+
+
+async def test_the_chained_ontology_stays_with_the_old_database_too(
+    state, monkeypatch, tmp_path
+):
+    """AUTO_ONTOLOGY chains ontology generation onto GraphRAG initialisation.
+    If the session moved while the index was built, the chained work must not
+    pin itself to the new database: it holds the old database's tables."""
+    saving, proceed = threading.Event(), threading.Event()
+
+    class SlowGraphRAG:
+        def __init__(self, connection_id, schema_name):
+            self._schema_names = [schema_name]
+            self.vector_count = 1
+            self.vector_collection_name = "c"
+            self.graph_retriever = Mock()
+            self.graph_retriever.graph.number_of_nodes.return_value = 1
+            self.vector_store = Mock()
+            self.vector_store.get_statistics.return_value = {"total_elements": 1}
+
+        def initialize_from_schema(self, **_kwargs):
+            pass
+
+        def save_state(self, *_args):
+            saving.set()
+            assert proceed.wait(timeout=10)
+            return []
+
+    class Generator:
+        def __init__(self, base_uri):
+            pass
+
+        def generate_from_schema(self, _tables, views_info=None):
+            return "@prefix ex: <http://example.com/> .\n"
+
+    (tmp_path / OLD).mkdir()
+    version = AsyncMock()
+    monkeypatch.setattr(graphrag_handler, "GraphRAGManager", SlowGraphRAG)
+    monkeypatch.setattr(graphrag_handler, "OntologyGenerator", Generator)
+    monkeypatch.setattr(
+        graphrag_handler, "get_connection_dir", lambda cid: tmp_path / cid
+    )
+    monkeypatch.setattr(graphrag_handler, "ensure_output_dir", lambda: tmp_path)
+    monkeypatch.setattr(graphrag_handler, "update_workspace_section", AsyncMock())
+    monkeypatch.setattr(graphrag_handler, "update_schema_version", version)
+    monkeypatch.setattr(graphrag_handler, "OXIGRAPH_AVAILABLE", True)
+    monkeypatch.setenv("AUTO_ONTOLOGY", "true")
+
+    session = state.get_session("mover")
+    session.connection_id = OLD
+    state.bind_session(session, OLD, _Manager())
+    # Another holder, so the move does not cancel the work.
+    stays = state.get_session("stays")
+    stays.connection_id = OLD
+    state.bind_session(stays, OLD, _Manager())
+
+    task = asyncio.create_task(
+        graphrag_handler._auto_initialize_graphrag_background(
+            schema_name="public", tables_info=_tables(), session=session, ctx=None
+        )
+    )
+    assert await asyncio.to_thread(saving.wait, 10)
+    _move_to_new_database(state, session)
+    new_store = Mock(name="rdf-store-of-the-new-database")
+    session.oxigraph_store = new_store
+    proceed.set()
+    await task
+
+    assert list((tmp_path / OLD).glob("ontology_public_*.ttl"))
+    assert not (tmp_path / NEW).exists()
+    new_store.load_ontology.assert_not_called()
+    session.set_current_schema("public")
+    assert session.ontology_file is None
+    ontology_records = [
+        call.kwargs
+        for call in version.await_args_list
+        if "ontology_ttl_file" in call.kwargs["updates"]
+    ]
+    assert [r["connection_id"] for r in ontology_records] == [OLD]
