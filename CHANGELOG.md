@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manager. It now raises `SessionRequiredError` (`session_required`). First
   step of the stateless-protocol plan; a connection handle as a tool argument
   follows.
+- **The database manager and schema cache are shared per connection.** They
+  were owned per MCP session, although the manager connects with the server's
+  own credentials and the cache is a set of facts about the database. A
+  `ConnectionRuntime` per connection ID now holds both, and `ServerState` binds
+  sessions to it: a second client on the same database joins a warm cache and
+  an open connection instead of rebuilding them, and the manager is
+  disconnected when the last session leaves. `connect_database` on a session
+  that shares a runtime connects a fresh manager rather than reconnecting the
+  shared one under the other sessions, and replaces the shared one only if it
+  has lost its connection. Groundwork for clients without a transport session.
 - **Progress messages go through one function.** All 64 `ctx.info` /
   `ctx.error` calls in the handlers now use `notify_client` in `src/utils.py`
   (the former `safe_ctx_info`, generalized). A notification that cannot be

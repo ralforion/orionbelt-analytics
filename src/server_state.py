@@ -29,7 +29,7 @@ from .obqc_validator import OBQCValidator
 from .ontology_generator import OntologyGenerator
 from .oxigraph_store import OXIGRAPH_AVAILABLE, OxigraphStoreManager
 from .paths import ensure_output_dir, get_connection_dir, get_oxigraph_store_dir
-from .session import SessionData
+from .session import ConnectionRuntime, SessionData
 from .utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -128,6 +128,11 @@ def _clear_session_state(
     """Clear all session state caches and indexes."""
     logger.info(f"Clearing session state ({reason})")
 
+    # Leave the shared runtime before clearing anything: the caches below are
+    # shared objects while bound, and clearing them in place would empty them
+    # for every other session on the old connection.
+    _server_state.unbind_session(session)
+
     session.clear_schema_cache()
 
     # Clear all per-schema state (ontology for every schema)
@@ -173,6 +178,93 @@ class ServerState:
         self._eviction_task: asyncio.Task[None] | None = None
         self._stores: dict[Path, _StoreHandle] = {}
         self._removing_stores: dict[Path, int] = {}
+        self._runtimes: dict[str, ConnectionRuntime] = {}
+
+    # --- Shared connection runtimes ---
+
+    def bind_session(
+        self, session: SessionData, connection_id: str, db_manager: Any
+    ) -> ConnectionRuntime:
+        """Bind ``session`` to the shared runtime of ``connection_id``.
+
+        ``db_manager`` is the manager the session just connected with. The
+        first session on a connection donates it to the runtime. A later
+        session finds a manager already there and its own becomes redundant:
+        it is disconnected, unless the shared one has lost its connection, in
+        which case the fresh one replaces it.
+
+        Args:
+            session: The session that connected.
+            connection_id: Fingerprint of the database it connected to.
+            db_manager: The connected manager it used.
+
+        Returns:
+            The runtime the session now shares.
+        """
+        if (
+            session.runtime is not None
+            and session.runtime.connection_id != connection_id
+        ):
+            self.unbind_session(session)
+
+        runtime = session.runtime
+        if runtime is None:
+            runtime = self._runtimes.get(connection_id)
+            if runtime is None:
+                runtime = ConnectionRuntime(connection_id)
+                self._runtimes[connection_id] = runtime
+                logger.info(f"Created connection runtime {connection_id[:8]}...")
+            runtime.holders += 1
+            session.bind_runtime(runtime)
+
+        current = runtime.db_manager
+        if current is None or current is db_manager:
+            runtime.db_manager = db_manager
+        elif self._manager_is_healthy(current):
+            self._disconnect_manager(db_manager, "redundant")
+        else:
+            runtime.db_manager = db_manager
+            self._disconnect_manager(current, "stale")
+        return runtime
+
+    def unbind_session(self, session: SessionData) -> None:
+        """Detach ``session`` from its runtime; close it after the last holder.
+
+        Args:
+            session: Session to detach. A session with no runtime is a no-op.
+        """
+        runtime = session.runtime
+        # isinstance, not a None check: a test double's attribute is a Mock.
+        if not isinstance(runtime, ConnectionRuntime):
+            return
+        session.unbind_runtime()
+        runtime.holders -= 1
+        if runtime.holders > 0:
+            return
+        self._runtimes.pop(runtime.connection_id, None)
+        if runtime.db_manager is not None:
+            self._disconnect_manager(runtime.db_manager, "last holder left")
+            runtime.db_manager = None
+        logger.info(f"Closed connection runtime {runtime.connection_id[:8]}...")
+
+    def get_runtime(self, connection_id: str) -> ConnectionRuntime | None:
+        """The live runtime for ``connection_id``, if any session holds one."""
+        return self._runtimes.get(connection_id)
+
+    @staticmethod
+    def _manager_is_healthy(db_manager: Any) -> bool:
+        try:
+            return bool(db_manager.is_connected())
+        except Exception as e:
+            logger.debug(f"Shared database manager health check failed: {e}")
+            return False
+
+    @staticmethod
+    def _disconnect_manager(db_manager: Any, why: str) -> None:
+        try:
+            db_manager.disconnect()
+        except Exception as e:
+            logger.warning(f"Error disconnecting {why} database manager: {e}")
 
     # --- Shared Oxigraph stores ---
 
@@ -325,7 +417,10 @@ class ServerState:
         if session is None:
             return
 
-        if session.db_manager:
+        if session.runtime is not None:
+            # Shared manager: the runtime disconnects it with its last holder.
+            self.unbind_session(session)
+        elif session.db_manager:
             try:
                 session.db_manager.disconnect()
             except Exception as e:
