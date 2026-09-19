@@ -128,12 +128,17 @@ def _table_info_to_dict(table_info: Any) -> dict[str, Any]:
     }
 
 
+# "Take the connection from the session": None is a real value (no connection).
+_FROM_SESSION: Any = object()
+
+
 async def _auto_generate_ontology_background(
     schema_name: str,
     tables_info: list[Any],
     session: Any,
     ctx: Context,
     version: int | None = None,
+    connection_id: Any = _FROM_SESSION,
 ) -> None:
     """Background task: Auto-generate ontology after GraphRAG completes.
 
@@ -147,7 +152,12 @@ async def _auto_generate_ontology_background(
     from ..config import config_manager
 
     # Fixed now: the session may be on another database by the time this ends.
-    connection_id: str | None = session.connection_id
+    # When GraphRAG initialisation chains into this, it passes the connection
+    # *it* was pinned to: the session may have moved while the index was built,
+    # and reading it again here would pin this work to the new database while
+    # it holds the old database's tables.
+    if connection_id is _FROM_SESSION:
+        connection_id = session.connection_id
     try:
         start_time = time.time()
         logger.info(f"Auto-generating ontology for schema '{schema_name}'...")
@@ -363,6 +373,7 @@ async def _auto_initialize_graphrag_background(
                 session=session,
                 ctx=ctx,
                 version=version,
+                connection_id=pinned.connection_id,
             )
 
     except Exception as e:
