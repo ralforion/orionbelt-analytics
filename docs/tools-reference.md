@@ -451,13 +451,15 @@ Delete all workspace files for the current database connection and clear session
 
 **Parameters:** None
 
-**Returns:** Markdown-formatted summary of what was removed.
+**Returns:** Markdown-formatted summary of what was removed, or a note that the cleanup was cancelled and nothing was deleted.
 
 **Key Features:**
 - Removes the workspace directory (`tmp/{connection_id}/`), Oxigraph RDF store, and ChromaDB vector store
 - Clears all in-memory session state (schema cache, ontology, GraphRAG, RDF store)
 - Database connection stays active -- call `discover_schema()` to start fresh
-- Safe: only affects the current connection's workspace, not other sessions
+- Scoped to the current connection's workspace. That workspace is shared: every session on the same database loses the schema cache, GraphRAG index and RDF store too, and restores nothing on its next connect. Other connections are untouched
+
+**Confirmation.** A client that advertises the MCP elicitation capability is asked to confirm first, with a checkbox the user has to tick. Declining, dismissing the question, or accepting without ticking the box all cancel the cleanup. On MCP 2026-07-28 the question travels as a multi round-trip request (the tool returns it and is called again with the answer); on earlier revisions the tool waits for the answer. The question is asked before the connection's writer lock is taken, so a slow answer holds nobody up. A client that cannot be asked is not asked, and the cleanup proceeds as it always did.
 
 ---
 

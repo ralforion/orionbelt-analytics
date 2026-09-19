@@ -758,18 +758,27 @@ async def generate_chart(
 
 @mcp.tool()
 @_connection_aware()
-async def cleanup_workspace(ctx: Context) -> str | dict[str, Any]:
+async def cleanup_workspace(
+    ctx: Context,
+) -> str | dict[str, Any] | InputRequiredResult:
     """Delete all workspace files for the current database connection and clear session state.
 
     Removes schema JSON, ontology TTL, R2RML mappings, GraphRAG data, ChromaDB vectors,
     Oxigraph RDF store, semantic models, and metadata for this connection.
     The database connection itself remains active.
 
+    A client that supports elicitation is asked to confirm first; if the user
+    declines, nothing is deleted. Other clients are not asked.
+
     Use this to start fresh or free disk space. Requires an active connection.
 
     Returns:
-        Summary of what was removed
+        Summary of what was removed, or that the cleanup was cancelled
     """
+    # Asked outside the writer lock: the answer may take a person a while.
+    unconfirmed = await _h_workspace.confirm_cleanup(ctx, services=_services())
+    if unconfirmed is not None:
+        return unconfirmed
     async with _writer_lock(ctx):
         return await _h_workspace.cleanup_workspace(
             ctx,
