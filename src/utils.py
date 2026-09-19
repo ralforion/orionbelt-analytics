@@ -125,6 +125,36 @@ async def write_json_file(
     await asyncio.to_thread(_write)
 
 
+# First MCP revision without protocol-level sessions and with multi round-trip
+# results. Revisions are ISO dates, so they compare as strings.
+STATELESS_PROTOCOL_REVISION = "2026-07-28"
+
+
+def protocol_revision(ctx: Any) -> str | None:
+    """The MCP protocol revision a request was made under, if it says.
+
+    Read from ``ctx.request_context.protocol_version``, else from the server
+    session. ``None`` for anything that does not report one, such as a test
+    double.
+    """
+    try:
+        request_context = getattr(ctx, "request_context", None)
+    except Exception as e:  # outside a request, some FastMCP versions raise
+        logging.getLogger(__name__).debug(f"No request context to inspect: {e}")
+        return None
+    version = getattr(request_context, "protocol_version", None)
+    if not isinstance(version, str):
+        session = getattr(request_context, "session", None)
+        version = getattr(session, "protocol_version", None)
+    return version if isinstance(version, str) else None
+
+
+def is_stateless_era(ctx: Any) -> bool:
+    """True from MCP 2026-07-28 on: no transport session, multi round trips."""
+    revision = protocol_revision(ctx)
+    return revision is not None and revision >= STATELESS_PROTOCOL_REVISION
+
+
 async def notify_client(ctx: Any, message: str, level: str = "info") -> None:
     """Send a progress or error notification to the client, never raising.
 

@@ -24,14 +24,15 @@ Complete, runnable examples with READMEs live in the [`integrations/`](../integr
 
 ### MCP Sampling
 
-A subset of clients support [MCP sampling](https://modelcontextprotocol.io/specification/server/utilities/sampling) -- the server-initiated `sampling/createMessage` flow that lets a tool call back through the host LLM mid-execution. OrionBelt Analytics uses this in `suggest_semantic_names` to pre-fill rename suggestions for cryptic identifiers, collapsing the previous review-then-apply workflow into a single tool call.
+OrionBelt Analytics can ask the host LLM to pre-fill rename suggestions for cryptic identifiers in `suggest_semantic_names`, collapsing the review-then-apply workflow into a single tool call. Since the move to FastMCP 4 this goes through a multi round-trip request (MCP 2026-07-28): the tool returns a [sampling](https://modelcontextprotocol.io/specification/server/utilities/sampling) request, the client fulfils it and calls the tool again. It therefore needs a client that speaks **MCP 2026-07-28 and** advertises the sampling capability; the server checks both before asking, and every other client gets the manual-review response shape.
 
-| Client | Sampling | Notes |
+| Client | Pre-filled suggestions | Notes |
 |---|---|---|
-| **OrionBelt Chat** | Yes | Advertises `sampling.tools`; routes sampling requests to the env-configured default model |
-| Claude Desktop | No | Falls back silently to the manual-review response shape |
-| Claude Code | No | Same fallback |
-| Pydantic-AI agents | If wired | Call `agent.set_mcp_sampling_model()` (or pass `sampling_model=` to each MCP server) to expose the agent's LLM to sampling callbacks |
+| Clients on MCP 2026-07-28 with a sampling handler | Yes | Sampling requests are routed to the client's model |
+| **OrionBelt Chat** on MCP SDK 1.x | Not currently | Speaks protocol 2025-11-25, where the multi round-trip result does not exist. Works again once its MCP stack speaks 2026-07-28 |
+| Claude Desktop | No | Manual-review response shape |
+| Claude Code | No | Same |
+| Pydantic-AI agents | On 2026-07-28, if wired | Call `agent.set_mcp_sampling_model()` (or pass `sampling_model=` to each MCP server) to expose the agent's LLM |
 | Other frameworks | Depends | Sampling is opt-in per host; check the framework's MCP client docs |
 
 Set `SEMANTIC_NAMING_MODE=review` in OrionBelt Analytics' `.env` to disable the sampling path globally regardless of client support. See [Configuration](./configuration.md#semantic-naming-mode) for details.
