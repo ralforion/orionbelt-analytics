@@ -225,7 +225,7 @@ orionbelt-analytics/
 |-- src/
 |   |-- __init__.py                  # Package version (__version__)
 |   |-- main.py                      # FastMCP server setup, @mcp.tool() registration
-|   |-- session.py                   # SessionData -- per-session + per-schema state isolation
+|   |-- session.py                   # SessionData (per user) + ConnectionRuntime (shared per database)
 |   |-- config.py                    # Configuration management, .env loading
 |   |-- constants.py                 # Shared constants
 |   |-- paths.py                     # Centralized path resolution (output, skills, config)
@@ -341,21 +341,37 @@ BaseDriver (src/drivers/base.py)
 
 Adding a new database requires implementing the `BaseDriver` interface and registering the driver in `database_manager.py`.
 
-### Per-session state isolation
+### Session state and what sessions share
 
-Each MCP session maintains its own `SessionData` instance (`src/session.py`), which contains:
+State is split along one line: what the *database* is, and what a *user* is doing with it.
 
-- **ConnectionState** -- active database manager, connection ID (session-scoped)
-- **SchemaCache** -- cached schema analysis results (multi-schema, dict-based)
-- **SchemaState** (per schema) -- bundles:
-  - **OntologyState** -- generated ontology content, file paths, OBQC validator
+**Per user session** -- a `SessionData` instance (`src/session.py`):
+
+- which connection the session is on, and its **connection handle** (`ob_k2m9qa`)
+- the **current schema**
+- **SchemaState** (per schema), which bundles:
+  - **OntologyState** -- the active or custom-loaded ontology, file paths, applied semantic names, and the OBQC validator built from it
   - **schema_file** -- saved schema JSON reference
-- **GraphRAGState** -- GraphRAG manager instance, initialization status (connection-scoped, accumulative)
-- **RDFStoreState** -- Oxigraph store instance (connection-scoped, multi-schema via named graphs)
+- **RDFStoreState** -- this session's reference to the connection's Oxigraph store
+
+Two people on the same database may work with different ontologies. One of them loading their own with `load_my_ontology` never swaps the other's validator.
+
+**Per database connection** -- a `ConnectionRuntime`, one per connection ID, that `ServerState` (`src/server_state.py`) binds sessions to and reference-counts:
+
+- the **database manager** (it connects with the server's own credentials, not the client's)
+- the **SchemaCache** -- tables, columns and keys as the database reports them
+- **GraphRAGState** -- the GraphRAG manager, an index built from that schema; accumulative across schemas
+- a **writer lock** that serializes the tools rewriting this state or the workspace on disk: `discover_schema`, `generate_ontology`, `apply_semantic_names`, `load_my_ontology`, `reset_cache`, `cleanup_workspace`, `cleanup_old_versions`, and the restore inside `connect_database`. It is taken in `main.py` (`async with _writer_lock(ctx):`); readers take none
+
+The Oxigraph store is shared per store directory as well (RocksDB allows one handle per directory), through its own registry in `ServerState`. A second client on the same database therefore joins a warm cache, an open connection and a built index instead of rebuilding them, and the manager is disconnected when the last session leaves. Because the runtime is shared, never clear or reconnect it in place on behalf of one session: `connect_database` connects a fresh manager when the session already shares a runtime, and `_clear_session_state` unbinds before it clears.
 
 Ontology state is isolated per schema via `SchemaState`. GraphRAG and the Oxigraph RDF store are connection-scoped: each `discover_schema()` call accumulates tables into the same graph and vector store, enabling cross-schema join path discovery and unified semantic search. Switching schemas (e.g., `discover_schema("analytics")` after `discover_schema("public")`) does not destroy the previous schema's ontology state, and both schemas' tables are searchable in GraphRAG simultaneously.
 
-This isolation prevents cross-session interference when multiple clients connect to the server simultaneously. Idle sessions are automatically evicted based on `SESSION_IDLE_TIMEOUT_SECONDS`.
+**Still shared on disk:** the workspace (generated ontology versions and the active version that `connect_database` restores), saved semantic models and the RDF store are stored per connection. A generated ontology becomes what the next connect restores, and an auto-persisted one replaces the schema's default named graph for everyone querying it.
+
+**How a request finds its session** (`get_session_data(ctx)`): by the `connection` handle the call was made with, else by the MCP transport session, else as the only live session on the server (`SESSIONLESS_FALLBACK=none` disables that last rule). The handle exists because MCP 2026-07-28 has no transport session; the `@_connection_aware()` decorator in `main.py` gives every tool the argument. The sessionless era is recognised by the request's protocol revision, not by a missing session ID, because FastMCP 4 reports a fresh `ctx.session_id` on every such request. Sessions, handles included, are evicted after `SESSION_IDLE_TIMEOUT_SECONDS` of inactivity.
+
+This is workflow isolation, not a security boundary: every client uses the server's database credentials, and a handle is an address, not a secret.
 
 ### Key design patterns
 
