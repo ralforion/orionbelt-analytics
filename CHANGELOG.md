@@ -75,14 +75,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   place to adapt when MCP Logging, deprecated in the 2026-07-28 revision, goes
   away. A test fails if a handler calls the context directly again.
 
-- **`SEMANTIC_NAMING_MODE` replaces `ENABLE_SAMPLING`.** `suggest_semantic_names`
-  now picks its source of rename suggestions through one seam with three
-  strategies: client sampling (today's path), input-required (the multi
-  round-trip replacement, which needs FastMCP 4 and until then falls back),
-  and review (the client model proposes the names itself). Modes: `auto`
-  (default, unchanged behaviour), `input_required`, `review`. A context that
-  offers no `sample` at all, which is what FastMCP 4 looks like, lands on
-  the review path cleanly. No change to the tool's response.
+- **FastMCP 4 and MCP SDK 2.** `fastmcp[apps]>=4.0.5,<5`, which brings MCP
+  2026-07-28. One server now serves both protocol eras and negotiates per
+  client; clients on 2025-11-25 and earlier keep their transport session, and
+  clients on 2026-07-28 use the connection handle above. Targeted re-lock:
+  `fastmcp`, `fastmcp-slim` and `mcp` move; `mcp-types`, `httpx2`, `httpcore2`,
+  `truststore` and the Emscripten-only `httpx2-jsfetch` arrive, all MIT or
+  BSD-3-Clause; `httpx-sse` leaves. The audit workflow's `mcp-xray` pin moves
+  to 1.5.0 with it, because 1.4.0 reads the SDK v1 model fields.
+- **Rename suggestions come through a multi round-trip request.**
+  `suggest_semantic_names` used `ctx.sample`, which FastMCP 4 removed in every
+  protocol era. It now returns the sampling request instead of a result (MCP
+  2026-07-28, SEP-2322); the client fulfils it and calls the tool again, and
+  the second round returns the same response as before, `suggestions`
+  included. `SEMANTIC_NAMING_MODE=auto|input_required|review` replaces
+  `ENABLE_SAMPLING`. The server asks only a client that speaks 2026-07-28 and
+  advertises sampling, and checks both first; everyone else gets the review
+  path with an unchanged response shape.
+  **A client on protocol 2025-11-25 no longer gets pre-filled suggestions,
+  whatever it can do, because the result type does not exist there. That
+  includes OrionBelt Chat on MCP SDK 1.x**, until its MCP stack speaks
+  2026-07-28. It gets the two-call review flow meanwhile; nothing fails.
 
 ### Deprecated
 - **`ENABLE_SAMPLING`.** Still honoured when `SEMANTIC_NAMING_MODE` is unset:

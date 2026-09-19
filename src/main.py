@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Image
+from mcp.types import InputRequiredResult
 from pydantic import Field
 
 from . import __name__ as SERVER_NAME
@@ -450,13 +451,15 @@ async def generate_ontology(
 async def suggest_semantic_names(
     ctx: Context,
     ontology_file: _SafeName | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | InputRequiredResult:
     """Extract and analyze names from a generated ontology to identify abbreviations and cryptic names.
 
-    When the connected MCP client supports sampling (and SEMANTIC_NAMING_MODE=auto),
-    the server pre-fills a ``suggestions`` dict via the host LLM so the next
-    call to ``apply_semantic_names`` can pass them through directly. Otherwise
-    the response contains only the cryptic-name lists for manual review.
+    When the client speaks MCP 2026-07-28 and can sample (and
+    SEMANTIC_NAMING_MODE is not ``review``), the server asks the host LLM for
+    names through a multi round-trip request and pre-fills a ``suggestions``
+    dict, so the next call to ``apply_semantic_names`` can pass them through
+    directly. Otherwise the response contains only the cryptic-name lists for
+    manual review.
 
     Args:
         ontology_file: The ontology filename from generate_ontology response

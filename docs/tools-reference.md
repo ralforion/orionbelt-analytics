@@ -247,7 +247,7 @@ Extract and analyze names from a generated ontology to identify abbreviations, c
 - Identifies abbreviated names (e.g., `acctbal` -> `AccountBalance`)
 - Provides the foundation for the `apply_semantic_names` step
 - Does not modify the ontology -- only extracts names for review
-- When the client supports MCP sampling (and `SEMANTIC_NAMING_MODE=auto`, the default), the response also pre-fills a `suggestions` dict via the host LLM, ready to pass straight to `apply_semantic_names`
+- When the client speaks MCP 2026-07-28 and supports sampling (and `SEMANTIC_NAMING_MODE` is not `review`), the response also pre-fills a `suggestions` dict via the host LLM, ready to pass straight to `apply_semantic_names`
 
 ---
 

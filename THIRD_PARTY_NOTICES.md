@@ -84,11 +84,11 @@ files themselves must be published under MPL-2.0.
 | Apache-2.0 OR BSD-2-Clause | 1 |
 | Apache-2.0 OR BSD-3-Clause | 2 |
 | BSD-2-Clause | 4 |
-| BSD-3-Clause | 29 |
+| BSD-3-Clause | 32 |
 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | 1 |
 | ISC | 4 |
 | LGPL-3.0-or-later WITH psycopg-exception | 1 |
-| MIT | 74 |
+| MIT | 75 |
 | MIT AND PSF-2.0 | 1 |
 | MIT OR AFL-2.1 | 1 |
 | MIT OR Apache-2.0 | 1 |
@@ -101,7 +101,7 @@ files themselves must be published under MPL-2.0.
 | Unlicense | 1 |
 | W3C-20150513 | 1 |
 
-190 packages in total.
+194 packages in total.
 
 ## Packages
 
@@ -168,9 +168,11 @@ files themselves must be published under MPL-2.0.
 | hf-xet | Apache-2.0 | <https://pypi.org/project/hf-xet/> |
 | html5rdf | MIT | <https://pypi.org/project/html5rdf/> |
 | httpcore | BSD-3-Clause | <https://pypi.org/project/httpcore/> |
+| httpcore2 | BSD-3-Clause | <https://pypi.org/project/httpcore2/> |
 | httptools | MIT | <https://pypi.org/project/httptools/> |
 | httpx | BSD-3-Clause | <https://pypi.org/project/httpx/> |
-| httpx-sse | MIT | <https://pypi.org/project/httpx-sse/> |
+| httpx2 | BSD-3-Clause | <https://pypi.org/project/httpx2/> |
+| httpx2-jsfetch | BSD-3-Clause | <https://pypi.org/project/httpx2-jsfetch/> |
 | huggingface_hub | Apache-2.0 | <https://pypi.org/project/huggingface-hub/> |
 | idna | BSD-3-Clause | <https://pypi.org/project/idna/> |
 | importlib_resources | Apache-2.0 | <https://pypi.org/project/importlib-resources/> |
@@ -194,6 +196,7 @@ files themselves must be published under MPL-2.0.
 | lz4 | BSD-3-Clause | <https://pypi.org/project/lz4/> |
 | markdown-it-py | MIT | <https://pypi.org/project/markdown-it-py/> |
 | mcp | MIT | <https://pypi.org/project/mcp/> |
+| mcp-types | MIT | <https://pypi.org/project/mcp-types/> |
 | mdurl | MIT | <https://pypi.org/project/mdurl/> |
 | mmh3 | MIT | <https://pypi.org/project/mmh3/> |
 | more-itertools | MIT | <https://pypi.org/project/more-itertools/> |
@@ -282,6 +285,7 @@ files themselves must be published under MPL-2.0.
 | tokenizers | Apache-2.0 | <https://pypi.org/project/tokenizers/> |
 | tomlkit | MIT | <https://pypi.org/project/tomlkit/> |
 | tqdm | MPL-2.0 AND MIT | <https://pypi.org/project/tqdm/> |
+| truststore | MIT | <https://pypi.org/project/truststore/> |
 | typer | MIT | <https://pypi.org/project/typer/> |
 | typing-inspection | MIT | <https://pypi.org/project/typing-inspection/> |
 | typing_extensions | PSF-2.0 | <https://pypi.org/project/typing-extensions/> |
