@@ -51,3 +51,32 @@ def test_no_handler_talks_to_the_client_directly():
         if direct.search(line)
     ]
     assert offenders == []
+
+
+def test_only_the_logging_deprecation_is_silenced():
+    """FastMCP 4 keeps sending progress messages through MCP Logging on
+    purpose, and the SDK warns on every connection. That one warning is noise
+    for an operator; any other MCP deprecation must still be seen."""
+    import warnings
+
+    from mcp import MCPDeprecationWarning
+
+    from src.main import _silence_logging_deprecation
+
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        _silence_logging_deprecation()
+        warnings.warn(
+            "The logging capability is deprecated as of 2026-07-28 (SEP-2577).",
+            MCPDeprecationWarning,
+            stacklevel=1,
+        )
+        warnings.warn(
+            "The roots capability is deprecated as of 2026-07-28 (SEP-2577).",
+            MCPDeprecationWarning,
+            stacklevel=1,
+        )
+
+    assert [str(w.message) for w in seen] == [
+        "The roots capability is deprecated as of 2026-07-28 (SEP-2577)."
+    ]
