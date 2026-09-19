@@ -658,7 +658,7 @@ async def execute_sql_query(
     checklist_completed: bool = False,
     query_intent: _ShortText | None = None,
     allow_fan_out: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, Any] | InputRequiredResult:
     """Execute SQL query with built-in syntax validation, security checks, OBQC
     validation, and fan-trap protection.
 
@@ -694,7 +694,8 @@ async def execute_sql_query(
         allow_fan_out: Execute even when OBQC finds a fan-trap. Aggregates read
             across a 1:many join are inflated, so only set this when the
             multiplied rows are what you want (or you have verified the join is
-            1:1 in practice). The finding is still reported, as a warning
+            1:1 in practice). Where the client supports it the user is asked to
+            confirm; if they decline, restructure the query instead of retrying. The finding is still reported, as a warning
             instead of a blocking error, and `obqc_fan_trap` names the tables.
     """
     return await _h_query.execute_sql_query(

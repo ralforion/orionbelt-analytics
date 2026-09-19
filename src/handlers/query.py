@@ -4,11 +4,13 @@ import logging
 import re
 from typing import Any
 
+import mcp.types as mcp_types
 from fastmcp import Context
 
 from ..exceptions import ConnectionError, ParameterError, ValidationError
 from ..handler_context import HandlerContext
 from ..utils import notify_client
+from .confirmation import Confirmation, ask_to_confirm
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +205,22 @@ async def validate_sql_syntax(
         }
 
 
+def _fan_out_question(obqc_result: Any) -> str:
+    """The question put to the user when the model overrides a fan-trap block."""
+    findings = [
+        issue.message
+        for issue in obqc_result.issues
+        if getattr(issue.issue_type, "name", "") == "FAN_TRAP_DETECTED"
+    ]
+    detail = " ".join(findings) if findings else "See obqc_fan_trap for the tables."
+    return (
+        "This query aggregates across a one-to-many join, so its totals will be "
+        "inflated: rows are counted once per matching row on the many side. "
+        f"{detail} The assistant asked to run it anyway. Run it and accept "
+        "inflated totals?"
+    )
+
+
 async def execute_sql_query(
     ctx: Context,
     sql_query: str,
@@ -211,7 +229,7 @@ async def execute_sql_query(
     query_intent: str | None,
     services: "HandlerContext",
     allow_fan_out: bool | str = False,
-) -> dict[str, Any]:
+) -> dict[str, Any] | mcp_types.InputRequiredResult:
     """Execute SQL query with built-in validation and fan-trap protection.
 
     Args:
@@ -293,10 +311,41 @@ async def execute_sql_query(
             obqc_result = obqc_validator.validate(
                 sql_query.strip(), dialect=db_type, allow_fan_out=allow_fan_out
             )
+
+            # allow_fan_out is the *model's* override of a finding that would
+            # have blocked. Whether inflated totals are acceptable is for the
+            # person reading them to say, so they are asked where they can be.
+            # The validation itself stays what it is: deterministic, and
+            # unchanged by the answer. A "no" simply withdraws the override.
+            fan_out_accepted_by_user = False
+            fan_out_declined_by_user = False
+            if obqc_result.fan_trap_overridden:
+                outcome = await ask_to_confirm(
+                    ctx,
+                    key="execute_sql_query.allow_fan_out",
+                    message=_fan_out_question(obqc_result),
+                    field_title="Yes, run it and accept inflated totals",
+                )
+                if isinstance(outcome, mcp_types.InputRequiredResult):
+                    return outcome
+                fan_out_accepted_by_user = outcome is Confirmation.CONFIRMED
+                if outcome is Confirmation.DECLINED:
+                    fan_out_declined_by_user = True
+                    obqc_result = obqc_validator.validate(
+                        sql_query.strip(), dialect=db_type, allow_fan_out=False
+                    )
+
             fan_trap_report = obqc_result.to_dict()["obqc_fan_trap"]
 
             if not obqc_result.is_valid:
                 error_details = []
+                if fan_out_declined_by_user:
+                    error_details.append(
+                        "The user was asked and declined to run this with "
+                        "allow_fan_out. Do not retry the override -- restructure "
+                        "the query so each measure is aggregated before the join "
+                        "(see /fan-trap-prevention)."
+                    )
                 for issue in obqc_result.issues:
                     detail = issue.message
                     if issue.suggestion:
@@ -330,8 +379,13 @@ async def execute_sql_query(
                 # finding. Keyed off fan_trap_risk, this also fired for
                 # findings that never block, telling a caller who passed
                 # nothing that they had accepted a risk.
+                accepted_by = (
+                    "accepted by the user"
+                    if fan_out_accepted_by_user
+                    else "accepted via allow_fan_out"
+                )
                 obqc_warnings.append(
-                    "[OBQC] FAN-TRAP RISK accepted via allow_fan_out: aggregates "
+                    f"[OBQC] FAN-TRAP RISK {accepted_by}: aggregates "
                     "read across a 1:many join and are inflated. See "
                     "obqc_fan_trap for the tables involved."
                 )
