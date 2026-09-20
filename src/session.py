@@ -512,6 +512,18 @@ class SessionData:
     def cache_schema_analysis(self, schema_name: str, tables_info: list[Any]) -> None:
         """Cache schema analysis results for reuse, and make this the active schema."""
         self.schema_cache.cache_schema_analysis(schema_name, tables_info)
+        self.mark_schema_analyzed(schema_name)
+
+    def mark_schema_analyzed(self, schema_name: str) -> None:
+        """Make ``schema_name`` this session's default target.
+
+        Called when the session analyses a schema, *including* when the answer
+        came from the cache another session filled: what matters is that this
+        client asked for this schema, not who paid for the round trip.
+
+        Args:
+            schema_name: The schema just discovered.
+        """
         self._last_analyzed_schema = schema_name
 
     def get_cached_schema(self, schema_name: str) -> list[Any] | None:

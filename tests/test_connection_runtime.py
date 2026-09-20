@@ -663,3 +663,32 @@ async def test_the_pointer_does_not_survive_a_connection_change():
         assert session.get_last_analyzed_schema() is None
     finally:
         _server_state.cleanup_session("runtime-pointer")
+
+
+async def test_discovering_a_schema_another_session_cached_still_switches_this_one():
+    """A cache hit is still this session's discovery. Without it, a client that
+    had been working on `hr` asked for `sales`, got the cached answer, and its
+    next parameterless generate_ontology still targeted `hr`."""
+    import os
+    from unittest.mock import AsyncMock
+
+    from src.handler_context import HandlerContext
+    from src.handlers import schema as schema_handler
+
+    os.environ["AUTO_GRAPHRAG"] = "false"
+    state = ServerState()
+    alice, bob = _two_sessions_on_one_connection(state)
+    alice.cache_schema_analysis("sales", [Mock(name="orders")])
+    bob.cache_schema_analysis("hr", [Mock(name="employees")])
+    assert bob.get_last_analyzed_schema() == "hr"
+
+    ctx = Mock()
+    ctx.info = AsyncMock()
+    services = HandlerContext(get_session_data=lambda _ctx: bob)
+    result = await schema_handler.discover_schema(ctx, "sales", True, services)
+
+    assert result["schema"] == "sales"
+    assert bob.current_schema == "sales"
+    assert bob.get_last_analyzed_schema() == "sales"
+    # Alice is unaffected by Bob's call.
+    assert alice.get_last_analyzed_schema() == "sales"

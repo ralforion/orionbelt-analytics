@@ -16,6 +16,7 @@ from unittest.mock import Mock
 import pytest
 
 from src.database_manager import DatabaseManager
+from src.lifecycle.metadata import VersionMetadataManager
 from src.paths import adopt_legacy_connection_dirs, connection_dirs
 from src.server_state import (
     ServerState,
@@ -149,15 +150,20 @@ def test_two_real_duckdb_files_do_not_share_a_manager(tmp_path):
 # --- taking over a workspace named by the previous fingerprint ---
 
 
-def _populate(root: Path, connection_id: str) -> None:
+def _populate(root: Path, connection_id: str, db_type: str, db_name: str) -> None:
+    """A workspace as a previous release left it: directories and metadata."""
     for directory in connection_dirs(connection_id):
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "marker.txt").write_text(connection_id, encoding="utf-8")
+    VersionMetadataManager(connection_id, root).update_workspace_connection(
+        db_type=db_type, db_name=db_name
+    )
 
 
 @pytest.fixture
 def output_dir(monkeypatch, tmp_path):
     monkeypatch.setattr("src.paths.OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr("src.workspace.OUTPUT_DIR", tmp_path)
     return tmp_path
 
 
@@ -165,9 +171,9 @@ def test_a_workspace_from_a_previous_release_is_adopted(output_dir):
     manager = _manager(type="postgresql", host="db", port=5432, database="app")
     legacy_id = _legacy_connection_fingerprint(manager)
     current_id = _get_connection_fingerprint(manager)
-    _populate(output_dir, legacy_id)
+    _populate(output_dir, legacy_id, "postgresql", "app")
 
-    adopted = adopt_legacy_workspace(manager, current_id)
+    adopted = adopt_legacy_workspace(manager, current_id, "postgresql", "app")
 
     assert len(adopted) == 3
     for directory in connection_dirs(current_id):
@@ -175,14 +181,53 @@ def test_a_workspace_from_a_previous_release_is_adopted(output_dir):
     assert not (output_dir / legacy_id).exists()
 
 
+def test_another_databases_workspace_is_left_alone(output_dir):
+    """The reviewer's reproduction. The old fingerprint could not tell a
+    DuckDB file from a BigQuery dataset, so following it blindly would hand
+    one database's ontologies to another and lose them for their owner."""
+    duckdb = _manager(type="duckdb", database_path="/data/sales.duckdb")
+    bigquery = _manager(type="bigquery", project_id="cloud", dataset="warehouse")
+    legacy_id = _legacy_connection_fingerprint(duckdb)
+    assert legacy_id == _legacy_connection_fingerprint(bigquery)  # the collision
+    _populate(output_dir, legacy_id, "duckdb", "/data/sales.duckdb")
+    bigquery_id = _get_connection_fingerprint(bigquery)
+
+    adopted = adopt_legacy_workspace(bigquery, bigquery_id, "bigquery", "warehouse")
+
+    assert adopted == []
+    assert (output_dir / legacy_id / "marker.txt").exists()
+    assert not (output_dir / bigquery_id).exists()
+
+    # ...and its real owner still finds it.
+    assert adopt_legacy_workspace(
+        duckdb, _get_connection_fingerprint(duckdb), "duckdb", "/data/sales.duckdb"
+    )
+
+
+def test_a_workspace_that_records_no_connection_is_left_alone(output_dir):
+    """Ownership cannot be shown, and the old id cannot be trusted to show it."""
+    manager = _manager(type="postgresql", host="db", port=5432, database="app")
+    legacy_id = _legacy_connection_fingerprint(manager)
+    for directory in connection_dirs(legacy_id):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    assert (
+        adopt_legacy_workspace(
+            manager, _get_connection_fingerprint(manager), "postgresql", "app"
+        )
+        == []
+    )
+    assert (output_dir / legacy_id).exists()
+
+
 def test_an_existing_workspace_is_never_overwritten(output_dir):
     manager = _manager(type="postgresql", host="db", port=5432, database="app")
     legacy_id = _legacy_connection_fingerprint(manager)
     current_id = _get_connection_fingerprint(manager)
-    _populate(output_dir, legacy_id)
-    _populate(output_dir, current_id)
+    _populate(output_dir, legacy_id, "postgresql", "app")
+    _populate(output_dir, current_id, "postgresql", "app")
 
-    assert adopt_legacy_workspace(manager, current_id) == []
+    assert adopt_legacy_workspace(manager, current_id, "postgresql", "app") == []
     assert (output_dir / current_id / "marker.txt").read_text(
         encoding="utf-8"
     ) == current_id
@@ -192,11 +237,19 @@ def test_an_existing_workspace_is_never_overwritten(output_dir):
 def test_nothing_to_adopt_is_not_an_error(output_dir):
     manager = _manager(type="duckdb", database_path="/data/sales.duckdb")
 
-    assert adopt_legacy_workspace(manager, _get_connection_fingerprint(manager)) == []
+    assert (
+        adopt_legacy_workspace(
+            manager,
+            _get_connection_fingerprint(manager),
+            "duckdb",
+            "/data/sales.duckdb",
+        )
+        == []
+    )
 
 
 def test_an_unchanged_id_is_left_alone(output_dir):
-    _populate(output_dir, "same-id")
+    _populate(output_dir, "same-id", "postgresql", "app")
 
     assert adopt_legacy_connection_dirs("same-id", "same-id") == []
     assert (output_dir / "same-id" / "marker.txt").exists()

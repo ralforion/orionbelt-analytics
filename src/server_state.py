@@ -38,6 +38,7 @@ from .paths import (
 )
 from .session import ConnectionRuntime, SessionData
 from .utils import utc_now
+from .workspace import workspace_identity
 
 logger = logging.getLogger(__name__)
 
@@ -203,12 +204,48 @@ def _legacy_connection_fingerprint(db_manager: DatabaseManager) -> str:
 
 
 def adopt_legacy_workspace(
-    db_manager: DatabaseManager, connection_id: str
+    db_manager: DatabaseManager,
+    connection_id: str,
+    db_type: str,
+    db_name: str,
 ) -> list[str]:
-    """Take over the workspace a previous release left under the old id."""
-    return adopt_legacy_connection_dirs(
-        _legacy_connection_fingerprint(db_manager), connection_id
-    )
+    """Take over the workspace a previous release left under the old id.
+
+    Only when that workspace says it belongs to this database. The old
+    fingerprint is exactly the thing that could not tell databases apart, so
+    following it blindly would hand one database's ontologies, caches and
+    triples to another -- and leave the owner unable to find them. A workspace
+    that records no connection cannot be shown to be ours, so it is left where
+    it is.
+
+    Args:
+        db_manager: The manager that just connected.
+        connection_id: Fingerprint in use now.
+        db_type: Database type as ``connect_database`` reports it.
+        db_name: Database name as ``connect_database`` reports it.
+
+    Returns:
+        Names of the directories that were adopted, for the log.
+    """
+    legacy_id = _legacy_connection_fingerprint(db_manager)
+    if not legacy_id or legacy_id == connection_id:
+        return []
+
+    identity = workspace_identity(legacy_id)
+    if identity is None:
+        logger.debug(
+            f"Workspace {legacy_id} records no connection; leaving it where it is"
+        )
+        return []
+    if identity != (db_type, db_name):
+        logger.info(
+            f"Workspace {legacy_id} belongs to {identity[0]}:{identity[1]}, not to "
+            f"{db_type}:{db_name}; leaving it where it is. The previous "
+            "connection id could not tell these databases apart."
+        )
+        return []
+
+    return adopt_legacy_connection_dirs(legacy_id, connection_id)
 
 
 def _calculate_schema_hash(tables_info: list[Any]) -> str:

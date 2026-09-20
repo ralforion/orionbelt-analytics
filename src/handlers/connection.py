@@ -322,7 +322,9 @@ async def connect_database(
         # like a first run.
         if services.provides("adopt_legacy_workspace"):
             try:
-                adopted = services.adopt_legacy_workspace(db_manager, new_conn_id)
+                adopted = services.adopt_legacy_workspace(
+                    db_manager, new_conn_id, db_type, db_name
+                )
                 if adopted:
                     logger.info(
                         f"Adopted {len(adopted)} workspace director(ies) from a "

@@ -108,13 +108,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Existing workspaces are renamed:** on the first `connect_database` after
   the upgrade, directories left under the previous id are adopted, provided the
   new id has none. Nothing is overwritten and nothing is deleted; the adoption
-  is logged.
+  is logged. A workspace is adopted only when the connection it records matches
+  the database in hand: the id being replaced is the one that could not tell
+  databases apart, so following it blindly would hand one database's ontologies
+  to another and lose them for their owner. A workspace that records no
+  connection is left where it is.
 - **One session's discovery no longer redirects another's.** Sessions on the
   same database share the cached schema data, but `_last_analyzed_schema` — the
   default target of every tool called without an explicit `schema_name` — was
   shared with it. After A discovered `sales` and B discovered `hr`, A's next
   parameterless `generate_ontology()` targeted `hr`. The pointer is per session
-  now; the cached data it points into stays shared.
+  now; the cached data it points into stays shared. Discovering a schema that
+  another session had already cached moves this session's pointer too: the
+  client asked for that schema, whoever paid for the round trip.
 - **Background initialisation stays with the database it was started for.**
   GraphRAG initialisation and `AUTO_ONTOLOGY` generation outlive the tool call
   that started them, and read the session lazily all the way through. A session
