@@ -184,6 +184,23 @@ def _get_connection_fingerprint(db_manager: DatabaseManager) -> str:
     return hashlib.sha256(fingerprint_data.encode()).hexdigest()[:16]
 
 
+# The only fields the old fingerprint read that carry any information. A
+# workspace may be followed back to its database only when all of them are
+# filled in: the old id then encodes where the database lives and what it is
+# called, and the type recorded in the workspace settles the rest. With any of
+# them missing, the old id was the same for every database of that driver --
+# every DuckDB file, every BigQuery dataset, every Dremio endpoint, every
+# Snowflake account -- and so is the name the driver records, which for Dremio
+# is the constant "DREMIO". Nothing then tells one from another, and moving a
+# workspace on a guess hands a stranger's ontologies to whoever connects first.
+_LEGACY_IDENTIFYING_KEYS = ("host", "port", "database")
+
+
+def _legacy_fingerprint_is_specific(conn_info: dict[str, Any]) -> bool:
+    """Whether the old id pinned this database down, or every one of its kind."""
+    return all(conn_info.get(key) for key in _LEGACY_IDENTIFYING_KEYS)
+
+
 def _legacy_connection_fingerprint(db_manager: DatabaseManager) -> str:
     """What :func:`_get_connection_fingerprint` returned before it was fixed.
 
@@ -211,12 +228,14 @@ def adopt_legacy_workspace(
 ) -> list[str]:
     """Take over the workspace a previous release left under the old id.
 
-    Only when that workspace says it belongs to this database. The old
+    Only when that workspace can be *shown* to belong to this database. The old
     fingerprint is exactly the thing that could not tell databases apart, so
     following it blindly would hand one database's ontologies, caches and
-    triples to another -- and leave the owner unable to find them. A workspace
-    that records no connection cannot be shown to be ours, so it is left where
-    it is.
+    triples to another -- and leave the owner unable to find them. Two tests,
+    both of which must hold: the old id must have encoded this database's own
+    coordinates rather than being the one every database of its driver got, and
+    the workspace must record which database it belongs to, and record this
+    one. Anything less is left where it is, and said so in the log.
 
     Args:
         db_manager: The manager that just connected.
@@ -229,6 +248,16 @@ def adopt_legacy_workspace(
     """
     legacy_id = _legacy_connection_fingerprint(db_manager)
     if not legacy_id or legacy_id == connection_id:
+        return []
+
+    conn_info = db_manager.connection_info or {}
+    if not _legacy_fingerprint_is_specific(conn_info):
+        logger.info(
+            "The previous connection id was the same for every "
+            f"{conn_info.get('type', 'database')} of this kind, so a workspace "
+            "under it cannot be shown to belong to this one. Leaving it where "
+            "it is; move it by hand if it is yours."
+        )
         return []
 
     identity = workspace_identity(legacy_id)

@@ -198,10 +198,75 @@ def test_another_databases_workspace_is_left_alone(output_dir):
     assert (output_dir / legacy_id / "marker.txt").exists()
     assert not (output_dir / bigquery_id).exists()
 
-    # ...and its real owner still finds it.
-    assert adopt_legacy_workspace(
-        duckdb, _get_connection_fingerprint(duckdb), "duckdb", "/data/sales.duckdb"
+    # Nor does its real owner take it: the old id was the same for every
+    # DuckDB file, so nothing on disk says which one this workspace was for.
+    # Left where it is, for the operator to move if they know.
+    assert (
+        adopt_legacy_workspace(
+            duckdb, _get_connection_fingerprint(duckdb), "duckdb", "/data/sales.duckdb"
+        )
+        == []
     )
+
+
+def test_two_dremio_endpoints_do_not_take_each_others_workspace(output_dir):
+    """The reviewer's reproduction. Every Dremio connection records the name
+    "DREMIO", and the old id was the same for all of them, so matching what the
+    workspace records is not enough to show whose it is."""
+    sales = _manager(type="dremio", uri="https://sales.dremio", auth_method="PAT")
+    hr = _manager(type="dremio", uri="https://hr.dremio", auth_method="PAT")
+    legacy_id = _legacy_connection_fingerprint(sales)
+    assert legacy_id == _legacy_connection_fingerprint(hr)  # the collision
+    _populate(output_dir, legacy_id, "dremio", "DREMIO")
+
+    hr_id = _get_connection_fingerprint(hr)
+    assert adopt_legacy_workspace(hr, hr_id, "dremio", "DREMIO") == []
+    assert (output_dir / legacy_id / "marker.txt").exists()
+    assert not (output_dir / hr_id).exists()
+
+    # Not even its real owner: nothing on disk says which endpoint it was.
+    sales_id = _get_connection_fingerprint(sales)
+    assert adopt_legacy_workspace(sales, sales_id, "dremio", "DREMIO") == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "connection_info"),
+    [
+        ("DuckDB", {"type": "duckdb", "database_path": "/data/sales.duckdb"}),
+        ("BigQuery", {"type": "bigquery", "project_id": "acme", "dataset": "sales"}),
+        ("Snowflake", {"type": "snowflake", "account": "a", "database": "sales"}),
+        ("Databricks", {"type": "databricks", "server_hostname": "x", "schema": "s"}),
+    ],
+)
+def test_drivers_the_old_id_could_not_tell_apart_are_left_alone(
+    output_dir, kind, connection_info
+):
+    """None of these put host, port and database in the old id, so every
+    database of that kind got the same one."""
+    manager = _manager(**connection_info)
+    _populate(output_dir, _legacy_connection_fingerprint(manager), kind.lower(), "db")
+
+    assert (
+        adopt_legacy_workspace(
+            manager, _get_connection_fingerprint(manager), kind.lower(), "db"
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("kind", ["postgresql", "mysql", "clickhouse"])
+def test_drivers_the_old_id_did_identify_are_adopted(output_dir, kind):
+    """Host, port and database were all in the old id, and the workspace
+    records the type, so ownership can be shown."""
+    manager = _manager(type=kind, host="db.internal", port=5432, database="app")
+    legacy_id = _legacy_connection_fingerprint(manager)
+    _populate(output_dir, legacy_id, kind, "app")
+
+    adopted = adopt_legacy_workspace(
+        manager, _get_connection_fingerprint(manager), kind, "app"
+    )
+
+    assert len(adopted) == 3
 
 
 def test_a_workspace_that_records_no_connection_is_left_alone(output_dir):

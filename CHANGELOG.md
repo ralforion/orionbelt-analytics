@@ -111,8 +111,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is logged. A workspace is adopted only when the connection it records matches
   the database in hand: the id being replaced is the one that could not tell
   databases apart, so following it blindly would hand one database's ontologies
-  to another and lose them for their owner. A workspace that records no
-  connection is left where it is.
+  to another and lose them for their owner. Ownership has to be *shown*: the
+  old id must have encoded this database's own host, port and database name,
+  and the workspace must record which database it belongs to, and record this
+  one. That covers PostgreSQL, MySQL and ClickHouse. For DuckDB, BigQuery,
+  Dremio, Snowflake and Databricks the old id was the same for every database
+  of that kind — as is the name Dremio records, the constant `DREMIO` — so
+  those workspaces are left where they are, with a log line saying so. The
+  files are untouched and can be renamed by hand.
 - **One session's discovery no longer redirects another's.** Sessions on the
   same database share the cached schema data, but `_last_analyzed_schema` — the
   default target of every tool called without an explicit `schema_name` — was
