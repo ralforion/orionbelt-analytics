@@ -4,10 +4,13 @@ Single source of truth for all file/directory paths used across the project.
 Replaces scattered Path construction and hardcoded paths.
 """
 
+import logging
 import os
 from pathlib import Path
 
 from .constants import DEFAULT_OUTPUT_DIR
+
+logger = logging.getLogger(__name__)
 
 # Project root: parent of the src/ directory
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -147,6 +150,61 @@ def get_connection_dir(connection_id: str) -> Path:
     conn_dir = OUTPUT_DIR / connection_id
     conn_dir.mkdir(parents=True, exist_ok=True)
     return conn_dir
+
+
+def connection_dirs(connection_id: str) -> list[Path]:
+    """Every directory named after a connection id, workspace first.
+
+    Unlike :func:`get_connection_dir` this creates nothing, so it is safe to
+    ask about an id that may not exist.
+
+    Args:
+        connection_id: Database connection fingerprint.
+
+    Returns:
+        Paths that may or may not exist.
+    """
+    return [OUTPUT_DIR / connection_id, *get_connection_store_dirs(connection_id)]
+
+
+def adopt_legacy_connection_dirs(legacy_id: str, connection_id: str) -> list[str]:
+    """Rename directories left under an older connection id onto the current one.
+
+    The fingerprint that names a connection's workspace changed: it used to
+    read fields no driver writes, so unrelated databases shared a directory.
+    Correcting it renames every workspace, and without this an upgrade would
+    silently look like a first run -- the ontologies, vectors and triples still
+    on disk under the old name never found again.
+
+    Conservative by construction: a directory is moved only when the current id
+    has none, so nothing that exists is ever overwritten, and nothing is
+    deleted. A collision under the old id (two databases that shared it) leaves
+    the losers to start empty, which is what they should have had all along.
+
+    Args:
+        legacy_id: Fingerprint a previous release would have computed.
+        connection_id: Fingerprint in use now.
+
+    Returns:
+        Names of the directories that were adopted, for the log.
+    """
+    if not legacy_id or legacy_id == connection_id:
+        return []
+    adopted: list[str] = []
+    for legacy_dir, current_dir in zip(
+        connection_dirs(legacy_id), connection_dirs(connection_id), strict=True
+    ):
+        if not legacy_dir.is_dir() or current_dir.exists():
+            continue
+        try:
+            current_dir.parent.mkdir(parents=True, exist_ok=True)
+            legacy_dir.rename(current_dir)
+        except OSError as e:
+            logger.warning(f"Could not adopt {legacy_dir} as {current_dir}: {e}")
+            continue
+        adopted.append(legacy_dir.parent.name + "/" + legacy_dir.name)
+        logger.info(f"Adopted workspace directory {legacy_dir} as {current_dir}")
+    return adopted
 
 
 def get_skills_dir() -> Path:

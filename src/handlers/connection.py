@@ -316,6 +316,21 @@ async def connect_database(
         elif not session.connection_id:
             logger.info(f"Initial connection established: {new_conn_id[:8]}...")
 
+        # Before anything reads or writes the workspace: the fingerprint that
+        # names it changed, so a directory from a previous release is still
+        # under the old name. Renaming it is what keeps an upgrade from looking
+        # like a first run.
+        if services.provides("adopt_legacy_workspace"):
+            try:
+                adopted = services.adopt_legacy_workspace(db_manager, new_conn_id)
+                if adopted:
+                    logger.info(
+                        f"Adopted {len(adopted)} workspace director(ies) from a "
+                        f"previous connection id: {', '.join(adopted)}"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not adopt a legacy workspace: {e}")
+
         session.connection_id = new_conn_id
         session.connected_at = utc_now()
 

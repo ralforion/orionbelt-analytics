@@ -94,6 +94,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http` (streamable HTTP).
 
 ### Fixed
+- **A connection id now identifies the database.** The fingerprint that names
+  a connection's workspace read `database_type`, `host`, `port`, `database` and
+  `schema`; no driver writes `database_type` (they write `type`), and the rest
+  are absent from exactly the drivers that need something else. Two DuckDB
+  files, two BigQuery datasets, two Dremio endpoints reached with a token, and
+  PostgreSQL vs MySQL on one host and database all hashed to the same value.
+  They shared a workspace, and — now that sessions share a connection runtime —
+  the second connection was handed the first database's open manager, so its
+  queries were answered by the wrong database. Every non-secret field the
+  driver reports goes into the hash now. Credentials are excluded, so rotating
+  a password keeps the workspace and no secret is hashed into a directory name.
+  **Existing workspaces are renamed:** on the first `connect_database` after
+  the upgrade, directories left under the previous id are adopted, provided the
+  new id has none. Nothing is overwritten and nothing is deleted; the adoption
+  is logged.
+- **One session's discovery no longer redirects another's.** Sessions on the
+  same database share the cached schema data, but `_last_analyzed_schema` — the
+  default target of every tool called without an explicit `schema_name` — was
+  shared with it. After A discovered `sales` and B discovered `hr`, A's next
+  parameterless `generate_ontology()` targeted `hr`. The pointer is per session
+  now; the cached data it points into stays shared.
 - **Background initialisation stays with the database it was started for.**
   GraphRAG initialisation and `AUTO_ONTOLOGY` generation outlive the tool call
   that started them, and read the session lazily all the way through. A session

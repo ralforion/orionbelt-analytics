@@ -30,7 +30,12 @@ from .exceptions import SessionRequiredError, UnknownConnectionError
 from .obqc_validator import OBQCValidator
 from .ontology_generator import OntologyGenerator
 from .oxigraph_store import OXIGRAPH_AVAILABLE, OxigraphStoreManager
-from .paths import ensure_output_dir, get_connection_dir, get_oxigraph_store_dir
+from .paths import (
+    adopt_legacy_connection_dirs,
+    ensure_output_dir,
+    get_connection_dir,
+    get_oxigraph_store_dir,
+)
 from .session import ConnectionRuntime, SessionData
 from .utils import utc_now
 
@@ -128,8 +133,62 @@ def get_session_id(ctx: Context) -> str:
     )
 
 
+# Exact key names, and substrings, whose value is a credential rather than a
+# part of the database's identity. Kept out of the fingerprint so a rotated
+# password does not orphan a workspace, and so no secret is hashed into a
+# directory name. "pat" is matched exactly on purpose: as a substring it also
+# occurs in "database_path", which *is* DuckDB's identity.
+_SECRET_KEY_NAMES = frozenset({"pat", "password", "token", "secret", "credentials"})
+_SECRET_KEY_MARKERS = ("password", "secret", "token", "credential", "private_key")
+
+
+def _identifies_the_database(key: str) -> bool:
+    """Whether a connection_info field belongs in the fingerprint."""
+    lowered = key.lower()
+    if lowered in _SECRET_KEY_NAMES:
+        return False
+    return not any(marker in lowered for marker in _SECRET_KEY_MARKERS)
+
+
 def _get_connection_fingerprint(db_manager: DatabaseManager) -> str:
-    """Generate unique fingerprint for current database connection."""
+    """Stable identity of the database a manager is connected to.
+
+    Every non-secret field the driver reports is included, because what
+    identifies a database differs per driver: a file path for DuckDB, a project
+    and dataset for BigQuery, a URI for Dremio with a token, host/port/database
+    for the server-based ones. The previous version read ``database_type``,
+    ``host``, ``port``, ``database`` and ``schema``; no driver writes
+    ``database_type`` (they write ``type``), and the rest are absent from
+    exactly the drivers that need something else. Two DuckDB files, two
+    BigQuery projects or two Dremio endpoints therefore hashed to the same
+    value -- which shared a workspace, and, since sessions share a connection
+    runtime, one database's open manager.
+
+    Args:
+        db_manager: A connected manager.
+
+    Returns:
+        16 hex characters, or ``"no_connection"``.
+    """
+    conn_info = db_manager.connection_info
+    if not conn_info:
+        return "no_connection"
+
+    identity = {
+        key: value for key, value in conn_info.items() if _identifies_the_database(key)
+    }
+    # sort_keys, so a driver reordering its dict does not rename a workspace;
+    # default=str, so a value the driver stores as an object still hashes.
+    fingerprint_data = json.dumps(identity, sort_keys=True, default=str)
+    return hashlib.sha256(fingerprint_data.encode()).hexdigest()[:16]
+
+
+def _legacy_connection_fingerprint(db_manager: DatabaseManager) -> str:
+    """What :func:`_get_connection_fingerprint` returned before it was fixed.
+
+    Only to find directories a previous release left behind; see
+    :func:`~src.paths.adopt_legacy_connection_dirs`.
+    """
     conn_info = db_manager.connection_info
     if not conn_info:
         return "no_connection"
@@ -141,6 +200,15 @@ def _get_connection_fingerprint(db_manager: DatabaseManager) -> str:
         f"@{conn_info.get('schema', '')}"
     )
     return hashlib.sha256(fingerprint_data.encode()).hexdigest()[:16]
+
+
+def adopt_legacy_workspace(
+    db_manager: DatabaseManager, connection_id: str
+) -> list[str]:
+    """Take over the workspace a previous release left under the old id."""
+    return adopt_legacy_connection_dirs(
+        _legacy_connection_fingerprint(db_manager), connection_id
+    )
 
 
 def _calculate_schema_hash(tables_info: list[Any]) -> str:

@@ -619,3 +619,47 @@ async def test_a_connection_change_cancels_nothing_other_sessions_still_need(
     assert not task.cancelled()
     assert task in stays.graphrag.init_tasks
     task.cancel()
+
+
+async def test_another_sessions_discovery_does_not_redirect_this_one():
+    """Sessions on one database share the cached schema data, not which schema
+    each of them is working on. With the pointer shared, B discovering `hr`
+    made A's next parameterless generate_ontology target `hr`."""
+    state = ServerState()
+    alice, bob = _two_sessions_on_one_connection(state)
+
+    alice.cache_schema_analysis("sales", ["orders"])
+    bob.cache_schema_analysis("hr", ["employees"])
+
+    assert alice.get_last_analyzed_schema() == "sales"
+    assert bob.get_last_analyzed_schema() == "hr"
+    # ...while both can still read what the other discovered.
+    assert alice.get_cached_schema("hr") == ["employees"]
+    assert bob.get_cached_schema("sales") == ["orders"]
+
+
+async def test_clearing_one_schema_only_drops_the_pointer_that_named_it():
+    state = ServerState()
+    (session,) = (state.get_session("a"),)
+    state.bind_session(session, "conn-1", _connected())
+    session.cache_schema_analysis("sales", ["orders"])
+
+    session.clear_schema_cache("hr")
+    assert session.get_last_analyzed_schema() == "sales"
+
+    session.clear_schema_cache("sales")
+    assert session.get_last_analyzed_schema() is None
+
+
+async def test_the_pointer_does_not_survive_a_connection_change():
+    """It names a schema of the database being left."""
+    session = _server_state.get_session("runtime-pointer")
+    try:
+        _server_state.bind_session(session, "conn-pointer", _connected())
+        session.cache_schema_analysis("sales", ["orders"])
+
+        _clear_session_state(session, reason="connection change")
+
+        assert session.get_last_analyzed_schema() is None
+    finally:
+        _server_state.cleanup_session("runtime-pointer")

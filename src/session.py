@@ -238,6 +238,14 @@ class SessionData:
         self._schema_states: dict[str, SchemaState] = {}
         self._current_schema: str | None = None
 
+        # Which schema this session last analysed: the default target of every
+        # tool called without an explicit schema_name. A pointer to what the
+        # *user* is working on, so it stays here even though the cached schema
+        # data it points into is shared with the other sessions on this
+        # database. Sharing it let one client's discover_schema redirect
+        # another client's next generate_ontology.
+        self._last_analyzed_schema: str | None = None
+
         # The name a client without a transport session uses to come back to
         # this session: minted by ServerState, passed as the `connection` tool
         # argument. An address, not a secret.
@@ -362,6 +370,7 @@ class SessionData:
             return
         self.schema_cache = SchemaCache()
         self.graphrag = GraphRAGState()
+        self._last_analyzed_schema = None
         self.connection.db_manager = None
 
     # Connection properties
@@ -501,8 +510,9 @@ class SessionData:
     # --- Delegated methods ---
 
     def cache_schema_analysis(self, schema_name: str, tables_info: list[Any]) -> None:
-        """Cache schema analysis results for reuse."""
+        """Cache schema analysis results for reuse, and make this the active schema."""
         self.schema_cache.cache_schema_analysis(schema_name, tables_info)
+        self._last_analyzed_schema = schema_name
 
     def get_cached_schema(self, schema_name: str) -> list[Any] | None:
         """Get cached schema analysis results if available."""
@@ -527,7 +537,13 @@ class SessionData:
             schema_name: If provided, clear only that schema. If None, clear all.
         """
         self.schema_cache.clear(schema_name)
+        if schema_name is None or schema_name == self._last_analyzed_schema:
+            self._last_analyzed_schema = None
 
     def get_last_analyzed_schema(self) -> str | None:
-        """Get the name of the last analyzed schema."""
-        return self.schema_cache.get_last_analyzed_schema()
+        """The schema this session last analysed, if any.
+
+        This session's own pointer, never another session's: they share the
+        cached schema data, not which schema is being worked on.
+        """
+        return self._last_analyzed_schema
