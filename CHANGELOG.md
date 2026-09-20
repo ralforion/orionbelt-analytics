@@ -152,7 +152,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection's writer lock is taken, so a person thinking about it cannot
   block everyone else on that database; the wait for that lock is a second
   window, and the approval is checked again on the far side of it before
-  anything is deleted.
+  anything is deleted. Deleting the files is a third: the in-memory state
+  cleared afterwards is the deleted connection's, not whatever database the
+  session has moved to, whose other sessions would have lost their warm
+  cache and index.
 - **A client that can only open URLs is no longer sent a form.** MCP 2026-07-28
   splits elicitation into form and URL kinds, and the SDK's capability check
   only tests that *some* elicitation was declared. A URL-only client was sent a

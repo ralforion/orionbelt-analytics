@@ -25,6 +25,7 @@ from ..paths import (
     get_models_dir,
     get_oxigraph_store_dir,
 )
+from ..session import ConnectionRuntime
 from ..utils import (
     notify_client,
     read_json_file,
@@ -452,6 +453,10 @@ async def cleanup_workspace(
 
     # Pinned, so nothing below re-reads a session that may move again.
     connection_id = approved_connection_id or session.connection_id
+    # The runtime whose files are about to go. Deleting them takes a while, and
+    # a connect_database landing in that window moves the session to another
+    # database -- whose shared cache and index must not be the ones cleared.
+    cleaned_runtime = session.runtime
 
     # 1. Close live resources before deleting their files. The Oxigraph store
     # is shared by every session on this connection, so it must not be closed
@@ -512,13 +517,30 @@ async def cleanup_workspace(
     removal.add_done_callback(_pending_removals.discard)
     removed = await asyncio.shield(removal)
 
-    # 3. Clear all in-memory session state (keep connection alive)
-    session.clear_schema_cache()
-    session.clear_all_schema_states()
-    session.graphrag_manager = None
-    session.graphrag_initialized = False
-    session.oxigraph_store = None
-    session.oxigraph_initialized = False
+    # 3. Clear the in-memory state that described the files just deleted
+    # (keeping the connection itself alive).
+    if session.connection_id == connection_id:
+        session.clear_schema_cache()
+        session.clear_all_schema_states()
+        session.graphrag_manager = None
+        session.graphrag_initialized = False
+        session.oxigraph_store = None
+        session.oxigraph_initialized = False
+    else:
+        # The session connected elsewhere while the files were being deleted.
+        # Its own state now describes that other database and is none of our
+        # business; what must still be cleared is the state the *deleted*
+        # connection shares, which its remaining sessions are holding and
+        # which now describes nothing.
+        logger.warning(
+            f"Session moved to connection {str(session.connection_id)[:8]}... "
+            f"while the workspace of {connection_id[:8]}... was deleted; "
+            "clearing the deleted connection's shared state, not the new one's"
+        )
+        if isinstance(cleaned_runtime, ConnectionRuntime):
+            cleaned_runtime.schema_cache.clear()
+            cleaned_runtime.graphrag.graphrag_manager = None
+            cleaned_runtime.graphrag.graphrag_initialized = False
 
     await notify_client(ctx, f"Workspace cleaned for connection {connection_id[:8]}...")
 

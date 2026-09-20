@@ -411,3 +411,54 @@ async def test_reconnecting_while_queued_for_the_writer_lock_deletes_nothing(
     assert deleted == []
     assert "connection changed" in result.data
     assert _workspace_dirs(workspace)
+
+
+async def test_reconnecting_during_deletion_spares_the_new_databases_state(
+    workspace, monkeypatch
+):
+    """Deleting the files takes a while. A connect_database landing in that
+    window must not have the cleanup clear the state of the database the
+    session moved to, which other sessions there are using."""
+    import shutil
+    import threading
+
+    state = state_module._server_state
+    deleting, proceed = threading.Event(), threading.Event()
+    real_rmtree = shutil.rmtree
+
+    def slow_rmtree(path, ignore_errors=False):
+        deleting.set()
+        assert proceed.wait(timeout=10)
+        real_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(workspace_handler.shutil, "rmtree", slow_rmtree)
+
+    async with Client(mcp, elicitation_handler=_handler("accept", True)) as c:
+        handle = await _connect(c)
+        cleaner = state.session_for_handle(handle["connection"])
+        doomed = cleaner.runtime
+        cleaner.cache_schema_analysis("sales", [Mock(name="orders")])
+
+        # Somebody else is working on the database this session is about to
+        # move to, with a warm cache of their own.
+        colleague = state.get_session("colleague")
+        colleague.connection_id = "replacement-db"
+        state.bind_session(colleague, "replacement-db", Mock(is_connected=lambda: True))
+        colleague.cache_schema_analysis("hr", [Mock(name="employees")])
+        colleague.graphrag_manager = Mock(name="colleague-graphrag")
+
+        call = asyncio.create_task(c.call_tool("cleanup_workspace", handle))
+        assert await asyncio.to_thread(deleting.wait, 10)
+        state.bind_session(cleaner, "replacement-db", Mock(is_connected=lambda: True))
+        cleaner.connection_id = "replacement-db"
+        proceed.set()
+        result = await call
+
+    assert "Workspace Cleaned" in result.data
+    # The colleague, on the database nobody asked to clean, is untouched.
+    assert colleague.get_cached_schema("hr") == colleague.get_cached_schema("hr")
+    assert colleague.get_cached_schema("hr") is not None
+    assert colleague.graphrag_manager is not None
+    # The deleted connection's own shared state is gone: its files are.
+    assert doomed.schema_cache.get_cached_schema("sales") is None
+    assert doomed.graphrag.graphrag_manager is None
