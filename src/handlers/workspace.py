@@ -6,7 +6,7 @@ import shutil
 from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import mcp.types as mcp_types
 from fastmcp import Context
@@ -289,26 +289,49 @@ def _format_restore_summary(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+CLEANUP_CONNECTION_CHANGED = (
+    "Workspace cleanup cancelled. The connection changed while the "
+    "confirmation was pending, and the approval was for the previous one, so "
+    "nothing was deleted. Call cleanup_workspace again to delete the current "
+    "connection's workspace."
+)
+
+
+class CleanupApproval(NamedTuple):
+    """The outcome of asking, and what the answer was about.
+
+    Attributes:
+        response: What the tool must return instead of cleaning up -- the
+            question itself on the first round of a 2026-07-28 request, or the
+            message that nothing was deleted. ``None`` means go ahead.
+        connection_id: The connection this call is for. Handed to
+            ``cleanup_workspace`` so the wait for the writer lock cannot move
+            the target, and so an approval cannot be spent on another database.
+    """
+
+    response: "str | mcp_types.InputRequiredResult | None"
+    connection_id: str | None
+
+
 async def confirm_cleanup(
     ctx: Context,
     services: "HandlerContext",
-) -> str | mcp_types.InputRequiredResult | None:
+) -> CleanupApproval:
     """Ask before ``cleanup_workspace`` deletes everything, where that is possible.
 
     Runs *before* the connection's writer lock is taken: in the handshake era
     the question blocks until a person answers, and nobody else's
-    ``discover_schema`` should wait on that.
+    ``discover_schema`` should wait on that. The lock is therefore still to be
+    waited for after this returns, which is why the connection comes back too.
 
     Returns:
-        ``None`` to go ahead -- confirmed, or a client that cannot be asked,
-        which gets the behaviour it always had. Otherwise what the tool must
-        return instead of cleaning up: the question itself (first round of a
-        2026-07-28 request), or the message that nothing was deleted.
+        A :class:`CleanupApproval`.
     """
     session = services.get_session_data(ctx)
     asked_about = session.connection_id
     if not asked_about:
-        return None  # nothing to delete; cleanup_workspace reports that itself
+        # Nothing to delete; cleanup_workspace reports that itself.
+        return CleanupApproval(None, None)
 
     outcome = await ask_to_confirm(
         ctx,
@@ -324,7 +347,7 @@ async def confirm_cleanup(
         scope=asked_about,
     )
     if isinstance(outcome, mcp_types.InputRequiredResult):
-        return outcome
+        return CleanupApproval(outcome, asked_about)
 
     # The question named one connection; only that one may be deleted. On a
     # 2026-07-28 request ask_to_confirm has already compared what the answer
@@ -341,21 +364,54 @@ async def confirm_cleanup(
 
     if outcome is Confirmation.STALE:
         await notify_client(ctx, "Workspace cleanup cancelled: the connection changed")
-        return (
-            "Workspace cleanup cancelled. The connection changed while the "
-            "confirmation was pending, and the approval was for the previous "
-            "one, so nothing was deleted. Call cleanup_workspace again to "
-            "delete the current connection's workspace."
-        )
+        return CleanupApproval(CLEANUP_CONNECTION_CHANGED, asked_about)
     if outcome is Confirmation.DECLINED:
         await notify_client(ctx, "Workspace cleanup cancelled")
-        return "Workspace cleanup cancelled. Nothing was deleted."
-    return None
+        return CleanupApproval(
+            "Workspace cleanup cancelled. Nothing was deleted.", asked_about
+        )
+    return CleanupApproval(None, asked_about)
+
+
+async def approval_still_valid(
+    ctx: Context,
+    services: "HandlerContext",
+    approved_connection_id: str | None,
+) -> str | None:
+    """Re-check a cleanup approval once the writer lock is held.
+
+    The question is asked before the lock is taken, so a person thinking about
+    it cannot block everyone else on that database. The wait for the lock is a
+    second window, as long as whatever writer holds it, and a
+    ``connect_database`` landing in it would otherwise spend the approval on
+    the database the session moved to.
+
+    Args:
+        ctx: FastMCP context.
+        services: Request-scoped services.
+        approved_connection_id: The connection the user confirmed, if asked.
+
+    Returns:
+        What the tool must return instead of deleting, or ``None`` to proceed.
+    """
+    if approved_connection_id is None:
+        return None
+    session = services.get_session_data(ctx)
+    if session.connection_id == approved_connection_id:
+        return None
+    logger.warning(
+        f"Session moved from connection {approved_connection_id[:8]}... to "
+        f"{str(session.connection_id)[:8]}... while cleanup waited for the "
+        "writer lock; nothing deleted"
+    )
+    await notify_client(ctx, "Workspace cleanup cancelled: the connection changed")
+    return CLEANUP_CONNECTION_CHANGED
 
 
 async def cleanup_workspace(
     ctx: Context,
     services: "HandlerContext",
+    approved_connection_id: str | None = None,
 ) -> str | dict[str, Any]:
     """Delete all workspace files for the current connection and clear session state.
 
@@ -365,8 +421,11 @@ async def cleanup_workspace(
 
     Args:
         ctx: FastMCP context
-        get_session_data: Function to get session data
-        create_error_response: Function to create error response
+        services: Request-scoped services.
+        approved_connection_id: The connection the user confirmed deleting, if
+            they were asked. Checked again here, because the wait for the
+            connection's writer lock sits between the approval and this call
+            and a ``connect_database`` can land in it.
 
     Returns:
         Summary of what was removed
@@ -380,7 +439,19 @@ async def cleanup_workspace(
         )
         return err
 
-    connection_id = session.connection_id
+    if approved_connection_id is not None and (
+        session.connection_id != approved_connection_id
+    ):
+        logger.warning(
+            f"Session moved from connection {approved_connection_id[:8]}... to "
+            f"{session.connection_id[:8]}... while cleanup waited for the writer "
+            "lock; nothing deleted"
+        )
+        await notify_client(ctx, "Workspace cleanup cancelled: the connection changed")
+        return CLEANUP_CONNECTION_CHANGED
+
+    # Pinned, so nothing below re-reads a session that may move again.
+    connection_id = approved_connection_id or session.connection_id
 
     # 1. Close live resources before deleting their files. The Oxigraph store
     # is shared by every session on this connection, so it must not be closed

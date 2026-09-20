@@ -778,13 +778,22 @@ async def cleanup_workspace(
         Summary of what was removed, or that the cleanup was cancelled
     """
     # Asked outside the writer lock: the answer may take a person a while.
-    unconfirmed = await _h_workspace.confirm_cleanup(ctx, services=_services())
-    if unconfirmed is not None:
-        return unconfirmed
+    approval = await _h_workspace.confirm_cleanup(ctx, services=_services())
+    if approval.response is not None:
+        return approval.response
+    # Waiting for the lock can take as long as another writer needs, and a
+    # connect_database can land in that window, so the connection the approval
+    # was given for is carried across it and checked again on the other side.
     async with _writer_lock(ctx):
+        stale = await _h_workspace.approval_still_valid(
+            ctx, _services(), approval.connection_id
+        )
+        if stale is not None:
+            return stale
         return await _h_workspace.cleanup_workspace(
             ctx,
             services=_services(),
+            approved_connection_id=approval.connection_id,
         )
 
 

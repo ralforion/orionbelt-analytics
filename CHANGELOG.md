@@ -148,7 +148,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   different set of tables. The question now carries the connection it is about
   (in `request_state`, since the two rounds of a 2026-07-28 request are
   separate requests) and the caller re-checks it, so a changed connection
-  cancels instead of proceeding.
+  cancels instead of proceeding. The question is asked before the
+  connection's writer lock is taken, so a person thinking about it cannot
+  block everyone else on that database; the wait for that lock is a second
+  window, and the approval is checked again on the far side of it before
+  anything is deleted.
 - **A client that can only open URLs is no longer sent a form.** MCP 2026-07-28
   splits elicitation into form and URL kinds, and the SDK's capability check
   only tests that *some* elicitation was declared. A URL-only client was sent a

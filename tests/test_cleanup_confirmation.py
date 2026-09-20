@@ -361,3 +361,53 @@ async def test_reconnecting_while_the_question_is_open_deletes_nothing(
     assert deleted == []
     assert "connection changed" in result.data
     assert _workspace_dirs(workspace)
+
+
+@pytest.mark.parametrize("mode", [None, "legacy"], ids=["modern", "handshake"])
+async def test_reconnecting_while_queued_for_the_writer_lock_deletes_nothing(
+    workspace, monkeypatch, mode
+):
+    """The question is asked before the connection's writer lock is taken, so
+    a human answer cannot block other clients. That leaves a second window:
+    the wait for the lock itself, which lasts as long as another writer needs.
+    A connect_database landing in it must not spend the approval elsewhere."""
+    state = state_module._server_state
+    deleted: list[str] = []
+
+    async def record_only(ctx, services, approved_connection_id=None):
+        deleted.append(services.get_session_data(ctx).connection_id)
+        return "simulated deletion"
+
+    monkeypatch.setattr(main_module._h_workspace, "cleanup_workspace", record_only)
+
+    lock_wanted = asyncio.Event()
+    real_writer_lock = state.writer_lock
+
+    def announce_then_wait(session):
+        lock_wanted.set()
+        return real_writer_lock(session)
+
+    monkeypatch.setattr(state, "writer_lock", announce_then_wait)
+
+    kwargs = {} if mode is None else {"mode": mode}
+    async with Client(mcp, elicitation_handler=_handler("accept", True), **kwargs) as c:
+        handle = await _connect(c)
+        session = state.session_for_handle(handle["connection"])
+        approved = session.connection_id
+
+        # Another writer holds the lock this cleanup needs.
+        original = session.runtime
+        await original.lock.acquire()
+        call = asyncio.create_task(c.call_tool("cleanup_workspace", handle))
+        await asyncio.wait_for(lock_wanted.wait(), timeout=10)
+        assert not call.done()  # approved, and queued behind the other writer
+
+        state.bind_session(session, "replacement-db", Mock(is_connected=lambda: True))
+        session.connection_id = "replacement-db"
+        original.lock.release()  # the queued cleanup proceeds
+        result = await call
+
+    assert approved != "replacement-db"
+    assert deleted == []
+    assert "connection changed" in result.data
+    assert _workspace_dirs(workspace)
