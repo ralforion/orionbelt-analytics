@@ -10,6 +10,7 @@ capability is not asked and keeps the behaviour it always had.
 
 import asyncio
 import types
+from unittest.mock import Mock
 
 import mcp.types as mcp_types
 import pytest
@@ -214,3 +215,149 @@ async def test_the_question_is_asked_outside_the_writer_lock(workspace):
         await call
 
     assert lock_was_free == [True]
+
+
+# --- an approval names what it approved ---
+
+
+def _url_only_ctx(revision: str = "2026-07-28"):
+    """A client that can only open a URL, not render a form."""
+    capabilities = mcp_types.ClientCapabilities(
+        elicitation=mcp_types.ElicitationCapability(
+            url=mcp_types.UrlElicitationCapability()
+        )
+    )
+    session = types.SimpleNamespace(
+        client_params=types.SimpleNamespace(capabilities=capabilities),
+        # The SDK's own check only tests that *some* elicitation was declared.
+        check_client_capability=lambda _capability: True,
+    )
+    return types.SimpleNamespace(
+        request_context=types.SimpleNamespace(protocol_version=revision),
+        session=session,
+        input_responses=None,
+    )
+
+
+@pytest.mark.parametrize("revision", ["2026-07-28", "2025-11-25"])
+async def test_a_url_only_client_is_not_sent_a_form(revision):
+    """It would render nothing the user can answer, so the question would
+    hang unanswered instead of protecting anything."""
+    outcome = await ask_to_confirm(
+        _url_only_ctx(revision), KEY, "Delete?", "Yes", scope="conn"
+    )
+
+    assert outcome is Confirmation.UNAVAILABLE
+
+
+async def test_a_client_offering_both_kinds_is_asked():
+    capabilities = mcp_types.ClientCapabilities(
+        elicitation=mcp_types.ElicitationCapability(
+            form=mcp_types.FormElicitationCapability(),
+            url=mcp_types.UrlElicitationCapability(),
+        )
+    )
+    ctx = types.SimpleNamespace(
+        request_context=types.SimpleNamespace(protocol_version="2026-07-28"),
+        session=types.SimpleNamespace(
+            client_params=types.SimpleNamespace(capabilities=capabilities)
+        ),
+        input_responses=None,
+    )
+
+    assert isinstance(
+        await ask_to_confirm(ctx, KEY, "Delete?", "Yes"),
+        mcp_types.InputRequiredResult,
+    )
+
+
+async def test_a_client_predating_the_distinction_is_asked():
+    """Bare `elicitation: {}` meant the form, before URL elicitation existed."""
+    capabilities = mcp_types.ClientCapabilities(
+        elicitation=mcp_types.ElicitationCapability()
+    )
+    ctx = types.SimpleNamespace(
+        request_context=types.SimpleNamespace(protocol_version="2025-11-25"),
+        session=types.SimpleNamespace(
+            client_params=types.SimpleNamespace(capabilities=capabilities)
+        ),
+        elicit=lambda message, response_type: _accepted(),
+        input_responses=None,
+    )
+
+    assert await ask_to_confirm(ctx, KEY, "Delete?", "Yes") is Confirmation.CONFIRMED
+
+
+async def _accepted():
+    return types.SimpleNamespace(action="accept", data=True)
+
+
+async def test_the_question_carries_what_it_is_about():
+    outcome = await ask_to_confirm(
+        _ctx("2026-07-28", can_elicit=True), KEY, "Delete?", "Yes", scope="conn-old"
+    )
+
+    assert isinstance(outcome, mcp_types.InputRequiredResult)
+    assert outcome.request_state == "conn-old"
+
+
+async def test_an_answer_about_another_connection_is_not_a_yes():
+    """The second round is a separate request. If the session connected
+    elsewhere in between, the approval was for the database that is gone."""
+    ctx = _ctx("2026-07-28", can_elicit=True, responses={KEY: _answer("accept", True)})
+    ctx.request_state = "conn-old"
+
+    assert await ask_to_confirm(ctx, KEY, "Delete?", "Yes", scope="conn-new") is (
+        Confirmation.STALE
+    )
+
+
+async def test_an_answer_about_this_connection_is_a_yes():
+    ctx = _ctx("2026-07-28", can_elicit=True, responses={KEY: _answer("accept", True)})
+    ctx.request_state = "conn-old"
+
+    assert await ask_to_confirm(ctx, KEY, "Delete?", "Yes", scope="conn-old") is (
+        Confirmation.CONFIRMED
+    )
+
+
+@pytest.mark.parametrize("mode", [None, "legacy"], ids=["modern", "handshake"])
+async def test_reconnecting_while_the_question_is_open_deletes_nothing(
+    workspace, monkeypatch, mode
+):
+    """The reviewer's reproduction: approval for the old database must not
+    delete the workspace of the one the session moved to."""
+    deleted: list[str] = []
+
+    async def record_only(ctx, services):
+        deleted.append(services.get_session_data(ctx).connection_id)
+        return "simulated deletion"
+
+    monkeypatch.setattr(main_module._h_workspace, "cleanup_workspace", record_only)
+
+    def move_elsewhere(session):
+        state = state_module._server_state
+        state.bind_session(session, "another-database", Mock(is_connected=lambda: True))
+        session.connection_id = "another-database"
+
+    asked: list[str] = []
+
+    async def answer_then_reconnect(message, response_type, params, context):
+        asked.append(message)
+        state = state_module._server_state
+        move_elsewhere(state.session_for_handle(handle["connection"]))
+        (field,) = params.requested_schema["properties"]
+        return ElicitResult(action="accept", content={field: True})
+
+    kwargs = {} if mode is None else {"mode": mode}
+    async with Client(mcp, elicitation_handler=answer_then_reconnect, **kwargs) as c:
+        handle = await _connect(c)
+        original = state_module._server_state.session_for_handle(
+            handle["connection"]
+        ).connection_id
+        result = await c.call_tool("cleanup_workspace", handle)
+
+    assert asked and original[:8] in asked[0]
+    assert deleted == []
+    assert "connection changed" in result.data
+    assert _workspace_dirs(workspace)

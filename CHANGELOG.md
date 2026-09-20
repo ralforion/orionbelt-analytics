@@ -139,6 +139,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http` (streamable HTTP).
 
 ### Fixed
+- **A confirmation now names what it approved.** `cleanup_workspace` asks
+  before deleting and `execute_sql_query` asks before a model's
+  `allow_fan_out` override stands. Both then acted on whatever the session
+  pointed at when the answer arrived. A `connect_database` while the question
+  was open therefore deleted the *new* connection's workspace with approval
+  given for the old one, or carried an acceptance of inflated totals to a
+  different set of tables. The question now carries the connection it is about
+  (in `request_state`, since the two rounds of a 2026-07-28 request are
+  separate requests) and the caller re-checks it, so a changed connection
+  cancels instead of proceeding.
+- **A client that can only open URLs is no longer sent a form.** MCP 2026-07-28
+  splits elicitation into form and URL kinds, and the SDK's capability check
+  only tests that *some* elicitation was declared. A URL-only client was sent a
+  checkbox it cannot render, so the question could never be answered. The
+  declared kinds are read directly now; a client that declares neither predates
+  the distinction and is still asked.
 - **A connection id now identifies the database.** The fingerprint that names
   a connection's workspace read `database_type`, `host`, `port`, `database` and
   `schema`; no driver writes `database_type` (they write `type`), and the rest

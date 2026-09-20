@@ -160,3 +160,34 @@ async def test_nobody_is_asked_when_nothing_was_overridden(shop, mode):
     assert asked == []
     assert blocked["success"] is False  # OBQC blocked it on its own
     assert float(clean["data"][0]["total"]) == 150.0  # the true total
+
+
+async def test_accepting_inflated_totals_does_not_carry_to_another_database(
+    shop, monkeypatch
+):
+    """Whether inflated totals are acceptable is a statement about one set of
+    tables and cardinalities. If the session connects elsewhere while the
+    question is open, the answer is not about the query being run."""
+    from unittest.mock import Mock
+
+    import src.server_state as state_module
+
+    async def answer_then_reconnect(message, response_type, params, context):
+        session = state_module._server_state.get_session(
+            next(iter(state_module._server_state._sessions))
+        )
+        state_module._server_state.bind_session(
+            session, "another-database", Mock(is_connected=lambda: True)
+        )
+        session.connection_id = "another-database"
+        (field,) = params.requested_schema["properties"]
+        return ElicitResult(action="accept", content={field: True})
+
+    async with Client(
+        mcp, mode="legacy", elicitation_handler=answer_then_reconnect
+    ) as c:
+        result = await _run(c, FAN_TRAP, allow_fan_out=True)
+
+    assert result["success"] is False  # the override did not stand
+    assert result["data"] == []
+    assert result["obqc_fan_trap"]["blocking"] is True

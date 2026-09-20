@@ -305,6 +305,7 @@ async def execute_sql_query(
 
         # OBQC validation (fan-trap detection, ontology-aware checks)
         obqc_warnings = []
+        session = services.get_session_data(ctx)
         obqc_validator = services.get_session_obqc_validator(ctx)
         if obqc_validator:
             db_type = db_manager.connection_info.get("type", "postgresql")
@@ -320,16 +321,28 @@ async def execute_sql_query(
             fan_out_accepted_by_user = False
             fan_out_declined_by_user = False
             if obqc_result.fan_trap_overridden:
+                # getattr: the session here may be a stand-in without one.
+                asked_about = getattr(session, "connection_id", None)
                 outcome = await ask_to_confirm(
                     ctx,
                     key="execute_sql_query.allow_fan_out",
                     message=_fan_out_question(obqc_result),
                     field_title="Yes, run it and accept inflated totals",
+                    scope=asked_about,
                 )
                 if isinstance(outcome, mcp_types.InputRequiredResult):
                     return outcome
+                # The question was asked about one database. Accepting inflated
+                # totals there says nothing about another one, whose tables and
+                # cardinalities are different.
+                if getattr(session, "connection_id", None) != asked_about:
+                    logger.warning(
+                        "Session changed connection while the fan-trap question "
+                        "was pending; not accepting the override"
+                    )
+                    outcome = Confirmation.STALE
                 fan_out_accepted_by_user = outcome is Confirmation.CONFIRMED
-                if outcome is Confirmation.DECLINED:
+                if outcome in (Confirmation.DECLINED, Confirmation.STALE):
                     fan_out_declined_by_user = True
                     obqc_result = obqc_validator.validate(
                         sql_query.strip(), dialect=db_type, allow_fan_out=False
@@ -396,7 +409,6 @@ async def execute_sql_query(
             )
 
         # Auto-inject GraphRAG context if available
-        session = services.get_session_data(ctx)
         if session.graphrag_initialized and session.graphrag_manager:
             try:
                 if query_intent:

@@ -306,7 +306,8 @@ async def confirm_cleanup(
         2026-07-28 request), or the message that nothing was deleted.
     """
     session = services.get_session_data(ctx)
-    if not session.connection_id:
+    asked_about = session.connection_id
+    if not asked_about:
         return None  # nothing to delete; cleanup_workspace reports that itself
 
     outcome = await ask_to_confirm(
@@ -314,15 +315,38 @@ async def confirm_cleanup(
         key="cleanup_workspace",
         message=(
             "This permanently deletes the whole workspace of connection "
-            f"{session.connection_id[:8]}...: schema files, every ontology "
+            f"{asked_about[:8]}...: schema files, every ontology "
             "version, R2RML mappings, GraphRAG data, the RDF store and saved "
             "semantic models, for everyone using this database. The database "
             "itself is not touched."
         ),
         field_title="Yes, delete the workspace",
+        scope=asked_about,
     )
     if isinstance(outcome, mcp_types.InputRequiredResult):
         return outcome
+
+    # The question named one connection; only that one may be deleted. On a
+    # 2026-07-28 request ask_to_confirm has already compared what the answer
+    # was about, because its two rounds are separate requests. Here the session
+    # can also have connected elsewhere *while* the question was on screen,
+    # which is a whole call long when the client answers in-band.
+    if session.connection_id != asked_about:
+        logger.warning(
+            f"Session moved from connection {asked_about[:8]}... to "
+            f"{str(session.connection_id)[:8]}... while cleanup was being "
+            "confirmed; nothing deleted"
+        )
+        outcome = Confirmation.STALE
+
+    if outcome is Confirmation.STALE:
+        await notify_client(ctx, "Workspace cleanup cancelled: the connection changed")
+        return (
+            "Workspace cleanup cancelled. The connection changed while the "
+            "confirmation was pending, and the approval was for the previous "
+            "one, so nothing was deleted. Call cleanup_workspace again to "
+            "delete the current connection's workspace."
+        )
     if outcome is Confirmation.DECLINED:
         await notify_client(ctx, "Workspace cleanup cancelled")
         return "Workspace cleanup cancelled. Nothing was deleted."
