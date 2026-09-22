@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A connection handle, so a client without a transport session can work.**
+  MCP 2026-07-28 removed protocol-level sessions and tells servers with state
+  to mint a handle and take it back as an ordinary tool argument.
+  `connect_database` now returns one (`ob_k2m9qa`), and all 28 tools accept it
+  as the optional `connection` argument. A call finds its session by the
+  handle, else by the MCP transport session, else -- unless
+  `SESSIONLESS_FALLBACK=none` -- as the only live session that was itself opened
+  without a transport session (never one that belongs to a transport session;
+  logged as a warning on first use; multi-user deployments should set `none`).
+  A handle that names no live session is an error (`unknown_connection`) and
+  never lands in another session. Each handle is a user session of its own,
+  with its own current schema and ontology state; sessions on one database
+  still share the connection, schema cache and GraphRAG index. Clients on
+  protocol versions up to 2025-11-25 keep working unchanged and are told their
+  handle once, by `connect_database`. The handle is an address, not
+  authentication.
+  A caller that cannot be placed gets a plain refusal: the two session errors
+  cross the tool boundary as `ToolError`, so the message that says how to
+  recover reaches the model verbatim, survives `mask_error_details`, and is
+  logged without a stack trace.
+  The sessionless era is recognised by the protocol revision of the request,
+  not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
+  a fresh one per request, which would otherwise open an empty session on
+  every call.
+
 ### Changed
 - **A request without an MCP session is refused, not pooled.** `get_session_id`
   used to fall back to a literal `"default_session"` (and before that to the
@@ -16,6 +42,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manager. It now raises `SessionRequiredError` (`session_required`). First
   step of the stateless-protocol plan; a connection handle as a tool argument
   follows.
+- **The database manager and schema cache are shared per connection.** They
+  were owned per MCP session, although the manager connects with the server's
+  own credentials and the cache is a set of facts about the database. A
+  `ConnectionRuntime` per connection ID now holds both, and `ServerState` binds
+  sessions to it: a second client on the same database joins a warm cache and
+  an open connection instead of rebuilding them, and the manager is
+  disconnected when the last session leaves. `connect_database` on a session
+  that shares a runtime connects a fresh manager rather than reconnecting the
+  shared one under the other sessions, and replaces the shared one only if it
+  has lost its connection. Groundwork for clients without a transport session.
+- **GraphRAG is shared per connection too; ontology state is not.** The
+  GraphRAG manager, an index built from the schema, moved onto the same
+  `ConnectionRuntime`. A GraphRAG initialisation keeps running when the session
+  that started it closes while others still hold the runtime, and its result
+  lands in the shared state; it is cancelled with the last holder. Ontology
+  state stays per session on purpose: which ontology is active, a custom one
+  from `load_my_ontology`, applied semantic names and the OBQC validator are a
+  user's choices, and two people on one database may work with different
+  ones. The current schema is per session as well.
+- **Tools that rewrite shared state or the workspace are serialized per connection.**
+  `discover_schema`, `generate_ontology`, `apply_semantic_names`,
+  `load_my_ontology`, `reset_cache`, `cleanup_workspace`, `cleanup_old_versions`
+  and the workspace restore inside `connect_database` hold the runtime's writer
+  lock. Readers take no lock, and different databases do not wait for each
+  other.
 - **Progress messages go through one function.** All 64 `ctx.info` /
   `ctx.error` calls in the handlers now use `notify_client` in `src/utils.py`
   (the former `safe_ctx_info`, generalized). A notification that cannot be
@@ -43,6 +94,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http` (streamable HTTP).
 
 ### Fixed
+- **A connection id now identifies the database.** The fingerprint that names
+  a connection's workspace read `database_type`, `host`, `port`, `database` and
+  `schema`; no driver writes `database_type` (they write `type`), and the rest
+  are absent from exactly the drivers that need something else. Two DuckDB
+  files, two BigQuery datasets, two Dremio endpoints reached with a token, and
+  PostgreSQL vs MySQL on one host and database all hashed to the same value.
+  They shared a workspace, and — now that sessions share a connection runtime —
+  the second connection was handed the first database's open manager, so its
+  queries were answered by the wrong database. Every non-secret field the
+  driver reports goes into the hash now. Credentials are excluded, so rotating
+  a password keeps the workspace and no secret is hashed into a directory name.
+  **Existing workspaces are renamed:** on the first `connect_database` after
+  the upgrade, directories left under the previous id are adopted, provided the
+  new id has none. Nothing is overwritten and nothing is deleted; the adoption
+  is logged. A workspace is adopted only when the connection it records matches
+  the database in hand: the id being replaced is the one that could not tell
+  databases apart, so following it blindly would hand one database's ontologies
+  to another and lose them for their owner. Ownership has to be *shown*: the
+  old id must have encoded this database's own host, port and database name,
+  and the workspace must record which database it belongs to, and record this
+  one. That covers PostgreSQL, MySQL and ClickHouse. For DuckDB, BigQuery,
+  Dremio, Snowflake and Databricks the old id was the same for every database
+  of that kind — as is the name Dremio records, the constant `DREMIO` — so
+  those workspaces are left where they are, with a log line saying so. The
+  files are untouched and can be renamed by hand.
+- **One session's discovery no longer redirects another's.** Sessions on the
+  same database share the cached schema data, but `_last_analyzed_schema` — the
+  default target of every tool called without an explicit `schema_name` — was
+  shared with it. After A discovered `sales` and B discovered `hr`, A's next
+  parameterless `generate_ontology()` targeted `hr`. The pointer is per session
+  now; the cached data it points into stays shared. Discovering a schema that
+  another session had already cached moves this session's pointer too: the
+  client asked for that schema, whoever paid for the round trip.
+- **Background initialisation stays with the database it was started for.**
+  GraphRAG initialisation and `AUTO_ONTOLOGY` generation outlive the tool call
+  that started them, and read the session lazily all the way through. A session
+  that connected to another database meanwhile pointed them at the new
+  database: the old database's index was installed as the new one's GraphRAG,
+  its ontology loaded into the new database's RDF store and named as the
+  session's ontology, and its metadata written into the wrong workspace. With
+  GraphRAG shared per connection that would have reached every session on the
+  new database. The work now takes its GraphRAG state and connection ID once,
+  up front; the ontology task leaves a session that moved on alone, and still
+  writes the file and metadata where they belong. A connection change also
+  waits for the init tasks it cancels before the old RDF store is released.
 - **A reconnecting client lost the RDF store.** The Oxigraph store was opened
   once per MCP session, but its RocksDB directory is per connection and takes
   exactly one handle. A new session on the same database (a chat client

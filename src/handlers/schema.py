@@ -151,8 +151,14 @@ async def discover_schema(
     # Set current schema so per-schema state (ontology, GraphRAG) is isolated
     session.set_current_schema(effective_schema or "default")
 
+    # Every path below that finds tables for this schema -- freshly analysed or
+    # already cached, by this session or another on the same database -- makes
+    # it this session's default target. cache_schema_analysis does it for the
+    # fresh path; the cached ones say so here, or a client would keep the
+    # schema it discovered before this call.
     # Early exit: workspace already fully restored — nothing to do
     if session.ontology_enriched and session.get_cached_schema(effective_schema):
+        session.mark_schema_analyzed(effective_schema or "")
         await notify_client(
             ctx, "Schema already discovered and ontology enriched — skipping."
         )
@@ -174,6 +180,7 @@ async def discover_schema(
     )
 
     if cached_tables:
+        session.mark_schema_analyzed(effective_schema or "")
         ontology_also_cached = session.ontology_file is not None
 
         # Auto-initialize GraphRAG even for cached results (if not already initialized)

@@ -50,6 +50,28 @@ Complete reference for all OrionBelt® Analytics MCP tools. These tools are invo
 
 ---
 
+## The `connection` Argument
+
+Every tool accepts one optional argument that is not repeated in the tables below:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | No | The connection handle returned by `connect_database`, e.g. `ob_k2m9qa` |
+
+**Why it exists.** The server keeps state between calls: the connection, the current schema, and above all the ontology a user works with. Clients on MCP protocol versions up to 2025-11-25 are recognised by their transport session and never need the handle. The 2026-07-28 revision removed transport sessions, and its answer for servers with state is a server-minted handle passed as an ordinary tool argument. This is that handle.
+
+**How a call finds its session**, in order:
+
+1. The `connection` handle, if given. A handle that names no live session is an error (`unknown_connection`); it never falls back to somebody else's session.
+2. The MCP transport session, if the client has one.
+3. The only live session that was itself opened without a transport session, if there is exactly one. This forgives a model that drops its handle on a single-user server. A session that belongs to a transport session is never a candidate: its client identifies itself on every request, so a caller who does not cannot be that client. With several candidates it would be a guess, so the call fails with `session_required` and says to pass `connection`. The first time the rule places a caller, the server logs a warning. **If several people share the server, set `SESSIONLESS_FALLBACK=none`**: otherwise a client that calls a tool before `connect_database`, without a handle, lands in the one other user's session.
+
+**What a handle separates.** Each handle is a user session of its own: current schema, active or custom-loaded ontology, applied semantic names and the OBQC validator are private to it. Sessions on the same database share what describes the database: the connection, the schema cache and the GraphRAG index. A handle is an address, not a secret -- it does not authenticate anyone.
+
+**When it is echoed.** `connect_database` always states the handle. Other tools repeat it (`"connection"` in dict results, a trailing `[connection: ...]` in text results) only for a caller that has no transport session or passed a handle itself. Handles expire with their session after `SESSION_IDLE_TIMEOUT_SECONDS` of inactivity.
+
+---
+
 ## Tool Reference
 
 ### 1. connect_database
@@ -62,13 +84,14 @@ Connect to a database using credentials from environment variables.
 |-----------|------|----------|-------------|
 | `db_type` | string | Yes | Database type: `postgresql`, `mysql`, `snowflake`, `clickhouse`, `dremio`, `bigquery`, `duckdb`, `databricks` |
 
-**Returns:** Connection status message. If a previous workspace exists for this connection, includes a workspace summary with available artifacts.
+**Returns:** Connection status message, ending with the connection handle of the session (see [The `connection` Argument](#the-connection-argument)). If a previous workspace exists for this connection, includes a workspace summary with available artifacts.
 
 **Key Features:**
 - Credentials are read from environment variables (e.g., `POSTGRES_HOST`, `SNOWFLAKE_ACCOUNT`), not passed as parameters
 - Automatically detects existing workspaces from prior sessions
 - Clears session state when switching to a different database connection
 - Generates a connection fingerprint for workspace scoping
+- A caller with neither a transport session nor a handle gets a new session; passing an existing handle reconnects that session instead
 
 **Environment Variables by Database:**
 
@@ -661,5 +684,5 @@ All tools operate within these security constraints:
 - **Query timeout protection** -- queries honor a configurable timeout. For SPARQL this is best-effort: the caller is released when the timeout elapses, but the underlying query may keep running in the background (pyoxigraph exposes no native query cancellation), so a timeout bounds caller latency, not server CPU
 - **Result size limits** -- maximum 5,000 rows per query
 - **Credential isolation** -- database credentials are read from environment variables, never passed as tool parameters
-- **Session isolation** -- each MCP session maintains independent state (connections, caches, artifacts)
+- **Session isolation** -- each user session keeps its own current schema and ontology state (active or custom-loaded ontology, applied names, OBQC validator). Sessions on the same database share what describes that database: the connection, the schema cache, the GraphRAG index, the RDF store and the on-disk workspace. This is workflow isolation, not access control: all clients use the server's database credentials
 - **Idle session eviction** -- sessions are automatically cleaned up after a configurable idle timeout

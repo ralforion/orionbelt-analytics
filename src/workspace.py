@@ -13,6 +13,29 @@ from .paths import OUTPUT_DIR, get_connection_dir
 logger = logging.getLogger(__name__)
 
 
+def workspace_identity(connection_id: str) -> tuple[str, str] | None:
+    """The database a workspace says it belongs to, if it says.
+
+    Args:
+        connection_id: Directory name to look under.
+
+    Returns:
+        ``(db_type, db_name)`` as recorded on the last connect, or ``None``
+        when there is no workspace, no metadata, or no connection recorded.
+    """
+    try:
+        workspace = VersionMetadataManager(connection_id, OUTPUT_DIR).get_workspace()
+    except Exception as e:
+        logger.debug(f"Could not read workspace metadata for {connection_id}: {e}")
+        return None
+    if not workspace:
+        return None
+    db_type, db_name = workspace.get("db_type"), workspace.get("db_name")
+    if not isinstance(db_type, str) or not isinstance(db_name, str):
+        return None
+    return db_type, db_name
+
+
 def detect_workspace(connection_id: str) -> dict[str, Any] | None:
     """Detect an existing workspace for a connection.
 

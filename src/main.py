@@ -10,12 +10,17 @@ modules so this file stays mostly decorators + delegation:
 - skill resources -> :mod:`src.resources`
 """
 
+import functools
+import inspect
 import logging
 import os
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from typing import Annotated, Any, Literal
 
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Image
 from pydantic import Field
 
@@ -87,6 +92,7 @@ PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks.
 - Review `foreign_keys` from `discover_schema()` before complex JOINs
 - `execute_sql_query()` runs built-in syntax, security, and OBQC validation
 - For multi-fact aggregation, use the UNION ALL pattern (see `/fan-trap-prevention`)
+- `connect_database()` returns a connection handle (e.g. `ob_k2m9qa`). Every tool accepts it as the optional `connection` argument. If a call fails asking for a connection, pass the handle on every call from then on
 """,
 )
 
@@ -97,6 +103,13 @@ from .resources import register_resources  # noqa: E402
 register_resources(mcp)
 
 
+# --- Session state and per-request helpers (extracted to server_state) ---
+# ServerState and _calculate_schema_hash are re-exported for tests that import
+# them from main; F401 is suppressed for this re-export block.
+from .exceptions import (  # noqa: E402
+    SessionRequiredError,
+    UnknownConnectionError,
+)
 from .handler_context import HandlerContext  # noqa: E402
 
 # --- Handler imports (Task 7: C1/S2) ---
@@ -109,23 +122,25 @@ from .handlers import query as _h_query  # noqa: E402
 from .handlers import rdf as _h_rdf  # noqa: E402
 from .handlers import schema as _h_schema  # noqa: E402
 from .handlers import workspace as _h_workspace  # noqa: E402
-
-# --- Session state and per-request helpers (extracted to server_state) ---
-# ServerState and _calculate_schema_hash are re-exported for tests that import
-# them from main; F401 is suppressed for this re-export block.
 from .server_state import (  # noqa: E402, F401
     ServerState,
     _calculate_schema_hash,
     _clear_session_state,
     _get_connection_fingerprint,
     _server_state,
+    _transport_session_id,
+    aclear_session_state,
+    adopt_legacy_workspace,
+    begin_connection_scope,
     create_error_response,
+    end_connection_scope,
     get_oxigraph_store,
     get_session_data,
     get_session_db_manager,
     get_session_obqc_validator,
     get_session_safe_filename,
     load_ontology_from_session,
+    peek_current_session,
 )
 
 # --- Constrained MCP parameter types (extracted to tool_types) ---
@@ -140,6 +155,127 @@ from .tool_types import (  # noqa: E402
     _ShortText,
     _Uri,
 )
+
+_ConnectionHandle = Annotated[
+    str,
+    Field(
+        max_length=64,
+        description=(
+            "Connection handle returned by connect_database (looks like "
+            "'ob_k2m9qa'). Pass it on every call if your client does not keep "
+            "an MCP session; otherwise omit it."
+        ),
+    ),
+]
+
+_ToolFunction = Callable[..., Awaitable[Any]]
+
+
+def _connection_aware(mint: bool = False) -> Callable[[_ToolFunction], _ToolFunction]:
+    """Give a tool the optional ``connection`` argument and resolve it.
+
+    MCP 2026-07-28 has no transport session, and the specification's answer is
+    a server-minted handle passed as an ordinary tool argument. This decorator
+    is that argument for every tool at once: it adds ``connection`` to the
+    published signature, runs the call under the handle so that
+    ``get_session_data(ctx)`` resolves the right session without any handler
+    knowing about handles, and echoes the handle back to a caller who depends
+    on it.
+
+    Args:
+        mint: True for ``connect_database``, which gives a caller with neither
+            handle nor transport session a new session, and always announces
+            the handle of the session it connected.
+    """
+
+    def decorate(fn: _ToolFunction) -> _ToolFunction:
+        signature = inspect.signature(fn)
+        parameter = inspect.Parameter(
+            "connection",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation=_ConnectionHandle | None,
+        )
+
+        @functools.wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            handle_argument = kwargs.pop("connection", None)
+            ctx: Any = kwargs.get("ctx", args[0] if args else None)
+            try:
+                token = begin_connection_scope(ctx, handle_argument, mint)
+                try:
+                    result = await fn(*args, **kwargs)
+                    # Inside the scope: the echo resolves the session by the
+                    # same handle the call ran under.
+                    return _echo_handle(
+                        ctx,
+                        result,
+                        explicit=handle_argument is not None,
+                        announce=mint,
+                    )
+                finally:
+                    end_connection_scope(token)
+            except (SessionRequiredError, UnknownConnectionError) as e:
+                # A caller that cannot be placed is an ordinary refusal, not a
+                # fault. As a ToolError its message reaches the model verbatim,
+                # survives mask_error_details, and is logged without the stack
+                # trace FastMCP gives any other exception -- which a model that
+                # forgets its handle would otherwise write on every call.
+                raise ToolError(str(e)) from e
+
+        # FastMCP builds the input schema from the signature and annotations.
+        # Dropping __wrapped__ keeps it from looking through to ``fn``'s.
+        wrapper.__signature__ = signature.replace(  # type: ignore[attr-defined]
+            parameters=[*signature.parameters.values(), parameter]
+        )
+        wrapper.__annotations__ = {
+            **fn.__annotations__,
+            "connection": _ConnectionHandle | None,
+        }
+        del wrapper.__wrapped__
+        return wrapper
+
+    return decorate
+
+
+def _echo_handle(ctx: Any, result: Any, explicit: bool, announce: bool) -> Any:
+    """Remind the caller of its handle when it has nothing else to go by.
+
+    A client with a transport session is never bothered, except by
+    ``connect_database``, which announces the handle once so that it is known
+    before it is needed. Only text and dict results can carry it.
+    """
+    session = peek_current_session(ctx)
+    handle = getattr(session, "handle", None)
+    if not isinstance(handle, str):
+        return result
+    if announce:
+        if not getattr(session, "connection_id", None):
+            return result  # the connect failed; there is nothing to come back to
+    elif not explicit and _transport_session_id(ctx) is not None:
+        return result
+
+    if isinstance(result, str):
+        if announce:
+            return (
+                f"{result}\n\nConnection handle: {handle}\n"
+                "If your client does not keep an MCP session, pass it as the "
+                "`connection` argument of every following tool call."
+            )
+        return f"{result}\n\n[connection: {handle}]"
+    if isinstance(result, dict):
+        result.setdefault("connection", handle)
+    return result
+
+
+def _writer_lock(ctx: Context) -> AbstractAsyncContextManager[Any]:
+    """Lock held by the tools that rewrite shared per-connection state.
+
+    Sessions on the same database share schema, ontology and GraphRAG state, so
+    two clients running ``discover_schema`` or ``cleanup_workspace`` at once
+    would interleave. Readers take no lock.
+    """
+    return _server_state.writer_lock(get_session_data(ctx))
 
 
 def _services() -> HandlerContext:
@@ -158,7 +294,9 @@ def _services() -> HandlerContext:
         create_error_response=create_error_response,
         server_state=_server_state,
         get_connection_fingerprint=_get_connection_fingerprint,
+        adopt_legacy_workspace=adopt_legacy_workspace,
         clear_session_state=_clear_session_state,
+        aclear_session_state=aclear_session_state,
         auto_initialize_graphrag_background=_h_graphrag._auto_initialize_graphrag_background,
         add_resource=mcp.add_resource,
     )
@@ -173,6 +311,7 @@ def _services() -> HandlerContext:
 
 
 @mcp.tool()
+@_connection_aware(mint=True)
 async def connect_database(
     ctx: Context, db_type: _DbType  # type: ignore[valid-type]
 ) -> str | dict[str, Any]:
@@ -196,6 +335,7 @@ async def connect_database(
 
 
 @mcp.tool()
+@_connection_aware()
 async def list_schemas(ctx: Context) -> list[str]:
     """Get a list of available schemas from the connected database.
 
@@ -205,6 +345,7 @@ async def list_schemas(ctx: Context) -> list[str]:
 
 
 @mcp.tool()
+@_connection_aware()
 async def reset_cache(
     ctx: Context,
     cache_type: Literal["schema", "ontology", "all"] | None = None,
@@ -217,10 +358,12 @@ async def reset_cache(
     Returns:
         Dictionary with status and cleared cache types
     """
-    return await _h_schema.reset_cache(ctx, cache_type, services=_services())
+    async with _writer_lock(ctx):
+        return await _h_schema.reset_cache(ctx, cache_type, services=_services())
 
 
 @mcp.tool()
+@_connection_aware()
 async def discover_schema(
     ctx: Context,
     schema_name: _Identifier | None = None,
@@ -235,15 +378,17 @@ async def discover_schema(
         lightweight: If True (default), return minimal data (table names, FK relationships, fan-trap warnings).
                      If False, return full schema with all column details.
     """
-    return await _h_schema.discover_schema(
-        ctx,
-        schema_name,
-        lightweight,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_schema.discover_schema(
+            ctx,
+            schema_name,
+            lightweight,
+            services=_services(),
+        )
 
 
 @mcp.tool()
+@_connection_aware()
 async def get_table_details(
     ctx: Context,
     table_name: _Identifier,
@@ -269,6 +414,7 @@ async def get_table_details(
 
 
 @mcp.tool()
+@_connection_aware()
 async def generate_ontology(
     ctx: Context,
     schema_info: _DocBody | None = None,
@@ -289,18 +435,20 @@ async def generate_ontology(
     Returns:
         Ontology TTL or status message
     """
-    return await _h_ontology.generate_ontology(
-        ctx,
-        schema_info,
-        schema_name,
-        base_uri,
-        auto_persist,
-        graph_uri,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_ontology.generate_ontology(
+            ctx,
+            schema_info,
+            schema_name,
+            base_uri,
+            auto_persist,
+            graph_uri,
+            services=_services(),
+        )
 
 
 @mcp.tool()
+@_connection_aware()
 async def suggest_semantic_names(
     ctx: Context,
     ontology_file: _SafeName | None = None,
@@ -326,6 +474,7 @@ async def suggest_semantic_names(
 
 
 @mcp.tool()
+@_connection_aware()
 async def apply_semantic_names(
     ctx: Context,
     suggestions: Annotated[str, Field(max_length=2000000)] | dict[str, Any],
@@ -356,16 +505,18 @@ async def apply_semantic_names(
         ontology_file: The ontology filename from generate_ontology response
         save_to_file: Whether to save the updated ontology to a file
     """
-    return await _h_ontology.apply_semantic_names(
-        ctx,
-        suggestions,
-        ontology_file,
-        save_to_file,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_ontology.apply_semantic_names(
+            ctx,
+            suggestions,
+            ontology_file,
+            save_to_file,
+            services=_services(),
+        )
 
 
 @mcp.tool()
+@_connection_aware()
 async def load_my_ontology(
     ctx: Context,
     import_folder: _FolderPath = "./import",
@@ -389,18 +540,20 @@ async def load_my_ontology(
     Returns:
         Dictionary with ontology information and status
     """
-    return await _h_ontology.load_my_ontology(
-        ctx,
-        import_folder,
-        auto_persist,
-        graph_uri,
-        ontology_content=ontology_content,
-        file_name=file_name,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_ontology.load_my_ontology(
+            ctx,
+            import_folder,
+            auto_persist,
+            graph_uri,
+            ontology_content=ontology_content,
+            file_name=file_name,
+            services=_services(),
+        )
 
 
 @mcp.tool()
+@_connection_aware()
 async def download_artifact(
     ctx: Context,
     artifact_type: Literal["ontology", "r2rml"],
@@ -434,6 +587,7 @@ async def download_artifact(
 
 
 @mcp.tool()
+@_connection_aware()
 async def sample_table_data(
     ctx: Context,
     table_name: _Identifier,
@@ -459,6 +613,7 @@ async def sample_table_data(
 
 
 @mcp.tool()
+@_connection_aware()
 async def execute_sql_query(
     ctx: Context,
     sql_query: _QueryBody,
@@ -517,6 +672,7 @@ async def execute_sql_query(
 
 
 @mcp.tool()
+@_connection_aware()
 async def generate_chart(
     ctx: Context,
     data_source: list[dict[str, Any]] | Annotated[str, Field(max_length=5000000)],
@@ -565,6 +721,7 @@ async def generate_chart(
 
 
 @mcp.tool()
+@_connection_aware()
 async def cleanup_workspace(ctx: Context) -> str | dict[str, Any]:
     """Delete all workspace files for the current database connection and clear session state.
 
@@ -577,13 +734,15 @@ async def cleanup_workspace(ctx: Context) -> str | dict[str, Any]:
     Returns:
         Summary of what was removed
     """
-    return await _h_workspace.cleanup_workspace(
-        ctx,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_workspace.cleanup_workspace(
+            ctx,
+            services=_services(),
+        )
 
 
 @mcp.tool()
+@_connection_aware()
 async def cleanup_old_versions(
     ctx: Context,
     schema_name: _Identifier | None = None,
@@ -603,15 +762,17 @@ async def cleanup_old_versions(
         schema_name: Schema whose history to prune (last analyzed schema if omitted)
         dry_run: Report what would be deleted without deleting it (default True)
     """
-    return await _h_workspace.cleanup_old_versions(
-        ctx,
-        schema_name,
-        dry_run,
-        services=_services(),
-    )
+    async with _writer_lock(ctx):
+        return await _h_workspace.cleanup_old_versions(
+            ctx,
+            schema_name,
+            dry_run,
+            services=_services(),
+        )
 
 
 @mcp.tool()
+@_connection_aware()
 async def save_semantic_model(
     ctx: Context,
     model_yaml: _DocBody,
@@ -638,6 +799,7 @@ async def save_semantic_model(
 
 
 @mcp.tool()
+@_connection_aware()
 async def get_semantic_model(
     ctx: Context,
     model_name: _SafeName,
@@ -658,6 +820,7 @@ async def get_semantic_model(
 
 
 @mcp.tool()
+@_connection_aware()
 async def list_semantic_models(ctx: Context) -> dict[str, Any]:
     """List all stored semantic models for the current database connection.
 
@@ -674,6 +837,7 @@ async def list_semantic_models(ctx: Context) -> dict[str, Any]:
 
 
 @mcp.tool()
+@_connection_aware()
 async def graphrag_search(
     ctx: Context,
     query: _QueryText | None = None,
@@ -726,6 +890,7 @@ async def graphrag_search(
 
 
 @mcp.tool()
+@_connection_aware()
 async def add_semantic_context(
     ctx: Context,
     target: _Identifier,
@@ -779,6 +944,7 @@ async def add_semantic_context(
 
 
 @mcp.tool()
+@_connection_aware()
 async def graphrag_query_context(
     ctx: Context,
     query: _QueryText,
@@ -805,6 +971,7 @@ async def graphrag_query_context(
 
 
 @mcp.tool()
+@_connection_aware()
 async def graphrag_find_join_path(
     ctx: Context,
     from_table: _Identifier,
@@ -831,6 +998,7 @@ async def graphrag_find_join_path(
 
 
 @mcp.tool()
+@_connection_aware()
 async def reachable_from(
     ctx: Context,
     table: _Identifier,
@@ -861,6 +1029,7 @@ async def reachable_from(
 
 
 @mcp.tool()
+@_connection_aware()
 async def measurable_from(
     ctx: Context,
     table: _Identifier,
@@ -889,6 +1058,7 @@ async def measurable_from(
 
 
 @mcp.tool()
+@_connection_aware()
 async def plan_composite_query(
     ctx: Context,
     facts: list[_Identifier],
@@ -926,6 +1096,7 @@ async def plan_composite_query(
 
 
 @mcp.tool()
+@_connection_aware()
 async def store_ontology_in_rdf(
     ctx: Context,
     schema_name: _Identifier | None = None,
@@ -949,6 +1120,7 @@ async def store_ontology_in_rdf(
 
 
 @mcp.tool()
+@_connection_aware()
 async def query_sparql(
     ctx: Context,
     sparql_query: _QueryBody,
@@ -989,6 +1161,7 @@ async def query_sparql(
 
 
 @mcp.tool()
+@_connection_aware()
 async def add_rdf_knowledge(
     ctx: Context,
     subject: _Uri,
