@@ -34,7 +34,7 @@ A subset of clients support [MCP sampling](https://modelcontextprotocol.io/speci
 | Pydantic-AI agents | If wired | Call `agent.set_mcp_sampling_model()` (or pass `sampling_model=` to each MCP server) to expose the agent's LLM to sampling callbacks |
 | Other frameworks | Depends | Sampling is opt-in per host; check the framework's MCP client docs |
 
-Set `ENABLE_SAMPLING=false` in OrionBelt Analytics' `.env` to disable the sampling path globally regardless of client support. See [Configuration](./configuration.md#mcp-sampling) for details.
+Set `SEMANTIC_NAMING_MODE=review` in OrionBelt Analytics' `.env` to disable the sampling path globally regardless of client support. See [Configuration](./configuration.md#semantic-naming-mode) for details.
 
 ## Quick Start Examples
 

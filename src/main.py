@@ -307,7 +307,7 @@ async def suggest_semantic_names(
 ) -> dict[str, Any]:
     """Extract and analyze names from a generated ontology to identify abbreviations and cryptic names.
 
-    When the connected MCP client supports sampling (and ENABLE_SAMPLING=true),
+    When the connected MCP client supports sampling (and SEMANTIC_NAMING_MODE=auto),
     the server pre-fills a ``suggestions`` dict via the host LLM so the next
     call to ``apply_semantic_names`` can pass them through directly. Otherwise
     the response contains only the cryptic-name lists for manual review.

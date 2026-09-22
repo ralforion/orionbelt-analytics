@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **A request without an MCP session is refused, not pooled.** `get_session_id`
+  used to fall back to a literal `"default_session"` (and before that to the
+  session object's memory address). FastMCP 3 never takes that path inside a
+  request, but the sessionless 2026-07-28 protocol era does: every such client
+  would have shared one database manager, one ontology state and one GraphRAG
+  manager. It now raises `SessionRequiredError` (`session_required`). First
+  step of the stateless-protocol plan; a connection handle as a tool argument
+  follows.
+- **Progress messages go through one function.** All 64 `ctx.info` /
+  `ctx.error` calls in the handlers now use `notify_client` in `src/utils.py`
+  (the former `safe_ctx_info`, generalized). A notification that cannot be
+  delivered, typically because the client already disconnected, no longer
+  aborts the tool whose result was still on its way. It is also the single
+  place to adapt when MCP Logging, deprecated in the 2026-07-28 revision, goes
+  away. A test fails if a handler calls the context directly again.
+
+- **`SEMANTIC_NAMING_MODE` replaces `ENABLE_SAMPLING`.** `suggest_semantic_names`
+  now picks its source of rename suggestions through one seam with three
+  strategies: client sampling (today's path), input-required (the multi
+  round-trip replacement, which needs FastMCP 4 and until then falls back),
+  and review (the client model proposes the names itself). Modes: `auto`
+  (default, unchanged behaviour), `input_required`, `review`. A context that
+  offers no `sample` at all, which is what FastMCP 4 looks like, lands on
+  the review path cleanly. No change to the tool's response.
+
+### Deprecated
+- **`ENABLE_SAMPLING`.** Still honoured when `SEMANTIC_NAMING_MODE` is unset:
+  `false` maps to `review` and logs a warning. MCP deprecated Sampling itself
+  in its 2026-07-28 revision.
+- **`MCP_TRANSPORT=sse`.** The MCP specification deprecated the HTTP+SSE
+  transport in its 2026-07-28 revision. The server now logs a warning at
+  startup when it is selected; it will be removed in a future release. Use
+  `http` (streamable HTTP).
+
 ### Fixed
 - **A reconnecting client lost the RDF store.** The Oxigraph store was opened
   once per MCP session, but its RocksDB directory is per connection and takes

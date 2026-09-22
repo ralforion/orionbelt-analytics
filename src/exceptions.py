@@ -22,6 +22,7 @@ class ErrorType(StrEnum):
     STORE = "store_not_initialized"
     DEPENDENCY = "dependency_error"
     OBQC = "obqc_error"
+    SESSION = "session_required"
 
 
 class OrionBeltError(Exception):
@@ -88,6 +89,12 @@ class StoreNotInitializedError(OrionBeltError):
     """RDF or vector store not initialized."""
 
     error_type = ErrorType.STORE
+
+
+class SessionRequiredError(OrionBeltError):
+    """The request cannot be attributed to any client's state."""
+
+    error_type = ErrorType.SESSION
 
 
 class DependencyError(OrionBeltError):

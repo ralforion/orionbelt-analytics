@@ -24,7 +24,7 @@ from ..lifecycle.metadata import (
 )
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
-from ..utils import utc_now, write_text_file
+from ..utils import notify_client, utc_now, write_text_file
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,9 @@ async def generate_ontology(
     # Check if ontology is already generated
     if session.ontology_file:
         if session.ontology_enriched:
-            await ctx.info("Ontology CACHED and already enriched — ready to use")
+            await notify_client(
+                ctx, "Ontology CACHED and already enriched — ready to use"
+            )
             return (
                 f"# ONTOLOGY ALREADY CACHED AND ENRICHED\n\n"
                 f"Ontology file: {session.ontology_file}\n\n"
@@ -177,7 +179,9 @@ async def generate_ontology(
                 f"- query_sparql() for semantic queries\n"
                 f"- execute_sql_query() for data queries (includes built-in validation)"
             )
-        await ctx.info("Ontology CACHED - call suggest_semantic_names() for enrichment")
+        await notify_client(
+            ctx, "Ontology CACHED - call suggest_semantic_names() for enrichment"
+        )
         return (
             f"# ONTOLOGY ALREADY CACHED\n\n"
             f"Ontology file: {session.ontology_file}\n\n"
@@ -252,8 +256,9 @@ async def generate_ontology(
             logger.info(
                 f"Using CACHED schema from discover_schema: {len(tables_info)} tables (no re-query needed)"
             )
-            await ctx.info(
-                f"Using cached schema: {len(tables_info)} tables - no database queries needed"
+            await notify_client(
+                ctx,
+                f"Using cached schema: {len(tables_info)} tables - no database queries needed",
             )
         else:
             schema_name = effective_schema or schema_name
@@ -332,9 +337,10 @@ async def generate_ontology(
                     shacl["violations"],
                     shacl["report"],
                 )
-                await ctx.info(
+                await notify_client(
+                    ctx,
                     f"SHACL validation: {shacl['violations']} violation(s) in the "
-                    "generated ontology (non-blocking; see server logs for detail)."
+                    "generated ontology (non-blocking; see server logs for detail).",
                 )
             elif shacl["available"]:
                 logger.info("SHACL: generated ontology conforms to oba-shacl shapes.")
@@ -418,8 +424,9 @@ async def generate_ontology(
                 protect=[previous_ontology_file] if previous_ontology_file else [],
             )
 
-        await ctx.info(
-            "Ontology generation complete; next call should be suggest_semantic_names to improve cryptic names"
+        await notify_client(
+            ctx,
+            "Ontology generation complete; next call should be suggest_semantic_names to improve cryptic names",
         )
 
         # Analyze for cryptic names
@@ -585,7 +592,8 @@ To improve ontology for business users:
 
     except Exception as e:
         logger.warning(f"Failed to save ontology to file: {e}")
-        await ctx.info(
-            "Ontology file save failed but ontology generated; next call should be suggest_semantic_names to improve cryptic names"
+        await notify_client(
+            ctx,
+            "Ontology file save failed but ontology generated; next call should be suggest_semantic_names to improve cryptic names",
         )
         return await asyncio.to_thread(_build_minimal_graph_summary, ontology_ttl)

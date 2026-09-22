@@ -17,7 +17,7 @@ from ..lifecycle.metadata import (
 )
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..r2rml_generator import R2RMLGenerator
-from ..utils import utc_now, write_json_file, write_text_file
+from ..utils import notify_client, utc_now, write_json_file, write_text_file
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ async def reset_cache(
         session.obqc_validator = None
         cleared.append("ontology")
 
-    await ctx.info(f"Cache cleared: {', '.join(cleared)}")
+    await notify_client(ctx, f"Cache cleared: {', '.join(cleared)}")
 
     return {
         "status": "success",
@@ -153,7 +153,9 @@ async def discover_schema(
 
     # Early exit: workspace already fully restored — nothing to do
     if session.ontology_enriched and session.get_cached_schema(effective_schema):
-        await ctx.info("Schema already discovered and ontology enriched — skipping.")
+        await notify_client(
+            ctx, "Schema already discovered and ontology enriched — skipping."
+        )
         return {
             "schema": effective_schema or "default",
             "status": "already_complete",
@@ -219,8 +221,9 @@ async def discover_schema(
             )
 
         if ontology_also_cached:
-            await ctx.info(
-                "Schema AND ontology already cached - proceed directly to suggest_semantic_names()"
+            await notify_client(
+                ctx,
+                "Schema AND ontology already cached - proceed directly to suggest_semantic_names()",
             )
             result = {
                 "schema": effective_schema or "default",
@@ -237,8 +240,9 @@ async def discover_schema(
                 result["graphrag_auto_init"] = "started in background (from cache)"
             return result
         else:
-            await ctx.info(
-                f"Schema cached with {len(cached_tables)} tables - proceed to generate_ontology()"
+            await notify_client(
+                ctx,
+                f"Schema cached with {len(cached_tables)} tables - proceed to generate_ontology()",
             )
             result = {
                 "schema": effective_schema or "default",
@@ -360,8 +364,9 @@ async def discover_schema(
             logger.info("GraphRAG auto-initialization started in background")
             lightweight_result["graphrag_auto_init"] = "started in background"
 
-        await ctx.info(
-            f"Lightweight schema analysis: {len(tables)} tables cached, {len(relationships)} with FKs. Next: generate_ontology()"
+        await notify_client(
+            ctx,
+            f"Lightweight schema analysis: {len(tables)} tables cached, {len(relationships)} with FKs. Next: generate_ontology()",
         )
         return lightweight_result
 
@@ -524,8 +529,9 @@ async def discover_schema(
                 schema_result["r2rml_file"] = r2rml_filename
                 schema_result["r2rml_base_iri"] = base_iri
 
-                await ctx.info(
-                    f"R2RML mapping generated with {len(table_info_objects)} tables"
+                await notify_client(
+                    ctx,
+                    f"R2RML mapping generated with {len(table_info_objects)} tables",
                 )
             except Exception as e:
                 logger.warning(f"Failed to generate R2RML mapping: {e}")
@@ -560,11 +566,12 @@ async def discover_schema(
                 "The ontology provides context for accurate SQL generation."
             )
             schema_result["next_tool"] = "generate_ontology"
-            await ctx.info(
-                f"Schema CACHED with {len(all_table_info)} tables. Next: generate_ontology() - no need to pass schema data, it's cached!"
+            await notify_client(
+                ctx,
+                f"Schema CACHED with {len(all_table_info)} tables. Next: generate_ontology() - no need to pass schema data, it's cached!",
             )
         else:
-            await ctx.info("Schema analysis found no tables")
+            await notify_client(ctx, "Schema analysis found no tables")
 
         # Auto-initialize GraphRAG in background (FULL MODE path)
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
@@ -657,8 +664,9 @@ async def get_table_details(
     if cached_tables:
         for t in cached_tables:
             if t.name.lower() == table_name.lower():
-                await ctx.info(
-                    f"Table '{table_name}' found in cache — no database call needed"
+                await notify_client(
+                    ctx,
+                    f"Table '{table_name}' found in cache — no database call needed",
                 )
                 return {
                     "success": True,
@@ -690,8 +698,10 @@ async def get_table_details(
         table_info = db_manager.analyze_table(table_name, schema_name)
 
         if not table_info:
-            await ctx.error(
-                f"Table '{table_name}' not found in schema '{schema_name or 'default'}'"
+            await notify_client(
+                ctx,
+                f"Table '{table_name}' not found in schema '{schema_name or 'default'}'",
+                level="error",
             )
             return {
                 "success": False,
@@ -723,14 +733,17 @@ async def get_table_details(
             "row_count": table_info.row_count,
         }
 
-        await ctx.info(
-            f"Retrieved details for table '{table_name}': {len(table_info.columns)} columns"
+        await notify_client(
+            ctx,
+            f"Retrieved details for table '{table_name}': {len(table_info.columns)} columns",
         )
         return table_dict
 
     except Exception as e:
         logger.error(f"Failed to get table details for {table_name}: {e}")
-        await ctx.error(f"Failed to analyze table '{table_name}': {e!s}")
+        await notify_client(
+            ctx, f"Failed to analyze table '{table_name}': {e!s}", level="error"
+        )
         return {
             "success": False,
             "error": str(e),
@@ -772,10 +785,11 @@ async def sample_table_data(
     )
 
     if sample_data and len(sample_data) > 0:
-        await ctx.info(
-            f"Sample data retrieved with {len(sample_data)} rows; explore data or continue with other analysis"
+        await notify_client(
+            ctx,
+            f"Sample data retrieved with {len(sample_data)} rows; explore data or continue with other analysis",
         )
     else:
-        await ctx.info("No sample data found for table")
+        await notify_client(ctx, "No sample data found for table")
 
     return sample_data

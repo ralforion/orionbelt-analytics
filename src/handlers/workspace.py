@@ -24,7 +24,13 @@ from ..paths import (
     get_models_dir,
     get_oxigraph_store_dir,
 )
-from ..utils import read_json_file, read_text_file, utc_now, write_text_file
+from ..utils import (
+    notify_client,
+    read_json_file,
+    read_text_file,
+    utc_now,
+    write_text_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -377,7 +383,7 @@ async def cleanup_workspace(
     session.oxigraph_store = None
     session.oxigraph_initialized = False
 
-    await ctx.info(f"Workspace cleaned for connection {connection_id[:8]}...")
+    await notify_client(ctx, f"Workspace cleaned for connection {connection_id[:8]}...")
 
     # 4. Build response
     result = "# Workspace Cleaned\n\n"
@@ -460,9 +466,10 @@ async def cleanup_old_versions(
         ontology_report.get("deleted", [])
     )
     verb = "would be removed" if dry_run else "removed"
-    await ctx.info(
+    await notify_client(
+        ctx,
         f"Retention for schema '{target}': {deleted_count} version artifact "
-        f"group(s) {verb}"
+        f"group(s) {verb}",
     )
 
     return {
@@ -557,8 +564,8 @@ async def save_semantic_model(
     except Exception as e:
         logger.warning(f"Failed to update workspace metadata for model: {e}")
 
-    await ctx.info(
-        f"Saved semantic model '{model_name}' for schema '{effective_schema}'"
+    await notify_client(
+        ctx, f"Saved semantic model '{model_name}' for schema '{effective_schema}'"
     )
 
     return {
@@ -640,7 +647,7 @@ async def get_semantic_model(
         )
         return err
 
-    await ctx.info(f"Retrieved semantic model '{model_name}'")
+    await notify_client(ctx, f"Retrieved semantic model '{model_name}'")
 
     return {
         "success": True,

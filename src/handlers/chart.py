@@ -11,6 +11,7 @@ from fastmcp.utilities.types import Image
 from ..chart_utils import save_image_to_tmp
 from ..config import config_manager
 from ..handler_context import HandlerContext
+from ..utils import notify_client
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,9 @@ async def generate_chart(
                         "Successfully parsed data_source from Python literal string format"
                     )
             except (ValueError, SyntaxError) as e:
-                await ctx.info("Chart generation failed - data_source format error")
+                await notify_client(
+                    ctx, "Chart generation failed - data_source format error"
+                )
                 raise RuntimeError(
                     f"data_source must be valid JSON (array of objects), not a string. "
                     f"Received string: {raw_data_source[:100]}... "
@@ -107,7 +110,7 @@ async def generate_chart(
 
     # Check for errors
     if isinstance(result, dict) and result.get("error"):
-        await ctx.info("Chart generation failed")
+        await notify_client(ctx, "Chart generation failed")
         raise RuntimeError(result.get("error", "Chart generation failed"))
 
     # Handle interactive output — generate HTML and register as ui:// resource
@@ -174,8 +177,9 @@ async def generate_chart(
             except Exception as e:
                 logger.debug(f"PNG export failed: {e}")
 
-            await ctx.info(
-                f"Interactive {chart_type_display} chart with {data_points} data points"
+            await notify_client(
+                ctx,
+                f"Interactive {chart_type_display} chart with {data_points} data points",
             )
             text_result = (
                 f"Chart generated: {chart_uri}{file_uri}\nChart JSON: {chart_json_uri}"
@@ -185,7 +189,7 @@ async def generate_chart(
                 return [text_result, image_inline]
             return text_result
         else:
-            await ctx.info("Chart generation failed")
+            await notify_client(ctx, "Chart generation failed")
             raise RuntimeError(
                 "Chart generation failed: unexpected result format for interactive mode"
             )
@@ -205,10 +209,10 @@ async def generate_chart(
         )
 
         if not image_file_path:
-            await ctx.info("Chart generation failed to save file")
+            await notify_client(ctx, "Chart generation failed to save file")
             raise RuntimeError("Failed to save chart image to file")
 
-        await ctx.info(f"Chart image saved: {image_file_path}")
+        await notify_client(ctx, f"Chart image saved: {image_file_path}")
         return_binary = config_manager.get_server_config().chart_return_binary
         if return_binary:
             return [
@@ -217,5 +221,5 @@ async def generate_chart(
             ]
         return f"Chart saved to: {image_file_path}"
     else:
-        await ctx.info("Chart generation failed")
+        await notify_client(ctx, "Chart generation failed")
         raise RuntimeError("Chart generation failed: unexpected result format")

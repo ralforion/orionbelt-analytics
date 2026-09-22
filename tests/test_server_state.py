@@ -5,6 +5,7 @@ import unittest
 from datetime import timedelta
 
 from src.database_manager import ColumnInfo, TableInfo
+from src.exceptions import SessionRequiredError
 from src.server_state import (
     ErrorResponse,
     ServerState,
@@ -37,12 +38,29 @@ class TestSessionIdAndErrors(unittest.TestCase):
         ctx = types.SimpleNamespace(session_id="abc")
         self.assertEqual(get_session_id(ctx), "abc")
 
-    def test_get_session_id_from_session_object(self):
-        ctx = types.SimpleNamespace(session=object())
-        self.assertTrue(get_session_id(ctx).startswith("session_"))
+    def test_get_session_id_never_falls_back_to_a_shared_bucket(self):
+        """A request without a session ID is an error, not a common session.
 
-    def test_get_session_id_default(self):
-        self.assertEqual(get_session_id(types.SimpleNamespace()), "default_session")
+        This is what the sessionless 2026-07-28 protocol era looks like. A
+        shared fallback would hand every such client the same database
+        manager, ontology and GraphRAG state.
+        """
+        for ctx in (
+            types.SimpleNamespace(),
+            types.SimpleNamespace(session_id=None),
+            types.SimpleNamespace(session_id=""),
+        ):
+            with self.assertRaises(SessionRequiredError) as raised:
+                get_session_id(ctx)
+            self.assertEqual(
+                raised.exception.to_response()["error_type"], "session_required"
+            )
+
+    def test_get_session_id_ignores_session_object_identity(self):
+        """A memory address is reused after collection, so it is no identity."""
+        ctx = types.SimpleNamespace(session=object())
+        with self.assertRaises(SessionRequiredError):
+            get_session_id(ctx)
 
     def test_error_response(self):
         r = create_error_response("boom", "bad", "details")
