@@ -456,12 +456,11 @@ async def suggest_semantic_names(
 ) -> dict[str, Any] | InputRequiredResult:
     """Extract and analyze names from a generated ontology to identify abbreviations and cryptic names.
 
-    When the client speaks MCP 2026-07-28 and can sample (and
-    SEMANTIC_NAMING_MODE is not ``review``), the server asks the host LLM for
-    names through a multi round-trip request and pre-fills a ``suggestions``
-    dict, so the next call to ``apply_semantic_names`` can pass them through
-    directly. Otherwise the response contains only the cryptic-name lists for
-    manual review.
+    When the client advertises a model to sample from (and
+    SEMANTIC_NAMING_MODE is not ``review``), the server asks it for names and
+    pre-fills a ``suggestions`` dict, so the next call to
+    ``apply_semantic_names`` can pass them through directly. Otherwise the
+    response contains only the cryptic-name lists for manual review.
 
     Args:
         ontology_file: The ontology filename from generate_ontology response

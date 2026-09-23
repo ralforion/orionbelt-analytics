@@ -83,21 +83,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `truststore` and the Emscripten-only `httpx2-jsfetch` arrive, all MIT or
   BSD-3-Clause; `httpx-sse` leaves. The audit workflow's `mcp-xray` pin moves
   to 1.5.0 with it, because 1.4.0 reads the SDK v1 model fields.
-- **Rename suggestions come through a multi round-trip request.**
-  `suggest_semantic_names` used `ctx.sample`, which FastMCP 4 removed in every
-  protocol era. It now returns the sampling request instead of a result (MCP
-  2026-07-28, SEP-2322); the client fulfils it and calls the tool again, and
-  the second round returns the same response as before, `suggestions`
-  included. `SEMANTIC_NAMING_MODE=auto|input_required|review` replaces
-  `ENABLE_SAMPLING`. The server asks only a client that speaks 2026-07-28 and
-  advertises sampling, and checks both first; everyone else gets the review
-  path with an unchanged response shape.
-  **A client on protocol 2025-11-25 no longer gets pre-filled suggestions,
-  whatever it can do, because the result type does not exist there. That
-  includes OrionBelt Chat on MCP SDK 1.x**, until its MCP stack speaks
-  2026-07-28. It gets the two-call review flow meanwhile; nothing fails.
-
-### Deprecated
+- **Rename suggestions keep working on both protocol eras.**
+  `suggest_semantic_names` used `ctx.sample`, which FastMCP 4 removed. How the
+  client's model is asked now follows from the era of the request: on MCP
+  2026-07-28 the tool returns the sampling request and is called again with
+  the answer (SEP-2322); on 2025-11-25 and earlier it asks over the connection
+  that era still has, through the session call `ctx.sample` used to wrap, which
+  is deprecated rather than removed. The response is identical either way, and
+  the only requirement is that the client advertise a model. Clients that do
+  not get the review path, unchanged. `SEMANTIC_NAMING_MODE=auto|input_required|review`
+  replaces `ENABLE_SAMPLING`. The handshake-era path goes when Sampling leaves
+  the specification, no sooner than twelve months out; the multi round-trip
+  half is what remains.
 - **`ENABLE_SAMPLING`.** Still honoured when `SEMANTIC_NAMING_MODE` is unset:
   `false` maps to `review` and logs a warning. MCP deprecated Sampling itself
   in its 2026-07-28 revision.

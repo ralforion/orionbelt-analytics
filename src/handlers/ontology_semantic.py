@@ -4,11 +4,13 @@ import asyncio
 import json
 import logging
 import re
+import warnings
 from enum import StrEnum
 from typing import Any
 
 import mcp.types as mcp_types
 from fastmcp import Context
+from mcp import MCPDeprecationWarning
 
 from ..config import config_manager
 from ..handler_context import HandlerContext
@@ -112,6 +114,13 @@ class NamingStrategy(StrEnum):
       of a result; the client fulfils it and calls the tool again with the
       answer. Replaces ``ctx.sample``, which FastMCP 4 removed in every
       protocol era.
+    - ``SESSION_SAMPLING``: ask the client's model over the connection the
+      handshake era still has. ``ctx.sample`` is gone, but the session call
+      beneath it, ``ServerSession.create_message``, is deprecated rather than
+      removed. This is what keeps a client on 2025-11-25 -- OrionBelt Chat
+      today -- getting the same pre-filled suggestions from a FastMCP 4
+      server. It goes when Sampling leaves the specification, and the
+      multi round-trip half is what remains.
     - ``REVIEW``: no server-side suggestions. The client model reads the
       cryptic names and calls ``apply_semantic_names`` itself. Works with
       every client in every era, and is the durable path: MCP deprecated
@@ -119,6 +128,7 @@ class NamingStrategy(StrEnum):
     """
 
     INPUT_REQUIRED = "input_required"
+    SESSION_SAMPLING = "session_sampling"
     REVIEW = "review"
 
 
@@ -132,22 +142,22 @@ _RENAME_SYSTEM_PROMPT = (
 )
 
 
-def _client_can_answer(ctx: Context) -> bool:
-    """Whether a multi round-trip sampling request would come back answered.
+def _client_can_sample(ctx: Context) -> bool:
+    """Whether this client offers a model to ask, in either era.
 
-    It has to be known before asking. The result type only exists from MCP
-    2026-07-28 on -- returning it to a handshake-era client is an error -- and
-    a modern client without a model fails *after* the first round, on its own
-    side, where the server can no longer fall back to the review path.
+    It has to be known before asking. A modern client without one fails
+    *after* the first round, on its own side, where the server can no longer
+    fall back to the review path; a handshake-era client without one refuses
+    the request outright.
     """
-    if not is_stateless_era(ctx):
-        return False
     try:
         session = ctx.session
-        return bool(
+        # `is True`: a real bool from FastMCP, never a test double's yes.
+        return (
             session.check_client_capability(
                 mcp_types.ClientCapabilities(sampling=mcp_types.SamplingCapability())
             )
+            is True
         )
     except Exception as e:
         logger.debug(f"Could not read the client's sampling capability: {e}")
@@ -167,16 +177,20 @@ def _select_naming_strategy(ctx: Context, mode: str) -> NamingStrategy:
     """
     if mode == "review":
         return NamingStrategy.REVIEW
-    if _client_can_answer(ctx):
-        return NamingStrategy.INPUT_REQUIRED
+    if _client_can_sample(ctx):
+        # How the client is asked follows from its era, not from the mode:
+        # the multi round-trip result type does not exist before 2026-07-28,
+        # and a modern session has no connection to ask over.
+        if is_stateless_era(ctx):
+            return NamingStrategy.INPUT_REQUIRED
+        return NamingStrategy.SESSION_SAMPLING
     if mode == "input_required":
         logger.warning(
-            "SEMANTIC_NAMING_MODE=input_required, but this client cannot answer "
-            "a multi round-trip sampling request (it needs MCP 2026-07-28 and "
-            "the sampling capability); using the review path"
+            "SEMANTIC_NAMING_MODE=input_required, but this client offers no "
+            "model to ask; using the review path"
         )
     else:
-        logger.info("Client cannot answer a sampling request; using the review path")
+        logger.info("Client offers no model to ask; using the review path")
     return NamingStrategy.REVIEW
 
 
@@ -211,6 +225,46 @@ def _ask_client_model(items: list[str]) -> mcp_types.InputRequiredResult:
         )
     )
     return mcp_types.InputRequiredResult(input_requests={_RENAMES_KEY: request})
+
+
+async def _ask_over_the_session(ctx: Context, items: list[str]) -> Any | None:
+    """Ask the client's model over a handshake-era connection.
+
+    ``ctx.sample`` is gone from FastMCP 4, but the session call it wrapped is
+    only deprecated. The warning it raises names a decision taken two layers
+    down that an operator cannot act on, and this server already reports which
+    path a request took, so it is filtered here and only here.
+
+    Returns:
+        The client's answer, or ``None`` if it could not be obtained.
+    """
+    logger.info("MCP sampling: requesting rename suggestions for %d items", len(items))
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"The sampling capability is deprecated",
+                category=MCPDeprecationWarning,
+            )
+            return await ctx.session.create_message(
+                messages=[
+                    mcp_types.SamplingMessage(
+                        role="user",
+                        content=mcp_types.TextContent(
+                            type="text", text=_build_rename_prompt(items)
+                        ),
+                    )
+                ],
+                system_prompt=_RENAME_SYSTEM_PROMPT,
+                temperature=0.2,
+                max_tokens=8000,
+            )
+    except Exception as e:
+        logger.warning(
+            f"Sampling over the session failed ({type(e).__name__}: {e}); "
+            "using the review path"
+        )
+        return None
 
 
 def _client_model_answer(ctx: Context) -> Any | None:
@@ -488,16 +542,30 @@ async def suggest_semantic_names(
         # names re-derived from the same ontology file.
         sampled_suggestions = None
         mode = config_manager.get_server_config().semantic_naming_mode
-        if _select_naming_strategy(ctx, mode) is NamingStrategy.INPUT_REQUIRED:
+        strategy = _select_naming_strategy(ctx, mode)
+        if strategy is NamingStrategy.INPUT_REQUIRED:
             answer = _client_model_answer(ctx)
             if answer is not None:
                 sampled_suggestions = _suggestions_from_answer(answer)
             elif total_cryptic:
+                # Returning the request ends this call; the client answers it
+                # and calls the tool again, and everything above runs a second
+                # time. All of it is reading and parsing the same ontology
+                # file, so the cost is time, not a repeated side effect.
                 return _ask_client_model(
                     _rename_items(
                         cryptic_classes, cryptic_props_by_table, cryptic_relationships
                     )
                 )
+        elif strategy is NamingStrategy.SESSION_SAMPLING and total_cryptic:
+            answer = await _ask_over_the_session(
+                ctx,
+                _rename_items(
+                    cryptic_classes, cryptic_props_by_table, cryptic_relationships
+                ),
+            )
+            if answer is not None:
+                sampled_suggestions = _suggestions_from_answer(answer)
 
         if sampled_suggestions and any(
             sampled_suggestions.get(k)

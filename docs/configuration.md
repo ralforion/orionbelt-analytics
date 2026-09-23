@@ -322,14 +322,16 @@ Ontology, schema and R2RML **files** are additionally pruned by count as they ar
 | `input_required` | The same, but the server logs a warning when the client cannot be asked, so a deployment that expects pre-filled suggestions notices. |
 | `review` | The server never asks the client's model. The host LLM inspects the cryptic lists and calls `apply_semantic_names` with its own suggestions. Works with every client in every protocol era. |
 
-**How the client's model is asked.** Through a multi round-trip request (MCP 2026-07-28, SEP-2322): `suggest_semantic_names` returns the sampling request instead of a result, the client fulfils it with its own model and calls the tool again, and the second round returns the usual response with a `suggestions` field in `apply_semantic_names` format. This replaced `ctx.sample`, which FastMCP 4 removed in every protocol era.
+**How the client's model is asked.** By the era of the request, not by the mode:
 
-**Which clients can be asked.** Both must hold, and the server checks them before asking:
+- **MCP 2026-07-28** — a multi round-trip request (SEP-2322): `suggest_semantic_names` returns the sampling request instead of a result, the client fulfils it with its own model and calls the tool again, and the second round returns the usual response with a `suggestions` field. This replaced `ctx.sample`, which FastMCP 4 removed.
+- **2025-11-25 and earlier** — over the connection the handshake era still has. `ctx.sample` is gone, but the session call beneath it is deprecated rather than removed, so these clients keep the same one-call flow. The SDK's per-call deprecation warning is filtered, since it names a decision an operator cannot act on.
 
-1. The request speaks MCP **2026-07-28 or later**. The multi round-trip result type does not exist in earlier revisions; returning it to such a client would be a protocol error.
-2. The client advertises the **sampling capability**. A modern client without a model would fail after the first round, on its own side, where the server can no longer fall back.
+Either way the response is identical, and the server logs which path a request took.
 
-Everyone else gets the review path, with an unchanged response shape.
+**Which clients can be asked.** One thing only: the client has to advertise the **sampling capability**, i.e. offer a model. A modern client without one would fail after the first round, on its own side, where the server can no longer fall back; a handshake-era client without one refuses the request outright. Both get the review path instead, with an unchanged response shape.
+
+**This path is on borrowed time.** MCP deprecated Sampling itself in the 2026-07-28 revision, with removal no sooner than twelve months out. When it goes, the handshake half of this goes with it and the review path is what remains.
 
 **Why a mode and not a switch.** MCP deprecated Sampling in its 2026-07-28 revision, also when carried by a multi round-trip request. The paths sit behind one seam in the handler so the path can change with the protocol while the tool's response shape stays the same. The review path is the durable one.
 
@@ -339,10 +341,10 @@ Everyone else gets the review path, with an unchanged response shape.
 
 | Client | Can be asked | Behaviour |
 |---|---|---|
-| A client on MCP 2026-07-28 with a sampling handler | Yes | `suggestions` field is populated; one tool call instead of two |
-| OrionBelt Chat on MCP SDK 1.x (protocol 2025-11-25) | **No, since the move to FastMCP 4** | Review path: the chat model proposes the names and calls `apply_semantic_names`. Pre-filled suggestions return once the chat's MCP stack speaks 2026-07-28 |
-| Claude Desktop, Claude Code | No | Review path |
-| Generic pydantic-ai clients | Only on 2026-07-28 and with `agent.set_mcp_sampling_model()` (or equivalent) | Otherwise review path |
+| A client on MCP 2026-07-28 with a sampling handler | Yes | Asked through a multi round-trip request; `suggestions` is populated |
+| OrionBelt Chat on MCP SDK 1.x (protocol 2025-11-25) | Yes | Asked over its connection; `suggestions` is populated, no upgrade needed |
+| Claude Desktop, Claude Code | No | They advertise no model; review path |
+| Generic pydantic-ai clients | With `sampling_model=` / `sampling_handler=` on the toolset | Otherwise review path |
 
 **Disabling:** set `SEMANTIC_NAMING_MODE=review` to force the review path even when the client supports sampling. Useful for cost control, deterministic regression testing, or when a particular host LLM produces poor rename suggestions.
 

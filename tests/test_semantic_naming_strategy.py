@@ -63,12 +63,16 @@ def _ctx(revision: str | None, can_sample: bool, responses: object = None):
         # A modern client without a model would fail after round one, on its
         # own side, where the server can no longer fall back.
         ("2026-07-28", False, "auto", NamingStrategy.REVIEW),
-        # The result type does not exist for a handshake-era client, whatever
-        # it can do: OrionBelt Chat on MCP SDK 1.x is this row.
-        ("2025-11-25", True, "auto", NamingStrategy.REVIEW),
-        (None, True, "auto", NamingStrategy.REVIEW),
+        # A handshake-era client is asked over its connection instead: the
+        # multi round-trip result type does not exist there. OrionBelt Chat on
+        # MCP SDK 1.x is this row.
+        ("2025-11-25", True, "auto", NamingStrategy.SESSION_SAMPLING),
+        ("2025-11-25", True, "input_required", NamingStrategy.SESSION_SAMPLING),
+        ("2025-11-25", False, "auto", NamingStrategy.REVIEW),
+        (None, True, "auto", NamingStrategy.SESSION_SAMPLING),
         # The operator's word is final.
         ("2026-07-28", True, "review", NamingStrategy.REVIEW),
+        ("2025-11-25", True, "review", NamingStrategy.REVIEW),
     ],
 )
 def test_strategy_selection(revision, can_sample, mode, expected):
@@ -76,11 +80,13 @@ def test_strategy_selection(revision, can_sample, mode, expected):
 
 
 def test_asking_for_input_required_says_why_it_is_not_happening(caplog):
+    """Only the review path needs explaining now: a handshake-era client with
+    a model is still asked, just over its connection."""
     with caplog.at_level(logging.WARNING, logger=handler.logger.name):
-        strategy = _select_naming_strategy(_ctx("2025-11-25", True), "input_required")
+        strategy = _select_naming_strategy(_ctx("2025-11-25", False), "input_required")
 
     assert strategy is NamingStrategy.REVIEW
-    assert "2026-07-28" in caplog.text
+    assert "no model to ask" in caplog.text
 
 
 def test_a_client_whose_capabilities_cannot_be_read_gets_the_review_path():
@@ -232,15 +238,18 @@ async def test_a_modern_client_without_a_model_gets_the_review_payload(
     assert result.data["next_tool"] == "apply_semantic_names"
 
 
-async def test_a_handshake_era_client_gets_the_review_payload_even_with_a_model(
+async def test_a_handshake_era_client_with_a_model_also_gets_suggestions(
     cryptic_database, monkeypatch
 ):
-    """OrionBelt Chat today. It must get a result, not the protocol error that
-    returning a multi round-trip request to a 2025-11-25 client would be."""
+    """OrionBelt Chat today, against a FastMCP 4 server. ctx.sample is gone,
+    but the session call beneath it is only deprecated, so this client keeps
+    the one-call flow instead of dropping to review."""
     _use_mode(monkeypatch, "auto")
+    prompts: list[str] = []
 
     async def client_model(messages, params, context):
-        raise AssertionError("a handshake-era client must not be asked")
+        prompts.append(messages[0].content.text)
+        return MODEL_ANSWER
 
     async with Client(mcp, mode="legacy", sampling_handler=client_model) as client:
         await client.call_tool("connect_database", {"db_type": "duckdb"})
@@ -250,8 +259,52 @@ async def test_a_handshake_era_client_gets_the_review_payload_even_with_a_model(
         )
         result = await client.call_tool("suggest_semantic_names", {})
 
+    assert len(prompts) == 1
+    assert "acctbal" in prompts[0]
+    assert result.data["suggestions_source"] == "mcp_sampling"
+    assert result.data["suggestions"]["classes"][0]["suggested_name"] == (
+        "AccountBalance"
+    )
+
+
+async def test_a_handshake_era_client_without_a_model_gets_the_review_payload(
+    cryptic_database, monkeypatch
+):
+    _use_mode(monkeypatch, "auto")
+
+    async with Client(mcp, mode="legacy") as client:
+        await client.call_tool("connect_database", {"db_type": "duckdb"})
+        await client.call_tool("discover_schema", {"schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {"schema_name": "main", "auto_persist": False}
+        )
+        result = await client.call_tool("suggest_semantic_names", {})
+
     assert "suggestions" not in result.data
     assert result.data["cryptic_classes"]
+
+
+async def test_the_deprecation_warning_is_not_raised_to_the_operator(
+    cryptic_database, monkeypatch, recwarn
+):
+    """Sampling over the session is deprecated; the SDK says so on every call.
+    That names a decision two layers down which an operator cannot act on."""
+    _use_mode(monkeypatch, "auto")
+
+    async def client_model(messages, params, context):
+        return MODEL_ANSWER
+
+    async with Client(mcp, mode="legacy", sampling_handler=client_model) as client:
+        await client.call_tool("connect_database", {"db_type": "duckdb"})
+        await client.call_tool("discover_schema", {"schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {"schema_name": "main", "auto_persist": False}
+        )
+        await client.call_tool("suggest_semantic_names", {})
+
+    assert [
+        w for w in recwarn if "sampling capability is deprecated" in str(w.message)
+    ] == []
 
 
 async def test_review_mode_never_asks_even_a_capable_client(
