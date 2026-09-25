@@ -725,23 +725,44 @@ async def graphrag_find_join_path(
                 "message": f"No path found between {from_table} and {to_table} within {max_hops} hops",
             }
 
-        path = [from_table]
-        for join in join_path:
-            if join["to_table"] not in path:
-                path.append(join["to_table"])
+        def tables_of(joins: list[dict[str, Any]]) -> list[str]:
+            tables = [from_table]
+            for join in joins:
+                if join["to_table"] not in tables:
+                    tables.append(join["to_table"])
+            return tables
+
+        alternatives = (
+            session.graphrag_manager.graph_retriever.find_alternative_join_paths(
+                from_table, to_table, chosen=join_path
+            )
+        )
 
         await notify_client(
             ctx, f"Found {len(join_path)}-hop path from {from_table} to {to_table}"
         )
 
-        return {
+        response: dict[str, Any] = {
             "success": True,
             "from": from_table,
             "to": to_table,
             "hops": len(join_path),
-            "path": path,
+            "path": tables_of(join_path),
             "joins": join_path,
+            # Always present, so "unambiguous" is an answer and not an absence.
+            "ambiguous": bool(alternatives),
         }
+        if alternatives:
+            response["alternatives"] = [
+                {"path": tables_of(joins), "joins": joins} for joins in alternatives
+            ]
+            response["ambiguity_note"] = (
+                f"{len(alternatives)} other path(s) are exactly as short. They "
+                "generally answer different questions (e.g. a customer's region "
+                "vs. a warehouse's region). Do not pick silently: say which "
+                "route the question implies, or ask the user."
+            )
+        return response
 
     except Exception as e:
         logger.exception(f"GraphRAG find join path failed: {e}")

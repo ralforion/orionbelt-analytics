@@ -45,6 +45,7 @@ class HandlerContext:
     get_session_obqc_validator: Callable[..., Any] = _unset_service
     get_oxigraph_store: Callable[..., Any] = _unset_service
     load_ontology_from_session: Callable[..., Any] = _unset_service
+    resolve_ontology_path: Callable[..., Any] = _unset_service
     create_error_response: Callable[..., Any] = _unset_service
     server_state: Any = None
     get_connection_fingerprint: Callable[..., Any] = _unset_service

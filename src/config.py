@@ -59,6 +59,27 @@ def _resolve_semantic_naming_mode() -> str:
     return "review" if disabled else "auto"
 
 
+DEFAULT_MCP_CACHE_TTL_SECONDS = 300
+
+
+def resolve_mcp_cache_ttl() -> int:
+    """Read MCP_CACHE_TTL_SECONDS; 0 disables the hint, junk keeps the default."""
+    raw = os.getenv("MCP_CACHE_TTL_SECONDS")
+    if raw is None or not raw.strip():
+        return DEFAULT_MCP_CACHE_TTL_SECONDS
+    try:
+        ttl = int(raw)
+    except ValueError:
+        ttl = -1
+    if ttl < 0:
+        logger.warning(
+            f"Invalid MCP_CACHE_TTL_SECONDS='{raw}'. Must be a whole number of "
+            f"seconds, 0 to disable. Defaulting to {DEFAULT_MCP_CACHE_TTL_SECONDS}."
+        )
+        return DEFAULT_MCP_CACHE_TTL_SECONDS
+    return ttl
+
+
 SESSIONLESS_FALLBACKS = ("sole_session", "none")
 
 
@@ -95,6 +116,9 @@ class ServerConfig:
     # one) or "none" (always an error). Use "none" when several people share
     # the server and must never land in each other's session by omission.
     sessionless_fallback: str = "sole_session"
+    # Seconds a client may cache the tool list, the resource list and resource
+    # reads (MCP 2026-07-28, SEP-2549). 0 sends no hint.
+    mcp_cache_ttl: int = 300
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
@@ -187,6 +211,7 @@ class ConfigManager:
                 == "true",
                 semantic_naming_mode=_resolve_semantic_naming_mode(),
                 sessionless_fallback=_resolve_sessionless_fallback(),
+                mcp_cache_ttl=resolve_mcp_cache_ttl(),
             )
             logger.info("Server configuration loaded")
         return self._server_config
