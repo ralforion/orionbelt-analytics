@@ -1,11 +1,14 @@
 """Semantic-naming handlers: suggest and apply business-friendly names."""
 
 import asyncio
+import copy
 import json
 import logging
 import re
 import warnings
 from enum import StrEnum
+from functools import partial
+from pathlib import Path
 from typing import Any
 
 import mcp.types as mcp_types
@@ -470,6 +473,48 @@ def _parse_rename_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+async def _names_for_review(
+    ctx: Context,
+    ontology_path: Path,
+    services: "HandlerContext",
+) -> dict[str, Any]:
+    """The review extraction for an ontology file, parsing it at most once.
+
+    Parsing dominates: 1.7s of the 1.9s a 400-table ontology costs. The same
+    file is read again by the second round of a 2026-07-28 request -- the tool
+    body runs once per round -- and by every repeat call, so the result is kept
+    on the connection whose workspace holds the file, keyed by the file's path,
+    mtime and size. A rewritten file therefore misses, and a copy is handed out
+    so no caller can edit what the next one reads (13ms against 1854ms).
+
+    Args:
+        ctx: FastMCP request context.
+        ontology_path: The file to read.
+        services: Request-scoped services.
+
+    Returns:
+        What ``OntologyGenerator.extract_names_for_review`` produced.
+    """
+    stat = await asyncio.to_thread(ontology_path.stat)
+    key = (str(ontology_path), stat.st_mtime_ns, stat.st_size)
+    runtime = getattr(services.get_session_data(ctx), "runtime", None)
+    cached = getattr(runtime, "ontology_review", None)
+    if cached is not None and cached[0] == key:
+        logger.debug(f"Reusing the parsed review of {ontology_path.name}")
+        return copy.deepcopy(cached[1])
+
+    generator = OntologyGenerator()
+    await asyncio.to_thread(generator.load_from_file, str(ontology_path))
+    extraction = await asyncio.to_thread(
+        partial(generator.extract_names_for_review, compact=True)
+    )
+    if runtime is not None and isinstance(
+        getattr(runtime, "ontology_review", "unset"), (tuple, type(None))
+    ):
+        runtime.ontology_review = (key, extraction)
+    return copy.deepcopy(extraction)
+
+
 async def suggest_semantic_names(
     ctx: Context,
     ontology_file: str | None,
@@ -492,12 +537,10 @@ async def suggest_semantic_names(
                         "error_type": "file_not_found",
                         "hint": "Check the filename from generate_ontology response",
                     }
-                generator = OntologyGenerator()
-                await asyncio.to_thread(generator.load_from_file, str(ontology_path))
                 source_filename = ontology_file
-                logger.info(f"Loaded ontology from provided file: {ontology_file}")
+                logger.info(f"Reading ontology from provided file: {ontology_file}")
             else:
-                generator, source_filename = services.load_ontology_from_session(ctx)
+                ontology_path, source_filename = services.resolve_ontology_path(ctx)
         except ValueError as e:
             return {
                 "error": str(e),
@@ -505,7 +548,7 @@ async def suggest_semantic_names(
                 "hint": "Pass ontology_file parameter from generate_ontology response",
             }
 
-        extraction_result = generator.extract_names_for_review(compact=True)
+        extraction_result = await _names_for_review(ctx, ontology_path, services)
 
         # Build compact review lists — only cryptic items, grouped to save tokens
         cryptic_classes = [
@@ -536,10 +579,12 @@ async def suggest_semantic_names(
         )
         summary = extraction_result["summary"]
 
-        # The client's model proposes the names when it can be asked. That takes
-        # two rounds of this same call: the first returns the request, the
-        # second arrives with the answer and gets here again, the cryptic
-        # names re-derived from the same ontology file.
+        # The client's model proposes the names when it can be asked. On a
+        # 2026-07-28 request that takes two rounds of this same call: the first
+        # returns the request, the second arrives with the answer and runs the
+        # whole body again. Everything above it reads one ontology file, and
+        # _names_for_review parses that file only once, so the second round is
+        # the cheap one.
         sampled_suggestions = None
         mode = config_manager.get_server_config().semantic_naming_mode
         strategy = _select_naming_strategy(ctx, mode)
@@ -549,9 +594,8 @@ async def suggest_semantic_names(
                 sampled_suggestions = _suggestions_from_answer(answer)
             elif total_cryptic:
                 # Returning the request ends this call; the client answers it
-                # and calls the tool again, and everything above runs a second
-                # time. All of it is reading and parsing the same ontology
-                # file, so the cost is time, not a repeated side effect.
+                # and calls the tool again. Read-only work either way, and the
+                # parse is cached, so the retry costs little.
                 return _ask_client_model(
                     _rename_items(
                         cryptic_classes, cryptic_props_by_table, cryptic_relationships

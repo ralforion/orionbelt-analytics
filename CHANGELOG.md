@@ -32,6 +32,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not by a missing session ID: FastMCP 4 reports a `ctx.session_id` there too,
   a fresh one per request, which would otherwise open an empty session on
   every call.
+- **`graphrag_find_join_path` says when the path is not the only one.** It
+  returned *a* shortest path and picked silently when several routes were
+  equally short, although an order reaching a region through its customer or
+  through its warehouse are two different questions. The result now carries
+  `ambiguous` (always) and, when true, the `alternatives` with their joins and
+  a note telling the model not to pick silently. Longer detours are not
+  reported.
+- **The user decides when the model overrides a fan-trap block.**
+  `allow_fan_out=True` lets a model run a query OBQC blocked, and the inflated
+  totals then arrive with only a warning. When that override actually
+  downgrades a blocking finding, a client that advertises elicitation is now
+  asked, naming the tables, whether to accept inflated totals. A no, or a
+  dismissed question, withdraws the override: the query fails with the normal
+  blocking verdict and `obqc_issues` tells the model to restructure rather than
+  retry. A yes is recorded in the warning as "accepted by the user". Nobody is
+  asked when nothing was overridden; a client that cannot be asked keeps the
+  old behaviour. OBQC itself is untouched and stays deterministic.
+- **`cleanup_workspace` asks before it deletes.** It removes every ontology
+  version, the RDF store and the saved semantic models of a connection, for
+  everyone using that database, and used to do so on a model's say-so alone. A
+  client that advertises elicitation is now asked to confirm with a checkbox
+  the user has to tick; declining, dismissing or accepting without ticking
+  cancels, and nothing is deleted. On MCP 2026-07-28 the question is a multi
+  round-trip request, on earlier revisions the tool waits for the answer, and
+  in both it is asked before the connection's writer lock is taken. A client
+  that cannot be asked keeps the old behaviour. `ask_to_confirm` in
+  `src/handlers/confirmation.py` is reusable for other tools.
+- **An ontology is parsed once per file, not once per call.** Parsing dominates
+  `suggest_semantic_names`: 1.7s of the 1.9s a 400-table ontology costs. A
+  2026-07-28 request runs the whole tool body once per round, so that was paid
+  twice for one answer, and again on every repeat call. The review extraction is
+  now kept on the connection whose workspace holds the file, keyed by the file's
+  path, mtime and size, so a rewritten ontology misses and a stale one is never
+  served. Measured on a two-round call: 2222ms down to 1186ms for 400 tables,
+  536ms to 318ms for 100. Callers get a copy, so none can edit what the next one
+  reads.
+- **Cache hints for clients on MCP 2026-07-28.** The tool list, the resource
+  list and resource reads now carry a `private` cache hint of
+  `MCP_CACHE_TTL_SECONDS` (default 300, `0` to disable), so a client need not
+  fetch them again on every turn. All of it is safe to keep: tools and skill
+  files change only with a release, and every chart widget has its own URI.
+  Handshake-era clients receive no hint.
 
 ### Changed
 - **A request without an MCP session is refused, not pooled.** `get_session_id`
@@ -74,7 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aborts the tool whose result was still on its way. It is also the single
   place to adapt when MCP Logging, deprecated in the 2026-07-28 revision, goes
   away. A test fails if a handler calls the context directly again.
-
+  On FastMCP 4 the messages still travel through MCP Logging, which 2026-07-28
+  deprecated; the SDK's per-connection warning about it is filtered, and only
+  that one.
 - **FastMCP 4 and MCP SDK 2.** `fastmcp[apps]>=4.0.5,<5`, which brings MCP
   2026-07-28. One server now serves both protocol eras and negotiates per
   client; clients on 2025-11-25 and earlier keep their transport session, and
@@ -104,6 +148,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http` (streamable HTTP).
 
 ### Fixed
+- **A confirmation now names what it approved.** `cleanup_workspace` asks
+  before deleting and `execute_sql_query` asks before a model's
+  `allow_fan_out` override stands. Both then acted on whatever the session
+  pointed at when the answer arrived. A `connect_database` while the question
+  was open therefore deleted the *new* connection's workspace with approval
+  given for the old one, or carried an acceptance of inflated totals to a
+  different set of tables. The question now carries the connection it is about
+  (in `request_state`, since the two rounds of a 2026-07-28 request are
+  separate requests) and the caller re-checks it, so a changed connection
+  cancels instead of proceeding. The question is asked before the
+  connection's writer lock is taken, so a person thinking about it cannot
+  block everyone else on that database; the wait for that lock is a second
+  window, and the approval is checked again on the far side of it before
+  anything is deleted. Deleting the files is a third: the in-memory state
+  cleared afterwards is the deleted connection's, not whatever database the
+  session has moved to, whose other sessions would have lost their warm
+  cache and index.
+- **A client that can only open URLs is no longer sent a form.** MCP 2026-07-28
+  splits elicitation into form and URL kinds, and the SDK's capability check
+  only tests that *some* elicitation was declared. A URL-only client was sent a
+  checkbox it cannot render, so the question could never be answered. The
+  declared kinds are read directly now; a client that declares neither predates
+  the distinction and is still asked.
 - **A connection id now identifies the database.** The fingerprint that names
   a connection's workspace read `database_type`, `host`, `port`, `database` and
   `schema`; no driver writes `database_type` (they write `type`), and the rest

@@ -223,6 +223,7 @@ DATABRICKS_SCHEMA=default
 | `R2RML_BASE_IRI` | `http://mycompany.com/` | Base IRI for R2RML subject templates |
 | `OUTPUT_DIR` | `tmp` | Directory for generated files (relative to project root) |
 | `MCP_TRANSPORT` | `http` | MCP transport mode: `http`, or `sse` (deprecated) |
+| `MCP_CACHE_TTL_SECONDS` | `300` | How long a client on MCP 2026-07-28 may cache the tool list, the resource list and resource reads. Sent as a `private` cache hint; `0` sends none. Raise it for fewer round trips, lower it while developing tools |
 | `SESSIONLESS_FALLBACK` | `sole_session` | What a call with neither an MCP session nor a `connection` handle resolves to: `sole_session` (the only live session opened without a transport session, if there is exactly one; logged as a warning on first use) or `none` (always an error). **Use `none` when several people share the server** |
 | `MCP_SERVER_HOST` | `localhost` | Host address the server binds to |
 | `MCP_SERVER_PORT` | `9000` | Port the server listens on |
