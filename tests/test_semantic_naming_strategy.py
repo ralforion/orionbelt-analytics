@@ -1,27 +1,31 @@
-"""The strategy seam behind suggest_semantic_names.
+"""How suggest_semantic_names gets its rename suggestions.
 
-MCP deprecated Sampling in its 2026-07-28 revision and FastMCP 4 removes
-``ctx.sample`` in every protocol era. The tool therefore picks one of three
-paths through a single seam, and must land on the review path cleanly whenever
-the better ones are not on offer.
+FastMCP 4 removed ``ctx.sample``. Its replacement is a multi round-trip
+request (MCP 2026-07-28, SEP-2322): the tool returns the request instead of a
+result, the client fulfils it and calls the tool again with the answer. That
+only works for a client that speaks the new era *and* can sample, and it has
+to be known before asking, so everyone else gets the review path, where the
+client model proposes the names itself.
 """
 
 import json
 import logging
 import types
-from unittest.mock import AsyncMock, Mock
 
+import duckdb
+import mcp.types as mcp_types
 import pytest
+from fastmcp import Client
 
+import src.main as main_module
+import src.server_state as state_module
 from src.config import ConfigManager, _resolve_semantic_naming_mode
+from src.handlers import connection as connection_handler
 from src.handlers import ontology_semantic as handler
 from src.handlers.ontology_semantic import NamingStrategy, _select_naming_strategy
+from src.main import mcp
+from src.server_state import ServerState
 
-CRYPTIC = {
-    "cryptic_classes": ["acctbal"],
-    "cryptic_props_by_table": {"acctbal": ["bankid"]},
-    "cryptic_relationships": [],
-}
 MODEL_ANSWER = json.dumps(
     {
         "classes": [
@@ -37,95 +41,287 @@ MODEL_ANSWER = json.dumps(
 )
 
 
-def _sampling_ctx(text: str = MODEL_ANSWER) -> Mock:
-    ctx = Mock()
-    ctx.sample = AsyncMock(return_value=types.SimpleNamespace(text=text, model="m"))
-    return ctx
-
-
-def _use_mode(monkeypatch, mode: str) -> None:
-    config = types.SimpleNamespace(semantic_naming_mode=mode)
-    monkeypatch.setattr(handler.config_manager, "get_server_config", lambda: config)
-
-
-# --- strategy selection ---
-
-
-def test_auto_uses_client_sampling_when_the_context_offers_it():
-    assert _select_naming_strategy(_sampling_ctx(), "auto") is (
-        NamingStrategy.CLIENT_SAMPLING
+def _ctx(revision: str | None, can_sample: bool, responses: object = None):
+    session = types.SimpleNamespace(
+        check_client_capability=lambda _capability: can_sample
+    )
+    return types.SimpleNamespace(
+        request_context=types.SimpleNamespace(protocol_version=revision),
+        session=session,
+        input_responses=responses,
     )
 
 
-def test_auto_lands_on_review_when_the_context_has_no_sample():
-    """What FastMCP 4 looks like before the input-required path exists."""
-    ctx = types.SimpleNamespace()
+# --- which clients can be asked ---
+
+
+@pytest.mark.parametrize(
+    ("revision", "can_sample", "mode", "expected"),
+    [
+        ("2026-07-28", True, "auto", NamingStrategy.INPUT_REQUIRED),
+        ("2026-07-28", True, "input_required", NamingStrategy.INPUT_REQUIRED),
+        # A modern client without a model would fail after round one, on its
+        # own side, where the server can no longer fall back.
+        ("2026-07-28", False, "auto", NamingStrategy.REVIEW),
+        # A handshake-era client is asked over its connection instead: the
+        # multi round-trip result type does not exist there. OrionBelt Chat on
+        # MCP SDK 1.x is this row.
+        ("2025-11-25", True, "auto", NamingStrategy.SESSION_SAMPLING),
+        ("2025-11-25", True, "input_required", NamingStrategy.SESSION_SAMPLING),
+        ("2025-11-25", False, "auto", NamingStrategy.REVIEW),
+        (None, True, "auto", NamingStrategy.SESSION_SAMPLING),
+        # The operator's word is final.
+        ("2026-07-28", True, "review", NamingStrategy.REVIEW),
+        ("2025-11-25", True, "review", NamingStrategy.REVIEW),
+    ],
+)
+def test_strategy_selection(revision, can_sample, mode, expected):
+    assert _select_naming_strategy(_ctx(revision, can_sample), mode) is expected
+
+
+def test_asking_for_input_required_says_why_it_is_not_happening(caplog):
+    """Only the review path needs explaining now: a handshake-era client with
+    a model is still asked, just over its connection."""
+    with caplog.at_level(logging.WARNING, logger=handler.logger.name):
+        strategy = _select_naming_strategy(_ctx("2025-11-25", False), "input_required")
+
+    assert strategy is NamingStrategy.REVIEW
+    assert "no model to ask" in caplog.text
+
+
+def test_a_client_whose_capabilities_cannot_be_read_gets_the_review_path():
+    ctx = types.SimpleNamespace(
+        request_context=types.SimpleNamespace(protocol_version="2026-07-28"),
+        session=types.SimpleNamespace(),  # no check_client_capability at all
+    )
 
     assert _select_naming_strategy(ctx, "auto") is NamingStrategy.REVIEW
 
 
-def test_review_mode_never_samples_even_if_the_client_could():
-    assert _select_naming_strategy(_sampling_ctx(), "review") is NamingStrategy.REVIEW
+# --- the two rounds ---
 
 
-def test_input_required_is_not_served_by_fastmcp_3_and_says_so(caplog):
-    with caplog.at_level(logging.WARNING, logger=handler.logger.name):
-        strategy = _select_naming_strategy(_sampling_ctx(), "input_required")
+def test_round_one_is_a_sampling_request_with_todays_prompt_and_limits():
+    result = handler._ask_client_model(["CLASS  acctbal", "PROP   acctbal.bankid"])
 
-    assert strategy is NamingStrategy.REVIEW
-    assert "FastMCP 4" in caplog.text
+    assert isinstance(result, mcp_types.InputRequiredResult)
+    request = result.input_requests[handler._RENAMES_KEY]
+    assert isinstance(request, mcp_types.CreateMessageRequest)
+    assert request.params.temperature == 0.2
+    assert request.params.max_tokens == 8000
+    assert "ontology" in request.params.system_prompt
+    assert "acctbal.bankid" in request.params.messages[0].content.text
 
 
-# --- dispatch ---
+def _answer(text: str):
+    return types.SimpleNamespace(
+        content=mcp_types.TextContent(type="text", text=text), model="client-model"
+    )
 
 
-async def test_client_sampling_returns_the_normalized_suggestions(monkeypatch):
-    _use_mode(monkeypatch, "auto")
-    ctx = _sampling_ctx()
+def test_round_two_reads_the_answer_under_the_same_key():
+    ctx = _ctx("2026-07-28", True, {handler._RENAMES_KEY: _answer(MODEL_ANSWER)})
 
-    suggestions = await handler._request_rename_suggestions(ctx, **CRYPTIC)
+    answer = handler._client_model_answer(ctx)
+    suggestions = handler._suggestions_from_answer(answer)
 
-    ctx.sample.assert_awaited_once()
-    assert suggestions is not None
     assert suggestions["classes"][0]["suggested_name"] == "AccountBalance"
 
 
-async def test_a_context_without_sample_falls_back_without_raising(monkeypatch):
-    _use_mode(monkeypatch, "auto")
+def test_the_first_round_has_no_answer_yet():
+    assert handler._client_model_answer(_ctx("2026-07-28", True, None)) is None
+    assert handler._client_model_answer(types.SimpleNamespace()) is None
 
-    suggestions = await handler._request_rename_suggestions(
-        types.SimpleNamespace(), **CRYPTIC
+
+def test_unusable_model_output_falls_back_to_review():
+    assert handler._suggestions_from_answer(_answer("sorry, no JSON here")) is None
+
+
+def test_an_answer_split_over_several_blocks_is_joined():
+    half = len(MODEL_ANSWER) // 2
+    answer = types.SimpleNamespace(
+        content=[
+            mcp_types.TextContent(type="text", text=MODEL_ANSWER[:half]),
+            mcp_types.TextContent(type="text", text=MODEL_ANSWER[half:]),
+        ],
+        model="client-model",
     )
 
-    assert suggestions is None
+    assert handler._suggestions_from_answer(answer)["classes"]
 
 
-async def test_review_mode_does_not_call_the_client_model(monkeypatch):
+# --- the real tool, end to end ---
+
+
+@pytest.fixture
+def cryptic_database(monkeypatch, tmp_path):
+    """A DuckDB file whose names need renaming, behind a private server state."""
+    database = tmp_path / "bank.duckdb"
+    connection = duckdb.connect(str(database))
+    connection.execute("CREATE TABLE banks (bankid INTEGER PRIMARY KEY, bnknm VARCHAR)")
+    connection.execute(
+        "CREATE TABLE acctbal (acctid INTEGER PRIMARY KEY, bankid INTEGER "
+        "REFERENCES banks(bankid), balamt DECIMAL(18,2))"
+    )
+    connection.close()
+
+    output = tmp_path / "out"
+    output.mkdir()
+    state = ServerState()
+    monkeypatch.setattr(state_module, "_server_state", state)
+    monkeypatch.setattr(main_module, "_server_state", state)
+    monkeypatch.setattr("src.paths.OUTPUT_DIR", output)
+    monkeypatch.setattr(connection_handler, "OUTPUT_DIR", output)
+    monkeypatch.setattr(connection_handler, "detect_workspace", lambda _cid: None)
+    monkeypatch.setenv("DUCKDB_DATABASE_PATH", str(database))
+    monkeypatch.delenv("MOTHERDUCK_TOKEN", raising=False)
+    monkeypatch.setenv("AUTO_GRAPHRAG", "false")
+    yield state
+    state.cleanup()
+
+
+def _use_mode(monkeypatch, mode: str) -> None:
+    config = handler.config_manager.get_server_config()
+    monkeypatch.setattr(config, "semantic_naming_mode", mode)
+
+
+async def _prepare_ontology(client: Client) -> str:
+    connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+    handle = connected.data.split("Connection handle: ")[1].split()[0]
+    arguments = {"connection": handle}
+    await client.call_tool("discover_schema", {"schema_name": "main", **arguments})
+    await client.call_tool(
+        "generate_ontology",
+        {"schema_name": "main", "auto_persist": False, **arguments},
+    )
+    return handle
+
+
+async def test_a_modern_client_with_a_model_gets_prefilled_suggestions(
+    cryptic_database, monkeypatch
+):
+    _use_mode(monkeypatch, "auto")
+    prompts: list[str] = []
+
+    async def client_model(messages, params, context):
+        prompts.append(messages[0].content.text)
+        return MODEL_ANSWER
+
+    async with Client(mcp, sampling_handler=client_model) as client:
+        handle = await _prepare_ontology(client)
+        result = await client.call_tool(
+            "suggest_semantic_names", {"connection": handle}
+        )
+
+    assert len(prompts) == 1  # asked once, answered on the second round
+    assert "acctbal" in prompts[0]
+    assert result.data["suggestions_source"] == "mcp_sampling"
+    assert result.data["suggestions"]["classes"][0]["suggested_name"] == (
+        "AccountBalance"
+    )
+    assert result.data["next_tool"] == "apply_semantic_names"
+
+
+async def test_a_modern_client_without_a_model_gets_the_review_payload(
+    cryptic_database, monkeypatch
+):
+    _use_mode(monkeypatch, "auto")
+
+    async with Client(mcp) as client:
+        handle = await _prepare_ontology(client)
+        result = await client.call_tool(
+            "suggest_semantic_names", {"connection": handle}
+        )
+
+    assert "suggestions" not in result.data
+    assert result.data["cryptic_classes"]
+    assert result.data["next_tool"] == "apply_semantic_names"
+
+
+async def test_a_handshake_era_client_with_a_model_also_gets_suggestions(
+    cryptic_database, monkeypatch
+):
+    """OrionBelt Chat today, against a FastMCP 4 server. ctx.sample is gone,
+    but the session call beneath it is only deprecated, so this client keeps
+    the one-call flow instead of dropping to review."""
+    _use_mode(monkeypatch, "auto")
+    prompts: list[str] = []
+
+    async def client_model(messages, params, context):
+        prompts.append(messages[0].content.text)
+        return MODEL_ANSWER
+
+    async with Client(mcp, mode="legacy", sampling_handler=client_model) as client:
+        await client.call_tool("connect_database", {"db_type": "duckdb"})
+        await client.call_tool("discover_schema", {"schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {"schema_name": "main", "auto_persist": False}
+        )
+        result = await client.call_tool("suggest_semantic_names", {})
+
+    assert len(prompts) == 1
+    assert "acctbal" in prompts[0]
+    assert result.data["suggestions_source"] == "mcp_sampling"
+    assert result.data["suggestions"]["classes"][0]["suggested_name"] == (
+        "AccountBalance"
+    )
+
+
+async def test_a_handshake_era_client_without_a_model_gets_the_review_payload(
+    cryptic_database, monkeypatch
+):
+    _use_mode(monkeypatch, "auto")
+
+    async with Client(mcp, mode="legacy") as client:
+        await client.call_tool("connect_database", {"db_type": "duckdb"})
+        await client.call_tool("discover_schema", {"schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {"schema_name": "main", "auto_persist": False}
+        )
+        result = await client.call_tool("suggest_semantic_names", {})
+
+    assert "suggestions" not in result.data
+    assert result.data["cryptic_classes"]
+
+
+async def test_the_deprecation_warning_is_not_raised_to_the_operator(
+    cryptic_database, monkeypatch, recwarn
+):
+    """Sampling over the session is deprecated; the SDK says so on every call.
+    That names a decision two layers down which an operator cannot act on."""
+    _use_mode(monkeypatch, "auto")
+
+    async def client_model(messages, params, context):
+        return MODEL_ANSWER
+
+    async with Client(mcp, mode="legacy", sampling_handler=client_model) as client:
+        await client.call_tool("connect_database", {"db_type": "duckdb"})
+        await client.call_tool("discover_schema", {"schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {"schema_name": "main", "auto_persist": False}
+        )
+        await client.call_tool("suggest_semantic_names", {})
+
+    assert [
+        w for w in recwarn if "sampling capability is deprecated" in str(w.message)
+    ] == []
+
+
+async def test_review_mode_never_asks_even_a_capable_client(
+    cryptic_database, monkeypatch
+):
     _use_mode(monkeypatch, "review")
-    ctx = _sampling_ctx()
 
-    suggestions = await handler._request_rename_suggestions(ctx, **CRYPTIC)
+    async def client_model(messages, params, context):
+        raise AssertionError("SEMANTIC_NAMING_MODE=review must not ask")
 
-    assert suggestions is None
-    ctx.sample.assert_not_awaited()
+    async with Client(mcp, sampling_handler=client_model) as client:
+        handle = await _prepare_ontology(client)
+        result = await client.call_tool(
+            "suggest_semantic_names", {"connection": handle}
+        )
 
-
-async def test_a_failing_sample_call_falls_back_to_review(monkeypatch):
-    _use_mode(monkeypatch, "auto")
-    ctx = Mock()
-    ctx.sample = AsyncMock(side_effect=RuntimeError("client has no sampling"))
-
-    assert await handler._request_rename_suggestions(ctx, **CRYPTIC) is None
-
-
-async def test_unusable_model_output_falls_back_to_review(monkeypatch):
-    _use_mode(monkeypatch, "auto")
-
-    suggestions = await handler._request_rename_suggestions(
-        _sampling_ctx(text="sorry, no JSON here"), **CRYPTIC
-    )
-
-    assert suggestions is None
+    assert "suggestions" not in result.data
 
 
 # --- configuration ---

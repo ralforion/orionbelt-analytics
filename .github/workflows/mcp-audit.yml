@@ -21,10 +21,12 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     env:
-      # Pinned: the tool is installed unlocked, and 1.5.0 (2026-09-15) refuses
-      # the MCP SDK this project pins, so an unpinned install broke every run
-      # the day it was released. Bump deliberately, together with the SDK.
-      MCP_XRAY_VERSION: "1.4.0"
+      # Pinned: the tool is installed unlocked, and its releases are tied to
+      # the MCP SDK generation. 1.4.0 reads the SDK v1 camelCase model fields
+      # (inputSchema) and breaks on SDK v2; 1.5.0 refuses SDK v1. This project
+      # moved to SDK v2 with FastMCP 4, so 1.5.0 it is. Bump deliberately,
+      # together with the SDK.
+      MCP_XRAY_VERSION: "1.5.0"
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

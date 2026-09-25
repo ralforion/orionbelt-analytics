@@ -37,7 +37,7 @@ from .paths import (
     get_oxigraph_store_dir,
 )
 from .session import ConnectionRuntime, SessionData
-from .utils import utc_now
+from .utils import is_stateless_era, utc_now
 from .workspace import workspace_identity
 
 logger = logging.getLogger(__name__)
@@ -67,25 +67,6 @@ def normalize_handle(raw: object) -> str | None:
     return handle or None
 
 
-# First MCP revision without protocol-level sessions. Revisions are ISO dates,
-# so they compare as strings.
-_SESSIONLESS_SINCE = "2026-07-28"
-
-
-def _protocol_version(ctx: Context) -> str | None:
-    """The MCP protocol revision this request was made under, if known."""
-    try:
-        request_context = getattr(ctx, "request_context", None)
-    except Exception as e:  # outside a request, some FastMCP versions raise
-        logger.debug(f"No request context to read the protocol version from: {e}")
-        return None
-    version = getattr(request_context, "protocol_version", None)
-    if not isinstance(version, str):
-        session = getattr(request_context, "session", None)
-        version = getattr(session, "protocol_version", None)
-    return version if isinstance(version, str) else None
-
-
 def _transport_session_id(ctx: Context) -> str | None:
     """The MCP session ID of this request, or None if it has no real session.
 
@@ -96,8 +77,7 @@ def _transport_session_id(ctx: Context) -> str | None:
     or the actionable error. The protocol revision is the dependable signal, so
     in the sessionless era the ID is disregarded.
     """
-    version = _protocol_version(ctx)
-    if version is not None and version >= _SESSIONLESS_SINCE:
+    if is_stateless_era(ctx):
         return None
     session_id = getattr(ctx, "session_id", None)
     return str(session_id) if session_id else None

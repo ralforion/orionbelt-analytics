@@ -65,10 +65,11 @@ WORKSPACE_MAX_AGE_DAYS=30
 # Semantic naming mode
 # --------------------
 # How suggest_semantic_names obtains rename suggestions for cryptic names:
-#   auto            best path the client supports (default). Today that is MCP
-#                   sampling when the client offers it, else the review path.
-#   input_required  the multi round-trip replacement for sampling. Needs
-#                   FastMCP 4; until then it behaves like review.
+#   auto            ask the client's model when it can be asked (default):
+#                   the client must speak MCP 2026-07-28 and advertise
+#                   sampling. Otherwise the review path.
+#   input_required  the same, but warn in the log when the client cannot be
+#                   asked.
 #   review          never ask the client's model from the server. The client
 #                   model reads the cryptic names and calls
 #                   apply_semantic_names itself. Works with every client.
@@ -317,30 +318,37 @@ Ontology, schema and R2RML **files** are additionally pruned by count as they ar
 
 | Mode | Behaviour |
 |---|---|
-| `auto` | The best path the client supports. Today: call back through the client's LLM via MCP `sampling/createMessage` when the context offers it, otherwise the review path. |
-| `input_required` | The multi round-trip replacement for sampling, where the tool returns the request and is called again with the answer. Needs FastMCP 4. Until then the server logs a warning and uses the review path. |
+| `auto` | Ask the client's model when it can be asked, otherwise the review path. |
+| `input_required` | The same, but the server logs a warning when the client cannot be asked, so a deployment that expects pre-filled suggestions notices. |
 | `review` | The server never asks the client's model. The host LLM inspects the cryptic lists and calls `apply_semantic_names` with its own suggestions. Works with every client in every protocol era. |
 
-**Why a mode and not a switch.** MCP deprecated Sampling in its 2026-07-28 revision, and FastMCP 4 removes `ctx.sample`. The three paths sit behind one seam in the handler so the path can change with the protocol while the tool's response shape stays the same.
+**How the client's model is asked.** By the era of the request, not by the mode:
+
+- **MCP 2026-07-28** — a multi round-trip request (SEP-2322): `suggest_semantic_names` returns the sampling request instead of a result, the client fulfils it with its own model and calls the tool again, and the second round returns the usual response with a `suggestions` field. This replaced `ctx.sample`, which FastMCP 4 removed.
+- **2025-11-25 and earlier** — over the connection the handshake era still has. `ctx.sample` is gone, but the session call beneath it is deprecated rather than removed, so these clients keep the same one-call flow. The SDK's per-call deprecation warning is filtered, since it names a decision an operator cannot act on.
+
+Either way the response is identical, and the server logs which path a request took.
+
+**Which clients can be asked.** One thing only: the client has to advertise the **sampling capability**, i.e. offer a model. A modern client without one would fail after the first round, on its own side, where the server can no longer fall back; a handshake-era client without one refuses the request outright. Both get the review path instead, with an unchanged response shape.
+
+**This path is on borrowed time.** MCP deprecated Sampling itself in the 2026-07-28 revision, with removal no sooner than twelve months out. When it goes, the handshake half of this goes with it and the review path is what remains.
+
+**Why a mode and not a switch.** MCP deprecated Sampling in its 2026-07-28 revision, also when carried by a multi round-trip request. The paths sit behind one seam in the handler so the path can change with the protocol while the tool's response shape stays the same. The review path is the durable one.
 
 **`ENABLE_SAMPLING` is deprecated.** It is still honoured when `SEMANTIC_NAMING_MODE` is unset: `false` maps to `review`, and the server logs a deprecation warning at startup.
 
-**Where it is used:** `suggest_semantic_names`. When sampling is available, the server asks the host LLM to produce rename suggestions for cryptic identifiers and returns them as a `suggestions: {old_name: new_name}` map alongside the existing cryptic-name lists. Without sampling, the response shape is unchanged: the host LLM is expected to inspect the cryptic lists and call `apply_semantic_names` with its own suggestions.
-
-**Capability detection is implicit.** In `auto` mode the server attempts `ctx.sample(...)` and falls back to the review path on any failure — including the case where the client never advertised the capability, and a context that has no `sample` at all. There is no separate handshake to configure.
-
 **Client compatibility:**
 
-| Client | Sampling support | Behaviour |
+| Client | Can be asked | Behaviour |
 |---|---|---|
-| OrionBelt Chat | Yes (with `sampling.tools`) | `suggestions` field is populated; one tool call instead of two |
-| Claude Desktop | No | Falls back silently to manual review path |
-| Claude Code | No | Falls back silently to manual review path |
-| Generic pydantic-ai clients | Depends on agent wiring | Works when `agent.set_mcp_sampling_model()` (or equivalent) is called |
+| A client on MCP 2026-07-28 with a sampling handler | Yes | Asked through a multi round-trip request; `suggestions` is populated |
+| OrionBelt Chat on MCP SDK 1.x (protocol 2025-11-25) | Yes | Asked over its connection; `suggestions` is populated, no upgrade needed |
+| Claude Desktop, Claude Code | No | They advertise no model; review path |
+| Generic pydantic-ai clients | With `sampling_model=` / `sampling_handler=` on the toolset | Otherwise review path |
 
 **Disabling:** set `SEMANTIC_NAMING_MODE=review` to force the review path even when the client supports sampling. Useful for cost control, deterministic regression testing, or when a particular host LLM produces poor rename suggestions.
 
-**Logging:** sampling activity is logged at INFO/WARNING with elapsed time and item counts -- look for lines starting with `MCP sampling:` in the server log to verify the path the request took.
+**Logging:** look for lines starting with `MCP sampling:` in the server log to verify the path a request took: one when the request is handed to the client (with the item count) and one when the answer is parsed (with the suggestion counts and the model name). The two rounds are separate requests, so no elapsed time is logged. When the review path is chosen instead, a line says why: `Client cannot answer a sampling request; using the review path`, or a warning if `SEMANTIC_NAMING_MODE=input_required` asked for more than the client can do.
 
 ---
 
