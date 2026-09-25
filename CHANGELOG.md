@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in both it is asked before the connection's writer lock is taken. A client
   that cannot be asked keeps the old behaviour. `ask_to_confirm` in
   `src/handlers/confirmation.py` is reusable for other tools.
+- **An ontology is parsed once per file, not once per call.** Parsing dominates
+  `suggest_semantic_names`: 1.7s of the 1.9s a 400-table ontology costs. A
+  2026-07-28 request runs the whole tool body once per round, so that was paid
+  twice for one answer, and again on every repeat call. The review extraction is
+  now kept on the connection whose workspace holds the file, keyed by the file's
+  path, mtime and size, so a rewritten ontology misses and a stale one is never
+  served. Measured on a two-round call: 2222ms down to 1186ms for 400 tables,
+  536ms to 318ms for 100. Callers get a copy, so none can edit what the next one
+  reads.
 - **Cache hints for clients on MCP 2026-07-28.** The tool list, the resource
   list and resource reads now carry a `private` cache hint of
   `MCP_CACHE_TTL_SECONDS` (default 300, `0` to disable), so a client need not

@@ -1048,8 +1048,18 @@ def get_session_safe_filename(ctx: Context, prefix: str, suffix: str = "") -> st
     return f"{prefix}_{connection_prefix}_{timestamp}"
 
 
-def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
-    """Load ontology from session state."""
+def resolve_ontology_path(ctx: Context) -> tuple[Path, str]:
+    """Where this session's ontology file is, without reading it.
+
+    Split out so a caller can look in a cache before paying for the parse,
+    which dominates every tool that loads an ontology.
+
+    Returns:
+        The file's path and its name.
+
+    Raises:
+        ValueError: If the session names no ontology, or the file is gone.
+    """
     session = get_session_data(ctx)
     filename = session.ontology_file
     if not filename:
@@ -1067,6 +1077,12 @@ def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
     if not ontology_path.exists():
         raise ValueError(f"Ontology file not found: {filename}")
 
+    return ontology_path, filename
+
+
+def load_ontology_from_session(ctx: Context) -> tuple[OntologyGenerator, str]:
+    """Load ontology from session state."""
+    ontology_path, filename = resolve_ontology_path(ctx)
     generator = _server_state.get_ontology_generator()
     generator.load_from_file(str(ontology_path))
 

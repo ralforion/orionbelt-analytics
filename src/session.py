@@ -204,6 +204,16 @@ class ConnectionRuntime:
         self.db_manager: Any | None = None  # DatabaseManager
         self.schema_cache = SchemaCache()
         self.graphrag = GraphRAGState()
+        # One parsed-and-extracted ontology review, keyed by the file it came
+        # from and that file's mtime and size. Parsing an ontology dominates
+        # suggest_semantic_names -- 1.7s of 1.9s for 400 tables -- and the same
+        # file is read again by the second round of a 2026-07-28 request, and by
+        # every repeat call. Keyed by the file rather than by the session, since
+        # the file lives in this connection's workspace; one entry, because a
+        # parsed ontology is large and the next call almost always wants the
+        # same one.
+        self.ontology_review: tuple[tuple[str, int, int], Any] | None = None
+
         # Serializes the tools that rewrite this state or the connection's
         # workspace on disk, which every session on the database shares
         # whatever it keeps in memory (discover_schema, generate_ontology,

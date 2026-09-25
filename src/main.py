@@ -177,6 +177,7 @@ from .server_state import (  # noqa: E402, F401
     get_session_safe_filename,
     load_ontology_from_session,
     peek_current_session,
+    resolve_ontology_path,
 )
 
 # --- Constrained MCP parameter types (extracted to tool_types) ---
@@ -327,6 +328,7 @@ def _services() -> HandlerContext:
         get_session_obqc_validator=get_session_obqc_validator,
         get_oxigraph_store=get_oxigraph_store,
         load_ontology_from_session=load_ontology_from_session,
+        resolve_ontology_path=resolve_ontology_path,
         create_error_response=create_error_response,
         server_state=_server_state,
         get_connection_fingerprint=_get_connection_fingerprint,
