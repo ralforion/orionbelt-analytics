@@ -57,7 +57,7 @@ Before writing multi-table queries with aggregation:
    - `evaluated: false` — OBQC never ran (no ontology loaded, or the request failed before validation). Treat as **unknown**, not safe.
    - `blocking: true` — this query was refused. A provable fan-trap (a measure read across a 1:many join) blocks.
    - `blocking: false` with `detected: true` — reported but executed. A `conditional_row_count` warns instead of blocking, because the same shape is a correct star-join idiom; decide from the finding whether your count meant the coarser table.
-5. **Fix the query, don't force it.** Pre-aggregate the fanning table in a CTE, or use UNION ALL. `allow_fan_out=True` exists for the rare case where the multiplied rows are genuinely wanted — it does not make the numbers right.
+5. **Fix the query, don't force it.** Pre-aggregate the fanning table in a CTE, or use UNION ALL. `allow_fan_out=True` exists for the rare case where the multiplied rows are genuinely wanted — it does not make the numbers right. Where the client supports it, the user is asked to confirm the override; if they decline, the query fails and must be restructured, not retried.
 6. **Validate results** against source tables
 
 ### Conditional row counts
