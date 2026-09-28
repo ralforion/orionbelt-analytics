@@ -386,6 +386,12 @@ class OntologySchema:
     relationships: dict[str, RelationshipInfo] = field(default_factory=dict)
 
 
+# The GROUP BY constructs whose members are grouping keys in their own right.
+# From sqlglot 30.19 these appear inside ``Group.expressions``; before that they
+# hung off separate args of the same names.
+_GROUPING_SET_CONSTRUCTS = (exp.Rollup, exp.Cube, exp.GroupingSets)
+
+
 class OBQCValidator:
     """Ontology-Based Query Check validator.
 
@@ -2541,16 +2547,19 @@ class OBQCValidator:
     def _group_by_keys(group: exp.Group) -> list[exp.Expression]:
         """Every grouping key of a GROUP BY, including grouping-set constructs.
 
-        sqlglot does not put ROLLUP / CUBE / GROUPING SETS members in
-        ``Group.expressions``; they hang off separate ``rollup``, ``cube`` and
-        ``grouping_sets`` args. Reading only ``expressions`` therefore saw
-        ``GROUP BY ROLLUP(country, client)`` as grouping by nothing at all, and
-        reported both selected columns as not in the GROUP BY -- an error,
-        which blocked every rollup query.
-
         A column named anywhere in a grouping set is a legal non-aggregated
         selection: super-aggregate rows null it out rather than making it
-        ambiguous, which is what the rule is guarding against.
+        ambiguous, which is what the rule is guarding against. Reading the
+        construct as one opaque expression instead saw ``GROUP BY
+        ROLLUP(country, client)`` as grouping by nothing at all and reported
+        both selected columns as missing from the GROUP BY -- an error, which
+        blocked every rollup query.
+
+        Where sqlglot puts those members has moved: through 30.18 they hung off
+        separate ``rollup``, ``cube`` and ``grouping_sets`` args, and from 30.19
+        they are ``Rollup`` / ``Cube`` / ``GroupingSets`` nodes inside
+        ``Group.expressions``. Both are read, because the project's floor is far
+        below either.
 
         Args:
             group: The GROUP BY node.
@@ -2558,12 +2567,18 @@ class OBQCValidator:
         Returns:
             The grouping keys, with grouping-set nesting flattened away.
         """
-        keys: list[exp.Expression] = list(group.expressions)
+        keys: list[exp.Expression] = []
+
+        # A grouping set nests its members in Paren/Tuple wrappers, and "()"
+        # (the grand total) simply contributes none.
+        for expression in group.expressions:
+            if isinstance(expression, _GROUPING_SET_CONSTRUCTS):
+                keys.extend(expression.find_all(exp.Column))
+            else:
+                keys.append(expression)
 
         for arg in ("rollup", "cube", "grouping_sets"):
             for construct in group.args.get(arg) or []:
-                # A grouping set nests its members in Paren/Tuple wrappers, and
-                # "()" (the grand total) simply contributes none.
                 keys.extend(construct.find_all(exp.Column))
 
         return keys
