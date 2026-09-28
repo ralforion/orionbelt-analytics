@@ -148,6 +148,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http` (streamable HTTP).
 
 ### Fixed
+- **ROLLUP, CUBE and GROUPING SETS keep working on sqlglot 30.19.** Their
+  members used to hang off separate args of the parsed `GROUP BY` node; from
+  30.19 they are nodes inside its expressions. OBQC read only the old place, so
+  every such query was reported as grouping by nothing and blocked with each
+  selected column "not in GROUP BY clause". Both layouts are read now, and a
+  test pins each so a future bump cannot reintroduce it.
 - **A confirmation now names what it approved.** `cleanup_workspace` asks
   before deleting and `execute_sql_query` asks before a model's
   `allow_fan_out` override stands. Both then acted on whatever the session

@@ -2253,6 +2253,32 @@ class TestGroupingSetConstructs(unittest.TestCase):
         result = self.validator.validate(sql)
         return [i.message for i in result.issues if i.severity == OBQCSeverity.ERROR]
 
+    def test_grouping_keys_are_read_wherever_sqlglot_puts_them(self):
+        """Through sqlglot 30.18 ROLLUP/CUBE/GROUPING SETS members hung off
+        separate args of the Group node; from 30.19 they are nodes inside its
+        expressions. Both layouts are read, so a sqlglot bump cannot start
+        blocking every rollup query again."""
+        import sqlglot
+        from sqlglot import exp
+
+        from src.obqc_validator import OBQCValidator
+
+        parsed = sqlglot.parse_one(
+            "SELECT c.name, SUM(o.total) FROM customers c JOIN orders o "
+            "ON o.customer_id = c.id GROUP BY ROLLUP(c.name)",
+            dialect="postgres",
+        )
+        group = parsed.args["group"]
+        keys = OBQCValidator._group_by_keys(group)
+        assert [k.sql() for k in keys] == ["c.name"]
+
+        # The same node shape the older sqlglot produced, built by hand.
+        legacy = exp.Group(
+            expressions=[],
+            rollup=[exp.Rollup(expressions=[exp.column("name", table="c")])],
+        )
+        assert [k.sql() for k in OBQCValidator._group_by_keys(legacy)] == ["c.name"]
+
     def test_rollup_columns_count_as_grouped(self):
         """The reported bug: ROLLUP keys read as grouping by nothing at all."""
         self.assertEqual(
