@@ -6,6 +6,7 @@ from typing import Any
 import mcp.types as mcp_types
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..exceptions import ConnectionError, ParameterError, ValidationError
 from ..handler_context import HandlerContext
 from ..utils import notify_client
@@ -56,8 +57,8 @@ async def validate_sql_syntax(
                 "database_dialect": "unknown",
             }
 
-        validation_result: dict[str, Any] = db_manager.validate_sql_syntax(
-            sql_query.strip()
+        validation_result: dict[str, Any] = await run_db(
+            db_manager.validate_sql_syntax, sql_query.strip()
         )
 
         if "warnings" not in validation_result:
@@ -356,7 +357,9 @@ async def execute_sql_query(
         # OBQC. Retrieval belongs to graphrag_query_context, where it informs
         # writing a query rather than running one.
 
-        result: dict[str, Any] = db_manager.execute_sql_query(sql_query.strip(), limit)
+        result: dict[str, Any] = await run_db(
+            db_manager.execute_sql_query, sql_query.strip(), limit
+        )
 
         # Merge OBQC warnings into result
         if obqc_warnings:

@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..exceptions import ConnectionError
 from ..graphrag import GraphRAGManager
 from ..handler_context import HandlerContext
@@ -437,7 +438,7 @@ async def initialize_graphrag(
 
     if not tables_info:
         try:
-            tables = db_manager.get_tables(effective_schema)
+            tables = await run_db(db_manager.get_tables, effective_schema)
             logger.info(
                 f"Found {len(tables)} tables in schema '{effective_schema or 'default'}'"
             )
@@ -483,7 +484,7 @@ async def initialize_graphrag(
     views_info = session.get_cached_views(effective_schema or "")
     if not views_info:
         try:
-            views_info = db_manager.get_views(effective_schema)
+            views_info = await run_db(db_manager.get_views, effective_schema)
             if views_info:
                 session.cache_views(effective_schema or "", views_info)
         except Exception as e:

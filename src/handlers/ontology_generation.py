@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..constants import DB_SQLGLOT_DIALECTS
 from ..database_manager import ColumnInfo, TableInfo
 from ..graphrag.manager import _annotate_view_sources
@@ -272,7 +273,7 @@ async def generate_ontology(
                 return err
 
             try:
-                tables = db_manager.get_tables(schema_name)
+                tables = await run_db(db_manager.get_tables, schema_name)
                 logger.info(
                     f"Found {len(tables)} tables in schema '{schema_name or 'default'}': {tables}"
                 )

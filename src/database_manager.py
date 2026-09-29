@@ -5,6 +5,7 @@ while managing cross-cutting concerns: caching, credentials, reconnection,
 connection pooling configuration, and security validation.
 """
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -183,6 +184,14 @@ class DatabaseManager:
         self._metadata_cache: dict[str, Any] = {}
         self._cache_ttl = 300  # 5 minutes
         self._connection_id: str | None = None
+
+        # Held by async callers (see async_utils.run_db) around a blocking call
+        # they run in a worker. Every driver takes a fresh pooled connection per
+        # call, but an in-memory DuckDB engine uses StaticPool -- one connection
+        # shared by every thread -- so two workers must not be inside the
+        # database at once. It also keeps what a blocked event loop used to
+        # guarantee: the calls on one connection stay in order.
+        self.query_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Cache helpers

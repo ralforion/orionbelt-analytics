@@ -8,6 +8,7 @@ from typing import Any
 
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..handler_context import HandlerContext
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import (
@@ -265,13 +266,13 @@ async def discover_schema(
             return result
 
     db_manager = services.get_session_db_manager(ctx)
-    tables = db_manager.get_tables(schema_name)
+    tables = await run_db(db_manager.get_tables, schema_name)
 
     # Views are discovered alongside tables but kept apart from them: they are
     # indexed into GraphRAG for search and never enter the ontology, so they
     # are cached separately rather than appended to the table list.
     try:
-        views = db_manager.get_views(schema_name)
+        views = await run_db(db_manager.get_views, schema_name)
         if views:
             logger.info(f"Discovered {len(views)} views in schema {schema_name}")
     except Exception as e:

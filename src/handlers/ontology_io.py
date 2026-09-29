@@ -11,6 +11,7 @@ from typing import Any
 
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..constants import OBA_NAMESPACE
 from ..handler_context import HandlerContext
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
@@ -20,7 +21,7 @@ from ..utils import notify_client, read_text_file, write_text_file
 logger = logging.getLogger(__name__)
 
 
-def _check_ontology_db_compatibility(
+async def _check_ontology_db_compatibility(
     graph: Any,
     ctx: Context,
     get_session_db_manager: Callable[..., Any],
@@ -61,7 +62,7 @@ def _check_ontology_db_compatibility(
 
         # Get actual database tables
         try:
-            db_tables_list = db_manager.get_tables(schema_name)
+            db_tables_list = await run_db(db_manager.get_tables, schema_name)
             db_tables = {t.lower(): t for t in db_tables_list}
         except Exception as e:
             logger.warning(
@@ -243,7 +244,7 @@ async def load_my_ontology(
         # Check compatibility with connected database
         compatibility = None
         if services.provides("get_session_db_manager"):
-            compatibility = _check_ontology_db_compatibility(
+            compatibility = await _check_ontology_db_compatibility(
                 graph, ctx, services.get_session_db_manager, session
             )
 
