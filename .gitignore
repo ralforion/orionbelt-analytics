@@ -17,6 +17,9 @@ scripts/*
 # Tracked: CI runs it as the `deps` gate, and it is the documented local
 # command for auditing the shipped dependency tree.
 !scripts/audit-prod-deps.sh
+# Tracked: the performance numbers in this repository's history were taken
+# with it, and a claim nobody can re-measure is worth little.
+!scripts/bench_runtime.py
 build/
 dist/
 wheels/
