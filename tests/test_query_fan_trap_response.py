@@ -109,7 +109,13 @@ class TestFanTrapResponseField(unittest.IsolatedAsyncioTestCase):
         """
         no_connection = MagicMock()
         no_connection.has_engine.return_value = False
-        services = HandlerContext(get_session_db_manager=lambda ctx: no_connection)
+        # The handler pins the session's connection before it reads the
+        # manager, so the session is asked for even on these early exits.
+        session = SimpleNamespace()
+        services = HandlerContext(
+            get_session_data=lambda ctx: session,
+            get_session_db_manager=lambda ctx: no_connection,
+        )
 
         cases = {
             "no connection": (CLEAN_SQL, 100, True),
@@ -128,7 +134,10 @@ class TestFanTrapResponseField(unittest.IsolatedAsyncioTestCase):
                     checklist,
                     None,
                     (
-                        HandlerContext(get_session_db_manager=lambda ctx: connected)
+                        HandlerContext(
+                            get_session_data=lambda ctx: session,
+                            get_session_db_manager=lambda ctx: connected,
+                        )
                         if label != "no connection"
                         else services
                     ),
