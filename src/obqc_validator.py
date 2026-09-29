@@ -458,9 +458,6 @@ class OBQCValidator:
         # pairs of lower-cased table names declared owl:disjointWith each other
         # (sibling facts sharing a dimension — the canonical fan-trap shape).
         self._disjoint_pairs: set[frozenset] = set()
-        # id() of table nodes in the query under validation that name a CTE
-        # rather than a real table. Per-parse state, reset by validate().
-        self._cte_references: set[int] = set()
         # Database views: lower-cased name -> lower-cased output columns.
         # Views are deliberately absent from the ontology (a view pre-joins its
         # sources, so a class for it would restate what the base tables already
@@ -855,7 +852,11 @@ class OBQCValidator:
             OBQCResult with validation findings
         """
         result = OBQCResult(is_valid=True)
-        self._cte_references = set()
+        # The table nodes in *this* query that name a CTE. Passed down rather
+        # than held on the validator: one validator serves every query of a
+        # session, and per-query state on it would be a query's findings
+        # leaking into the next one the moment two are validated at once.
+        cte_refs: set[int] = set()
 
         if not self._schema_cache:
             result.issues.append(
@@ -906,19 +907,19 @@ class OBQCValidator:
 
         # Extract query components. CTE names first: the rules below need to
         # know which references name a WITH alias rather than a real table.
-        self._extract_ctes(parsed, result)
-        self._extract_tables(parsed, result)
-        self._extract_columns(parsed, result, dialect)
-        self._extract_joins(parsed, result)
+        self._extract_ctes(parsed, result, cte_refs)
+        self._extract_tables(parsed, result, cte_refs)
+        self._extract_columns(parsed, result, dialect, cte_refs)
+        self._extract_joins(parsed, result, cte_refs)
         self._extract_aggregations(parsed, result)
 
         # Run validation rules
         self._validate_tables(result)
         self._validate_columns(result)
-        self._validate_joins(parsed, result)
+        self._validate_joins(parsed, result, cte_refs)
         self._validate_type_compatibility(parsed, result)
         self._validate_aggregation_context(parsed, result)
-        self._validate_measure_aggregation(parsed, result)
+        self._validate_measure_aggregation(parsed, result, cte_refs)
         self._detect_fan_trap(result, blocking=not allow_fan_out)
 
         # Set overall validity
@@ -937,7 +938,9 @@ class OBQCValidator:
 
         return result
 
-    def _extract_ctes(self, parsed: exp.Expr, result: OBQCResult) -> None:
+    def _extract_ctes(
+        self, parsed: exp.Expr, result: OBQCResult, cte_refs: set[int]
+    ) -> None:
         """Record which table references resolve to a WITH alias.
 
         A CTE is a table the query defines for itself, so the ontology never
@@ -962,23 +965,26 @@ class OBQCValidator:
         Args:
             parsed: Parsed query.
             result: Result to record the names on.
+            cte_refs: Collects the ids of the references that name a CTE.
         """
         for table in parsed.find_all(exp.Table):
             name = table.name
             if name and name.lower() in self._visible_ctes(table):
                 result.cte_names.add(name.lower())
-                self._cte_references.add(id(table))
+                cte_refs.add(id(table))
 
-    def _is_cte_reference(self, table: exp.Table | None) -> bool:
+    @staticmethod
+    def _is_cte_reference(table: exp.Table | None, cte_refs: set[int]) -> bool:
         """Whether this table node resolves to a WITH alias rather than a table.
 
         Args:
             table: The reference to classify, or None.
+            cte_refs: The ids :meth:`_extract_ctes` collected for this query.
 
         Returns:
             True if a CTE of that name was in scope at the reference.
         """
-        return table is not None and id(table) in self._cte_references
+        return table is not None and id(table) in cte_refs
 
     @staticmethod
     def _visible_ctes(node: exp.Expression) -> set[str]:
@@ -1039,7 +1045,9 @@ class OBQCValidator:
 
         return names
 
-    def _extract_tables(self, parsed: exp.Expr, result: OBQCResult) -> None:
+    def _extract_tables(
+        self, parsed: exp.Expr, result: OBQCResult, cte_refs: set[int]
+    ) -> None:
         """Extract all table references, noting which come from a catalog schema."""
         # Bare names that also appear as a non-catalog reference. Catalog
         # membership is tracked by bare name -- sqlglot gives no other handle --
@@ -1058,7 +1066,7 @@ class OBQCValidator:
             # reference, so the same name can be a CTE in one scope and a real
             # table needing to exist in another.
             if (
-                not self._is_cte_reference(table)
+                not self._is_cte_reference(table, cte_refs)
                 and table_name not in result.checked_tables
             ):
                 result.checked_tables.append(table_name)
@@ -1080,7 +1088,11 @@ class OBQCValidator:
         result.catalog_tables -= shadowed
 
     def _extract_columns(
-        self, parsed: exp.Expr, result: OBQCResult, dialect: str = "postgresql"
+        self,
+        parsed: exp.Expr,
+        result: OBQCResult,
+        dialect: str,
+        cte_refs: set[int],
     ) -> None:
         """Extract column references, excluding legal SELECT-alias references."""
         alias_refs = self._select_alias_references(parsed, result, dialect)
@@ -1110,7 +1122,7 @@ class OBQCValidator:
             scoped_ref = col_ref
             if column.table:
                 source = self._resolve_qualifier_table(owner, column.table)
-                if self._is_cte_reference(source):
+                if self._is_cte_reference(source, cte_refs):
                     # The qualifier names a CTE here, so its columns come from
                     # that CTE's select list and the ontology cannot judge
                     # them. Dropped at the node, so the same name qualifying a
@@ -1124,7 +1136,7 @@ class OBQCValidator:
             # let a subquery's table answer for the outer SELECT: "SELECT
             # quantity FROM users WHERE id IN (SELECT order_id FROM
             # order_items)" found quantity in order_items and reported nothing.
-            scope = self._scope_tables(owner, scope_cache) if owner else ()
+            scope = self._scope_tables(owner, scope_cache, cte_refs) if owner else ()
             entry = (scoped_ref, scope)
             if entry not in result.column_scopes:
                 result.column_scopes.append(entry)
@@ -1133,6 +1145,7 @@ class OBQCValidator:
         self,
         select: exp.Select,
         cache: dict[int, tuple[tuple[tuple[str, bool], ...], ...]],
+        cte_refs: set[int],
     ) -> tuple[tuple[tuple[str, bool], ...], ...]:
         """Tables a name in *select* may resolve against, innermost level first.
 
@@ -1159,7 +1172,7 @@ class OBQCValidator:
 
         own = tuple(
             dict.fromkeys(
-                (t.name, self._is_cte_reference(t))
+                (t.name, self._is_cte_reference(t, cte_refs))
                 for t in select.find_all(exp.Table)
                 if t.name and t.find_ancestor(exp.Select) is select
             )
@@ -1170,7 +1183,9 @@ class OBQCValidator:
         # inside the CTE -- and, once WITH aliases became undescribable, let a
         # mere reference to the CTE excuse any bogus name in its own body.
         parent = None if self._is_cte_body(select) else select.parent_select
-        outer = self._scope_tables(parent, cache) if parent is not None else ()
+        outer = (
+            self._scope_tables(parent, cache, cte_refs) if parent is not None else ()
+        )
 
         levels = (own, *outer) if own else outer
         cache[id(select)] = levels
@@ -1298,7 +1313,9 @@ class OBQCValidator:
                 return True
         return False
 
-    def _extract_joins(self, parsed: exp.Expr, result: OBQCResult) -> None:
+    def _extract_joins(
+        self, parsed: exp.Expr, result: OBQCResult, cte_refs: set[int]
+    ) -> None:
         """Extract join information from parsed query."""
         # Alias maps are built per SELECT. Table aliases are scoped to the
         # query that declares them, and a subquery may reuse an outer one: a
@@ -1379,7 +1396,9 @@ class OBQCValidator:
                     join_info["table"] = join.this.name
                     # Judged at the reference: the FK rule cannot speak about a
                     # CTE, but the same name may be a real table elsewhere.
-                    join_info["table_is_cte"] = self._is_cte_reference(join.this)
+                    join_info["table_is_cte"] = self._is_cte_reference(
+                        join.this, cte_refs
+                    )
 
                 # Whether the join is conditioned at all -- by ON, by USING or
                 # NATURAL, or by a cross-table predicate in WHERE. Recorded so
@@ -1987,7 +2006,7 @@ class OBQCValidator:
         return found
 
     def _validate_measure_aggregation(
-        self, parsed: exp.Expr, result: OBQCResult
+        self, parsed: exp.Expr, result: OBQCResult, cte_refs: set[int]
     ) -> None:
         """Rule: SUM only what is meaningful to sum.
 
@@ -2019,7 +2038,7 @@ class OBQCValidator:
                     continue
 
                 for column in self._value_columns(agg):
-                    schema = self._resolve_column_schema(column, select)
+                    schema = self._resolve_column_schema(column, select, cte_refs)
                     if schema is None or schema.measure_type is None:
                         continue
                     if schema.measure_type in ("additive", "semi_additive"):
@@ -2060,7 +2079,7 @@ class OBQCValidator:
                     )
 
     def _resolve_column_schema(
-        self, column: exp.Column, select: exp.Select
+        self, column: exp.Column, select: exp.Select, cte_refs: set[int]
     ) -> ColumnSchema | None:
         """Find the ontology schema for *column* as referenced in *select*.
 
@@ -2085,7 +2104,7 @@ class OBQCValidator:
             # a real table, and its columns are whatever its select list
             # produced -- not the ontology's, whatever the name matches.
             node = self._resolve_qualifier_table(select, qualifier)
-            if node is None or self._is_cte_reference(node):
+            if node is None or self._is_cte_reference(node, cte_refs):
                 return None
             table = self._schema_cache.tables.get((node.name or "").lower())
             return table.columns.get(col_key) if table else None
@@ -2098,7 +2117,7 @@ class OBQCValidator:
             for t in select.find_all(exp.Table)
             if t.name and t.find_ancestor(exp.Select) is select
         ]
-        if any(self._is_cte_reference(t) for t in scope_tables):
+        if any(self._is_cte_reference(t, cte_refs) for t in scope_tables):
             return None
 
         # Only resolvable when exactly one table in scope has the column. An
@@ -2112,7 +2131,9 @@ class OBQCValidator:
         ]
         return matches[0] if len(matches) == 1 else None
 
-    def _flag_view_joins(self, parsed: exp.Expr, result: OBQCResult) -> None:
+    def _flag_view_joins(
+        self, parsed: exp.Expr, result: OBQCResult, cte_refs: set[int]
+    ) -> None:
         """Report SELECTs that join a view to anything else.
 
         A view is a single entity: it has already applied its own joins and
@@ -2143,7 +2164,7 @@ class OBQCValidator:
                 for t in select.find_all(exp.Table)
                 if t.name
                 and t.find_ancestor(exp.Select) is select
-                and id(t) not in self._cte_references
+                and id(t) not in cte_refs
             ]
             if len(tables) < 2:
                 continue
@@ -2352,12 +2373,14 @@ class OBQCValidator:
 
         return False
 
-    def _validate_joins(self, parsed: exp.Expr, result: OBQCResult) -> None:
+    def _validate_joins(
+        self, parsed: exp.Expr, result: OBQCResult, cte_refs: set[int]
+    ) -> None:
         """Rule: Validate joins use declared FK relationships."""
         # Runs before the cross-product check returns: a view joined without
         # an ON condition is both, and the view finding is the one that
         # explains why no ON condition could have made it valid.
-        self._flag_view_joins(parsed, result)
+        self._flag_view_joins(parsed, result, cte_refs)
 
         if self._flag_cartesian_products(parsed, result):
             # A cross product is reported once per query; the per-join checks
