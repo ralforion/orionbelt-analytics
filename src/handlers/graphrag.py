@@ -25,6 +25,11 @@ from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..session import GraphRAGState
 from ..utils import notify_client, utc_now, write_text_file
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +430,12 @@ async def initialize_graphrag(
             ).to_response(),
         )
 
+    # Reflection, the view fetch and embedding all await. The session's cache
+    # and GraphRAG are the runtime's, shared by every session on the database,
+    # so what this computes is published only into the runtime it came from.
+    pinned = pin_connection(session)
+    graph_pin = _Pinned(session)
+
     effective_schema = schema_name
     if not effective_schema:
         effective_schema = session.get_last_analyzed_schema()
@@ -449,6 +460,16 @@ async def initialize_graphrag(
             analyzed = await run_db(db_manager.analyze_tables, tables, effective_schema)
             tables_info = [analyzed[name] for name in tables if name in analyzed]
 
+            if not still_connected(session, pinned):
+                return cast(
+                    str,
+                    connection_changed_response(
+                        services,
+                        f"schema '{effective_schema or 'default'}' was being "
+                        "analyzed",
+                        "initialize_graphrag()",
+                    ),
+                )
             session.cache_schema_analysis(effective_schema or "", tables_info)
 
         except Exception as e:
@@ -483,6 +504,13 @@ async def initialize_graphrag(
     else:
         try:
             views_info = await run_db(db_manager.get_views, effective_schema)
+            if not still_connected(session, pinned):
+                return cast(
+                    str,
+                    connection_changed_response(
+                        services, "views were being read", "initialize_graphrag()"
+                    ),
+                )
             session.cache_views(effective_schema or "", views_info)
         except Exception as e:
             logger.warning(f"Could not fetch views for GraphRAG: {e}")
@@ -494,44 +522,50 @@ async def initialize_graphrag(
     # Bound to the generation current when this call started; embedding a large
     # schema is slow enough for a rediscovery to land before it finishes.
     target_version: int | None = None
-    if session.connection_id:
+    if graph_pin.connection_id:
         try:
             target_version = await get_active_version_number(
-                session.connection_id, OUTPUT_DIR, eff_schema
+                graph_pin.connection_id, OUTPUT_DIR, eff_schema
             )
         except Exception as e:
             logger.warning(f"Failed to read active version: {e}")
 
     try:
-        async with _index_lock(getattr(session, "graphrag", session)):
-            accumulate = session.graphrag_manager is not None
+        async with _index_lock(graph_pin.graphrag):
+            accumulate = graph_pin.graphrag.graphrag_manager is not None
             if not accumulate:
-                session.graphrag_manager = GraphRAGManager(
+                graph_pin.graphrag.graphrag_manager = GraphRAGManager(
                     embedding_model=embedding_model,
                     embedding_dimension=384,
-                    connection_id=session.connection_id,
+                    connection_id=graph_pin.connection_id,
                     schema_name=eff_schema,
                 )
-            await session.graphrag_manager.aindex_schema(
+            await graph_pin.graphrag.graphrag_manager.aindex_schema(
                 tables_info=tables_dict,
                 schema_name=eff_schema,
                 views_info=views_dict,
                 accumulate=accumulate,
             )
 
-        session.graphrag_initialized = True
+        graph_pin.graphrag.graphrag_initialized = True
 
-        await _save_graphrag_state(session, eff_schema, target_version)
+        await _save_graphrag_state(
+            session, eff_schema, target_version, pinned=graph_pin
+        )
 
-        total_tables = session.graphrag_manager.graph_retriever.graph.number_of_nodes()
-        schemas = session.graphrag_manager._schema_names
+        total_tables = (
+            graph_pin.graphrag.graphrag_manager.graph_retriever.graph.number_of_nodes()
+        )
+        schemas = graph_pin.graphrag.graphrag_manager._schema_names
 
         # Write workspace metadata for graphrag section
-        if session.connection_id:
+        if graph_pin.connection_id:
             try:
-                stats = session.graphrag_manager.vector_store.get_statistics()
+                stats = (
+                    graph_pin.graphrag.graphrag_manager.vector_store.get_statistics()
+                )
                 await update_workspace_section(
-                    connection_id=session.connection_id,
+                    connection_id=graph_pin.connection_id,
                     output_dir=OUTPUT_DIR,
                     schema_name=eff_schema,
                     section="graphrag",
@@ -545,6 +579,19 @@ async def initialize_graphrag(
                 )
             except Exception as e:
                 logger.warning(f"Failed to write workspace metadata: {e}")
+
+        # The index went into the database it was built from. If the session
+        # has moved on meanwhile, saying "initialized" would describe the wrong
+        # database to the caller.
+        if not still_connected(session, pinned):
+            return cast(
+                str,
+                connection_changed_response(
+                    services,
+                    f"schema '{eff_schema}' was being indexed",
+                    "initialize_graphrag()",
+                ),
+            )
 
         await notify_client(
             ctx,

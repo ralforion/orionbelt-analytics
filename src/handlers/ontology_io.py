@@ -17,6 +17,11 @@ from ..handler_context import HandlerContext
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import PROJECT_ROOT
 from ..utils import notify_client, read_text_file, write_text_file
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +138,9 @@ async def load_my_ontology(
     file_name: str | None = None,
 ) -> dict[str, Any]:
     """Load an ontology from inline content or the newest .ttl file from the import folder."""
+    # Reading, parsing and the compatibility check all await; a reconnect in
+    # between must not have this ontology validating another database.
+    pinned = pin_connection(services.get_session_data(ctx))
     try:
         from rdflib import Graph
         from rdflib.namespace import OWL, RDF
@@ -218,6 +226,10 @@ async def load_my_ontology(
         )
 
         session = services.get_session_data(ctx)
+        if not still_connected(session, pinned):
+            return connection_changed_response(
+                services, "the ontology was being loaded", "load_my_ontology()"
+            )
         session.loaded_ontology = ontology_content
         session.loaded_ontology_path = str(newest_file)
         session.obqc_validator = None
@@ -246,6 +258,14 @@ async def load_my_ontology(
         if services.provides("get_session_db_manager"):
             compatibility = await _check_ontology_db_compatibility(
                 graph, ctx, services.get_session_db_manager, session
+            )
+
+        # The compatibility check above reflects the database in a worker. The
+        # store written below is whichever the session has *now*, so check once
+        # more before persisting into it.
+        if not still_connected(session, pinned):
+            return connection_changed_response(
+                services, "the ontology was being loaded", "load_my_ontology()"
             )
 
         # Auto-persist to RDF store
