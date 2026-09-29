@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Rediscovering a schema replaces what changed.** A schema is rediscovered
+  precisely when it has changed, and two halves of the derived data kept the
+  old state anyway. The vector store wrote batches with ChromaDB's `add`, which
+  keeps the first write for an id it already holds, so a re-commented or
+  renamed table kept answering searches with its old description. The
+  relationship graph merged foreign keys, so a constraint dropped from the
+  database kept offering a join path forever. Batch writes now replace, and a
+  rediscovered table's foreign keys are replaced rather than merged. Tables
+  outside the discovery, and anything not recorded as a foreign key, are left
+  alone; the single-element `add`/`upsert` pair is unchanged.
 - **A requested row limit now bounds the result.** The limit was applied by
   looking for the word `LIMIT` in the query text, so a string literal, a
   comment, or an explicit larger limit suppressed it: `limit=10` returned 6000

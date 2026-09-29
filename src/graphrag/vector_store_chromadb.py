@@ -198,7 +198,9 @@ class ChromaDBVectorStore:
             else:
                 embedding = embedding[: self.dimension]
 
-        # Add to ChromaDB
+        # add, deliberately: this is the first-write-wins half of a documented
+        # pair, and upsert_element is the half that replaces. The batch path
+        # below is the one discovery uses, and that one must replace.
         try:
             self.collection.add(
                 ids=[element_id],
@@ -263,7 +265,7 @@ class ChromaDBVectorStore:
 
     def add_elements_batch(self, elements: list[Any]) -> None:
         """
-        Add multiple schema elements in batch.
+        Store multiple schema elements in batch, replacing any already held.
 
         Args:
             elements: List of SchemaElement objects from embedder
@@ -305,12 +307,14 @@ class ChromaDBVectorStore:
             embeddings.append(embedding.tolist())
             metadatas.append(chroma_metadata)
 
-        # Batch add to ChromaDB
+        # Upsert for the same reason as add_element: this is the path
+        # discover_schema takes, and it runs again every time a schema is
+        # rediscovered.
         try:
-            self.collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas)
-            logger.info(f"Added {len(elements)} elements to ChromaDB vector store")
+            self.collection.upsert(ids=ids, embeddings=embeddings, metadatas=metadatas)
+            logger.info(f"Stored {len(elements)} elements in ChromaDB vector store")
         except Exception as e:
-            logger.error(f"Failed to batch add elements: {e}")
+            logger.error(f"Failed to store elements: {e}")
             raise
 
     def build_index(self) -> None:
@@ -641,9 +645,12 @@ class ChromaDBVectorStore:
                 embeddings.append(elem_dict["embedding"])
                 metadatas.append(chroma_metadata)
 
-            # Batch add
+            # Upsert, so restoring over a collection that already holds some
+            # of these ids replaces them rather than keeping what was there.
             if ids:
-                self.collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas)
+                self.collection.upsert(
+                    ids=ids, embeddings=embeddings, metadatas=metadatas
+                )
 
             logger.info(
                 f"Imported ChromaDB vector store ({len(ids)} elements) from {filepath}"

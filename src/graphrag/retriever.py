@@ -95,6 +95,26 @@ class GraphRetriever:
                 comment=table.get("comment", ""),
             )
 
+        # A table's foreign keys are replaced, not merged. Rediscovery is what
+        # happens after a schema changes, and a constraint dropped there used
+        # to keep its edge forever -- so join paths were still offered through
+        # a relationship the database no longer has. Only edges this discovery
+        # is responsible for are removed: foreign keys leaving the tables in
+        # this batch. Edges from tables in other schemas, and anything not
+        # recorded as a foreign key, are left alone.
+        rediscovered = {table["name"] for table in tables_info}
+        removed_edges = 0
+        for table_name in rediscovered:
+            if table_name not in self.graph:
+                continue
+            stale = [
+                (table_name, referenced)
+                for _, referenced, data in self.graph.out_edges(table_name, data=True)
+                if data.get("edge_type") == "foreign_key"
+            ]
+            self.graph.remove_edges_from(stale)
+            removed_edges += len(stale)
+
         for table in tables_info:
             table_name = table["name"]
             for fk in table.get("foreign_keys", []):
@@ -112,7 +132,8 @@ class GraphRetriever:
 
         logger.info(
             f"Added to graph: +{added_nodes} nodes, +{added_edges} edges "
-            f"(total: {self.graph.number_of_nodes()} nodes, "
+            f"(-{removed_edges} replaced foreign keys; total: "
+            f"{self.graph.number_of_nodes()} nodes, "
             f"{self.graph.number_of_edges()} edges)"
         )
 
