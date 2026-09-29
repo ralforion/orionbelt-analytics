@@ -563,7 +563,10 @@ class GraphRAGManager:
             query, top_k=top_k, element_type="table", query_embedding=query_embedding
         )
 
-        primary_tables = [r["element"]["name"] for r in table_results]
+        # The element id, not the display name: it carries the schema, so a
+        # table of the same name in another schema is not confused with this
+        # one when its joins and community are looked up.
+        primary_tables = [r["element"]["id"] for r in table_results]
 
         result: dict[str, Any] = {
             "primary_tables": table_results,
@@ -685,8 +688,9 @@ class GraphRAGManager:
 
         # Add primary tables with their metadata
         for table_result in table_info["primary_tables"]:
+            identity = table_result["element"]["id"]
             table_name = table_result["element"]["name"]
-            table_meta = self.graph_retriever.get_table_metadata(table_name)
+            table_meta = self.graph_retriever.get_table_metadata(identity)
 
             if table_meta:
                 context["relevant_tables"].append(

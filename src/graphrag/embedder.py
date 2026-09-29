@@ -30,6 +30,8 @@ from typing import Any
 
 import numpy as np
 
+from .identity import qualified
+
 logger = logging.getLogger(__name__)
 
 # Backend identifiers. MINILM is the default; TFIDF is the offline fallback.
@@ -39,11 +41,13 @@ MODEL_SENTENCE_TRANSFORMERS = "sentence-transformers"
 
 DEFAULT_EMBEDDING_MODEL = MODEL_MINILM
 
-# Bumped when a change to the embedding text or backend makes previously
-# persisted vectors incomparable to freshly generated ones. Both backends emit
-# 384 dimensions, so a stale index loads without any shape error and silently
-# returns nonsense -- the fingerprint is what makes that detectable.
-EMBEDDING_SCHEMA_VERSION = 2
+# Bumped when a change to the embedding text, the backend, or the identity an
+# element is stored under makes a persisted index incompatible with a fresh
+# one. Both backends emit 384 dimensions, so a stale index loads without any
+# shape error and silently returns nonsense -- the fingerprint is what makes
+# that detectable, and a mismatch rebuilds the collection from the schema.
+# 3: element ids carry the schema, so two schemas can hold the same table.
+EMBEDDING_SCHEMA_VERSION = 3
 
 # Texts submitted to a backend per inference call. Batching is what makes
 # indexing bearable -- 256 column texts through MiniLM cost 16.3 s one at a
@@ -212,6 +216,7 @@ class SchemaEmbedder:
         columns: list[dict[str, Any]],
         comment: str | None = None,
         foreign_keys: list[dict[str, Any]] | None = None,
+        schema: str | None = None,
     ) -> SchemaElement:
         """Build a table's element and its text, without embedding it.
 
@@ -250,10 +255,13 @@ class SchemaEmbedder:
 
         return SchemaElement(
             element_type="table",
-            element_id=table_name,
+            element_id=qualified(schema, table_name),
             name=table_name,
             description=description,
             metadata={
+                "schema": schema,
+                "table": qualified(schema, table_name),
+                "table_name": table_name,
                 "columns": [col["name"] for col in columns],
                 "column_count": len(columns),
                 "has_foreign_keys": bool(foreign_keys),
@@ -307,6 +315,7 @@ class SchemaEmbedder:
         is_foreign_key: bool = False,
         foreign_key_table: str | None = None,
         comment: str | None = None,
+        schema: str | None = None,
     ) -> SchemaElement:
         """Build a column's element and its text, without embedding it.
 
@@ -342,11 +351,15 @@ class SchemaEmbedder:
 
         return SchemaElement(
             element_type="column",
-            element_id=f"{table_name}.{column_name}",
+            element_id=f"{qualified(schema, table_name)}.{column_name}",
             name=column_name,
             description=description,
             metadata={
-                "table": table_name,
+                # The qualified table, because this is what a query has to
+                # name; the bare one beside it for display.
+                "table": qualified(schema, table_name),
+                "table_name": table_name,
+                "schema": schema,
                 "data_type": data_type,
                 "is_primary_key": is_primary_key,
                 "is_foreign_key": is_foreign_key,
@@ -385,6 +398,8 @@ class SchemaEmbedder:
         to_table: str,
         join_columns: list[tuple],
         relationship_type: str = "one_to_many",
+        from_schema: str | None = None,
+        to_schema: str | None = None,
     ) -> SchemaElement:
         """Build a relationship's element and its text, without embedding it.
 
@@ -403,14 +418,18 @@ class SchemaEmbedder:
             f"{from_table} joins {to_table} on {join_desc} ({relationship_type})"
         )
 
+        from_id = qualified(from_schema, from_table)
+        to_id = qualified(to_schema, to_table)
         return SchemaElement(
             element_type="relationship",
-            element_id=f"{from_table}__to__{to_table}",
+            element_id=f"{from_id}__to__{to_id}",
             name=f"{from_table} → {to_table}",
             description=description,
             metadata={
-                "from_table": from_table,
-                "to_table": to_table,
+                "from_table": from_id,
+                "to_table": to_id,
+                "from_table_name": from_table,
+                "to_table_name": to_table,
                 "join_columns": join_columns,
                 "relationship_type": relationship_type,
             },
@@ -608,6 +627,7 @@ class SchemaEmbedder:
                 columns=table.get("columns", []),
                 comment=table.get("comment"),
                 foreign_keys=table.get("foreign_keys", []),
+                schema=table.get("schema"),
             )
             for table in tables_info
         ]
@@ -650,6 +670,7 @@ class SchemaEmbedder:
         definition: str | None = None,
         comment: str | None = None,
         referenced_tables: list[str] | None = None,
+        schema: str | None = None,
     ) -> SchemaElement:
         """Build a view's element and its text, without embedding it.
 
@@ -679,10 +700,13 @@ class SchemaEmbedder:
 
         return SchemaElement(
             element_type="view",
-            element_id=view_name,
+            element_id=qualified(schema, view_name),
             name=view_name,
             description=description,
             metadata={
+                "schema": schema,
+                "table": qualified(schema, view_name),
+                "table_name": view_name,
                 "definition": definition,
                 "referenced_tables": referenced_tables or [],
                 "comment": comment,
@@ -753,6 +777,7 @@ class SchemaEmbedder:
                 columns=table.get("columns", []),
                 comment=table.get("comment"),
                 foreign_keys=table.get("foreign_keys", []),
+                schema=table.get("schema"),
             )
             result["tables"].append(table_element)
 
@@ -766,6 +791,7 @@ class SchemaEmbedder:
                     is_foreign_key=col.get("is_foreign_key", False),
                     foreign_key_table=col.get("foreign_key_table"),
                     comment=col.get("comment"),
+                    schema=table.get("schema"),
                 )
                 result["columns"].append(col_element)
 
@@ -776,6 +802,8 @@ class SchemaEmbedder:
                     to_table=fk["referenced_table"],
                     join_columns=[(fk["column"], fk["referenced_column"])],
                     relationship_type="many_to_one",
+                    from_schema=table.get("schema"),
+                    to_schema=fk.get("referenced_schema") or table.get("schema"),
                 )
                 result["relationships"].append(rel_element)
 
@@ -786,6 +814,7 @@ class SchemaEmbedder:
                 definition=view.get("definition"),
                 comment=view.get("comment"),
                 referenced_tables=view.get("referenced_tables"),
+                schema=view.get("schema"),
             )
             result["views"].append(view_element)
 

@@ -8,6 +8,10 @@ Schema (edges point finer grain -> coarser grain, i.e. many-to-one):
 So:
   - reachable_from (descendants, dimension-capable) walks toward customers
   - measurable_from (ancestors, measure-capable) walks toward order_items/returns
+
+These tables declare a schema, so the graph keys them by their identity --
+``public.orders`` -- while a caller may still name them bare. Both are
+exercised: the calls pass bare names, the assertions expect identities.
 """
 
 from src.graphrag.retriever import GraphRetriever
@@ -66,13 +70,13 @@ def test_reachable_from_walks_to_coarser_grain():
     r = _build()
     result = r.reachable_from("order_items")
     assert result["exists"] is True
-    assert set(result["tables"]) == {"orders", "customers"}
+    assert set(result["tables"]) == {"public.orders", "public.customers"}
 
 
 def test_reachable_from_interior_fact():
     r = _build()
     # orders reaches only customers (not back down to order_items)
-    assert set(r.reachable_from("orders")["tables"]) == {"customers"}
+    assert set(r.reachable_from("orders")["tables"]) == {"public.customers"}
 
 
 def test_reachable_from_dimension_is_empty():
@@ -85,15 +89,15 @@ def test_measurable_from_walks_to_finer_grain():
     r = _build()
     # everything that fans out customers
     assert set(r.measurable_from("customers")["tables"]) == {
-        "orders",
-        "order_items",
-        "returns",
+        "public.orders",
+        "public.order_items",
+        "public.returns",
     }
 
 
 def test_measurable_from_interior_fact():
     r = _build()
-    assert set(r.measurable_from("orders")["tables"]) == {"order_items"}
+    assert set(r.measurable_from("orders")["tables"]) == {"public.order_items"}
 
 
 def test_reachable_and_measurable_are_inverses():
@@ -108,7 +112,7 @@ def test_reachable_and_measurable_are_inverses():
 def test_max_hops_bounds_closure():
     r = _build()
     one_hop = r.reachable_from("order_items", max_hops=1)
-    assert set(one_hop["tables"]) == {"orders"}
+    assert set(one_hop["tables"]) == {"public.orders"}
 
 
 def test_unknown_table():
@@ -132,8 +136,8 @@ def test_cycle_terminates():
     r = GraphRetriever()
     r.build_graph(tables)
     # Closures are cycle-safe (visited set); the other node is reached exactly once.
-    assert set(r.reachable_from("a")["tables"]) == {"b"}
-    assert set(r.measurable_from("a")["tables"]) == {"b"}
+    assert set(r.reachable_from("a")["tables"]) == {"public.b"}
+    assert set(r.measurable_from("a")["tables"]) == {"public.b"}
 
 
 def test_self_reference_terminates():

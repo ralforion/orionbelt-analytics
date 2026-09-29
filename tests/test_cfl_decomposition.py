@@ -90,9 +90,11 @@ async def test_two_disjoint_facts_require_cfl():
     res = await _call(["orders", "returns"])
     assert res["success"] is True
     assert res["cfl_required"] is True
-    assert set(res["leg_roots"]) == {"orders", "returns"}
+    # Answers name tables by identity: the fixture declares a schema, so a
+    # leg root is `public.orders`, which is also what the SQL has to say.
+    assert set(res["leg_roots"]) == {"public.orders", "public.returns"}
     # customers reachable from both -> conformed GROUP BY key
-    assert "customers" in res["conformed_dimensions"]
+    assert "public.customers" in res["conformed_dimensions"]
 
 
 async def test_legs_have_null_pad_for_unshared_dims():
@@ -101,17 +103,17 @@ async def test_legs_have_null_pad_for_unshared_dims():
     assert res["cfl_required"] is True
     legs = {leg["root"]: leg for leg in res["legs"]}
     # products reachable from order_items, not from returns -> null-padded in returns leg
-    assert "products" in legs["order_items"]["dimensions"]
-    assert "products" in legs["returns"]["null_pad"]
+    assert "public.products" in legs["public.order_items"]["dimensions"]
+    assert "public.products" in legs["public.returns"]["null_pad"]
     # customers is conformed (reachable from both)
-    assert "customers" in res["conformed_dimensions"]
+    assert "public.customers" in res["conformed_dimensions"]
 
 
 async def test_same_grain_chain_is_not_cfl():
     # orders is reachable from order_items -> same grain chain, single leg root.
     res = await _call(["order_items", "orders"])
     assert res["cfl_required"] is False
-    assert res["leg_roots"] == ["order_items"]
+    assert res["leg_roots"] == ["public.order_items"]
 
 
 async def test_single_fact_not_cfl():

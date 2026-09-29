@@ -41,7 +41,7 @@ def test_a_dropped_foreign_key_stops_offering_a_join_path():
     retriever.add_to_graph(
         [_table("orders", (("customer_id", "customers"),)), _table("customers")]
     )
-    assert sorted(retriever.graph.edges()) == [("orders", "customers")]
+    assert sorted(retriever.graph.edges()) == [("public.orders", "public.customers")]
 
     retriever.add_to_graph([_table("orders"), _table("customers")])
 
@@ -66,7 +66,7 @@ def test_a_changed_foreign_key_target_moves_the_edge():
         ]
     )
 
-    assert sorted(retriever.graph.edges()) == [("orders", "parties")]
+    assert sorted(retriever.graph.edges()) == [("public.orders", "public.parties")]
 
 
 def test_tables_outside_this_discovery_keep_their_relationships():
@@ -83,7 +83,7 @@ def test_tables_outside_this_discovery_keep_their_relationships():
 
     retriever.add_to_graph([_table("orders"), _table("customers")])
 
-    assert sorted(retriever.graph.edges()) == [("shipments", "orders")]
+    assert sorted(retriever.graph.edges()) == [("public.shipments", "public.orders")]
 
 
 def test_an_unchanged_schema_keeps_its_relationships():
@@ -93,7 +93,7 @@ def test_an_unchanged_schema_keeps_its_relationships():
 
     retriever.add_to_graph(tables)
 
-    assert sorted(retriever.graph.edges()) == [("orders", "customers")]
+    assert sorted(retriever.graph.edges()) == [("public.orders", "public.customers")]
 
 
 # --- the vector store ---
@@ -142,10 +142,12 @@ def test_other_elements_survive_a_rediscovery(store):
 
 
 def test_discovering_another_schema_does_not_delete_this_ones_relationships():
-    """Nodes are keyed by bare table name, so two schemas holding an `orders`
-    share one node. Replacing its edges on the second discovery would delete
-    the first schema's relationships -- worse than the stale edge replacement
-    exists to remove. Until identity is qualified, the edges stay."""
+    """Two schemas holding an `orders` are two nodes, so `sales.orders` keeps
+    its foreign keys when `archive` is discovered.
+
+    This used to need a guard -- keep the edges of a name last seen under a
+    different schema -- because both schemas shared one node. Identity carries
+    the schema now, so the replacement simply does not reach the other one."""
     retriever = GraphRetriever()
     retriever.add_to_graph(
         [
@@ -158,7 +160,9 @@ def test_discovering_another_schema_does_not_delete_this_ones_relationships():
         [_table("orders", schema="archive"), _table("invoices", schema="archive")]
     )
 
-    assert ("orders", "customers") in retriever.graph.edges()
+    assert ("sales.orders", "sales.customers") in retriever.graph.edges()
+    assert "archive.orders" in retriever.graph
+    assert list(retriever.graph.out_edges("archive.orders")) == []
 
 
 def test_rediscovering_the_same_schema_still_replaces():

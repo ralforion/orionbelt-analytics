@@ -77,15 +77,15 @@ class TestTheGraph:
     def test_the_remaining_tables_are_untouched(self, manager):
         manager.accumulate_schema([_table("customers", "public")], "public")
 
-        assert "customers" in manager.graph_retriever.graph
-        assert manager.graph_retriever._tables_info.keys() == {"customers"}
+        assert "public.customers" in manager.graph_retriever.graph
+        assert manager.graph_retriever._tables_info.keys() == {"public.customers"}
 
     def test_a_replacing_discovery_also_cleans_up(self, manager):
         """initialize_from_schema clears the graph but never the index."""
         manager.initialize_from_schema([_table("customers", "public")], "public")
 
-        assert "orders" not in manager.graph_retriever.graph
-        assert not any(i.startswith("orders") for i in _ids(manager))
+        assert "public.orders" not in manager.graph_retriever.graph
+        assert not any(i.startswith("public.orders") for i in _ids(manager))
 
 
 class TestTheIndex:
@@ -93,18 +93,18 @@ class TestTheIndex:
 
     def test_the_table_its_columns_and_its_relationships_go(self, manager):
         before = _ids(manager)
-        assert "orders" in before
-        assert "orders.label" in before
+        assert "public.orders" in before
+        assert "public.orders.label" in before
         assert any("__to__" in element for element in before)
 
         manager.accumulate_schema([_table("customers", "public")], "public")
 
         after = _ids(manager)
-        assert "orders" not in after
-        assert not any(element.startswith("orders.") for element in after)
+        assert "public.orders" not in after
+        assert not any(element.startswith("public.orders") for element in after)
         assert not any("orders" in element for element in after)
-        assert "customers" in after
-        assert "customers.label" in after
+        assert "public.customers" in after
+        assert "public.customers.label" in after
 
     def test_search_stops_returning_it(self, manager):
         manager.accumulate_schema([_table("customers", "public")], "public")
@@ -128,22 +128,29 @@ class TestWhatMustSurvive:
     """The two things a cleanup must not take with it."""
 
     def test_another_schema_keeps_its_same_named_table(self, manager):
-        # The collision case: `archive.orders` arrives, then the archive schema
-        # is rediscovered without it. `public.orders` must stay.
+        """The collision case, now two tables rather than one shared node.
+
+        `archive.orders` arrives beside `public.orders`, then archive is
+        rediscovered without it: archive's goes, public's stays, and public's
+        was never described by archive's comment in the first place.
+        """
         manager.accumulate_schema([_table("orders", "archive")], "archive")
+        assert {"public.orders", "archive.orders"} <= set(manager.graph_retriever.graph)
 
         manager.accumulate_schema([_table("stock", "archive")], "archive")
 
-        assert "orders" in manager.graph_retriever.graph
-        assert "orders" in _ids(manager)
+        assert "public.orders" in manager.graph_retriever.graph
+        assert "archive.orders" not in manager.graph_retriever.graph
+        assert "public.orders" in _ids(manager)
+        assert "archive.orders" not in _ids(manager)
 
     def test_a_schema_rediscovery_leaves_other_schemas_alone(self, manager):
         manager.accumulate_schema([_table("shipments", "logistics")], "logistics")
 
         manager.accumulate_schema([_table("customers", "public")], "public")
 
-        assert "shipments" in manager.graph_retriever.graph
-        assert "shipments" in _ids(manager)
+        assert "logistics.shipments" in manager.graph_retriever.graph
+        assert "logistics.shipments" in _ids(manager)
 
     def test_semantic_context_is_not_deleted(self, manager):
         manager.add_semantic_context("orders", "revenue is the sum of order totals")
@@ -163,19 +170,21 @@ class TestTheGraphHelpers:
         manager.accumulate_schema([_table("shipments", "logistics")], "logistics")
 
         assert manager.graph_retriever.tables_of_schema("public") == {
-            "customers",
-            "orders",
+            "public.customers",
+            "public.orders",
         }
-        assert manager.graph_retriever.tables_of_schema("logistics") == {"shipments"}
+        assert manager.graph_retriever.tables_of_schema("logistics") == {
+            "logistics.shipments"
+        }
         assert manager.graph_retriever.tables_of_schema("nowhere") == set()
 
     def test_removing_a_table_invalidates_the_undirected_snapshot(self, manager):
         stale = manager.graph_retriever._undirected_snapshot()
 
-        manager.graph_retriever.remove_tables({"orders"})
+        manager.graph_retriever.remove_tables({"public.orders"})
 
         assert manager.graph_retriever._undirected_snapshot() is not stale
-        assert "orders" not in manager.graph_retriever._undirected_snapshot()
+        assert "public.orders" not in manager.graph_retriever._undirected_snapshot()
 
     def test_removing_a_table_that_is_not_there_is_harmless(self, manager):
         assert manager.graph_retriever.remove_tables({"nosuchtable"}) == 0

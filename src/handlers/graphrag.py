@@ -730,7 +730,32 @@ async def graphrag_find_join_path(
         return err
 
     try:
-        join_path = session.graphrag_manager.graph_retriever.find_join_path(
+        retriever = session.graphrag_manager.graph_retriever
+        current = getattr(session, "current_schema", None)
+
+        # A name that fits two schemas is reported, not guessed at. The model
+        # sends bare names, and picking whichever schema was indexed last is
+        # how a join path came to cross into the wrong copy of a table.
+        for given in (from_table, to_table):
+            found = retriever.resolve_name(given, current)
+            if found.ambiguous:
+                return {
+                    "success": False,
+                    "from": from_table,
+                    "to": to_table,
+                    "error_type": "ambiguous_table",
+                    "candidates": found.candidates,
+                    "message": (
+                        f"'{given}' names a table in more than one schema: "
+                        f"{', '.join(found.candidates)}. Ask again with the "
+                        f"one you mean."
+                    ),
+                }
+
+        from_table = retriever.identity_for(from_table, current)
+        to_table = retriever.identity_for(to_table, current)
+
+        join_path = retriever.find_join_path(
             from_table=from_table, to_table=to_table, max_hops=max_hops
         )
 
@@ -749,10 +774,8 @@ async def graphrag_find_join_path(
                     tables.append(join["to_table"])
             return tables
 
-        alternatives = (
-            session.graphrag_manager.graph_retriever.find_alternative_join_paths(
-                from_table, to_table, chosen=join_path
-            )
+        alternatives = retriever.find_alternative_join_paths(
+            from_table, to_table, chosen=join_path
         )
 
         await notify_client(
@@ -922,24 +945,43 @@ async def plan_composite_query(
         return err
 
     retriever = session.graphrag_manager.graph_retriever
+    current = getattr(session, "current_schema", None)
 
-    missing = [f for f in facts if f not in retriever.graph]
-    if missing:
-        err = services.create_error_response(
-            f"Tables not found in schema graph: {', '.join(missing)}", "data_error"
-        )
-        return err
+    # Names arrive as a model wrote them, bare or qualified. Resolving them to
+    # identities first keeps every set operation below comparing like with
+    # like, and an ambiguous name is reported rather than picked.
+    def _resolved(
+        names: list[str], label: str
+    ) -> tuple[list[str], dict[str, Any] | None]:
+        resolved: list[str] = []
+        for name in names:
+            found = retriever.resolve_name(name, current)
+            if found.ambiguous:
+                return [], services.create_error_response(
+                    f"'{name}' names a table in more than one schema: "
+                    f"{', '.join(found.candidates)}. Ask again with the one "
+                    f"you mean.",
+                    "ambiguous_table",
+                )
+            resolved.append(found.identity or name)
+        missing_names = [n for n in resolved if n not in retriever.graph]
+        if missing_names:
+            return [], services.create_error_response(
+                f"{label} not found in schema graph: {', '.join(missing_names)}",
+                "data_error",
+            )
+        return resolved, None
+
+    facts, problem = _resolved(facts, "Tables")
+    if problem:
+        return problem
 
     # Validate explicit dimensions too — an unknown dimension would otherwise be
     # silently null-padded into every leg and mislead downstream SQL planning.
     if dimensions:
-        missing_dims = [d for d in dimensions if d not in retriever.graph]
-        if missing_dims:
-            err = services.create_error_response(
-                f"Dimensions not found in schema graph: {', '.join(missing_dims)}",
-                "data_error",
-            )
-            return err
+        dimensions, problem = _resolved(dimensions, "Dimensions")
+        if problem:
+            return problem
 
     facts = list(dict.fromkeys(facts))  # de-dupe, preserve order
 

@@ -14,6 +14,8 @@ from typing import Any
 
 import networkx as nx
 
+from .identity import Resolution, choose, display_name, qualified
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,6 +33,10 @@ class GraphRetriever:
         # one schema came to delete another's table. Membership is recorded per
         # schema so that question can still be answered.
         self._schema_tables: dict[str | None, set[str]] = {}
+        # Bare table name -> the identities that carry it. Resolution is on the
+        # path of every join lookup, and walking all the nodes to find what a
+        # name could mean cost three times the lookup itself at 60 tables.
+        self._by_name: dict[str, set[str]] = {}
         # Bumped by every method that changes the graph, so the undirected
         # snapshot below can tell whether it is still current.
         self._generation = 0
@@ -87,6 +93,11 @@ class GraphRetriever:
             self._tables_info.pop(name, None)
             for tables in self._schema_tables.values():
                 tables.discard(name)
+            bare = display_name(name)
+            if bare in self._by_name:
+                self._by_name[bare].discard(name)
+                if not self._by_name[bare]:
+                    del self._by_name[bare]
             if name in self.graph:
                 self.graph.remove_node(name)  # takes its edges with it
                 removed += 1
@@ -94,6 +105,124 @@ class GraphRetriever:
             self._graph_changed()
             logger.info(f"Removed {removed} dropped table(s) from the graph")
         return removed
+
+    def resolve_name(self, name: str, current_schema: str | None = None) -> Resolution:
+        """Which table a caller means, given a bare or qualified name.
+
+        Args:
+            name: The name as it was written.
+            current_schema: The session's schema, used to break a tie.
+
+        Returns:
+            The resolution, which reports ambiguity rather than guessing.
+        """
+        return choose(
+            name,
+            name in self.graph,
+            list(self._by_name.get(name, ())),
+            current_schema,
+        )
+
+    def identity_for(self, name: str, current_schema: str | None = None) -> str:
+        """The node *name* refers to, or *name* itself when nothing matches.
+
+        Returning the name unchanged keeps every caller's "not in the graph"
+        branch working exactly as it did.
+
+        Args:
+            name: The name as it was written.
+            current_schema: The session's schema, used to break a tie.
+
+        Returns:
+            An identity in the graph, or the name as given.
+        """
+        return self.resolve_name(name, current_schema).identity or name
+
+    def _add_node(self, table: dict[str, Any]) -> str:
+        """Add or update one table's node, keyed by its identity.
+
+        Args:
+            table: The table's metadata, as discovery reported it.
+
+        Returns:
+            The identity the node is keyed by.
+        """
+        schema = table.get("schema")
+        identity = qualified(schema, table["name"])
+        self._tables_info[identity] = table
+        self._by_name.setdefault(table["name"], set()).add(identity)
+        self.graph.add_node(
+            identity,
+            node_type="table",
+            # Kept on the node so every reader -- join paths, community
+            # summaries, visualization -- can show the name a person asked
+            # about while the key underneath stays unambiguous.
+            table=table["name"],
+            schema=schema,
+            column_count=len(table.get("columns", [])),
+            has_comment=bool(table.get("comment")),
+            comment=table.get("comment", ""),
+        )
+        return identity
+
+    def _fk_target(self, fk: dict[str, Any], from_schema: str | None) -> str | None:
+        """Which node a foreign key points at.
+
+        A constraint names its target by bare name, sometimes with a schema of
+        its own. Resolved explicitly rather than by assuming the bare name is a
+        node: within the referencing table's schema first, which is what a
+        database means by an unqualified reference, then a unique match
+        anywhere, and nothing at all when two schemas both have that name.
+
+        Args:
+            fk: The foreign key as discovery reported it.
+            from_schema: Schema of the table the key belongs to.
+
+        Returns:
+            The target's identity, or None if it is not in the graph or the
+            name is ambiguous.
+        """
+        target = fk.get("referenced_table")
+        if not target:
+            return None
+        schema = fk.get("referenced_schema") or from_schema
+        within = qualified(schema, target)
+        if within in self.graph:
+            return within
+        found = self.resolve_name(target, current_schema=schema)
+        if found.ambiguous:
+            logger.debug(
+                f"Foreign key to '{target}' is ambiguous "
+                f"({', '.join(found.candidates)}); leaving it unresolved"
+            )
+        return found.identity
+
+    def _add_foreign_keys(self, table: dict[str, Any]) -> int:
+        """Add the edges for one table's foreign keys.
+
+        Args:
+            table: The table's metadata.
+
+        Returns:
+            How many edges were new.
+        """
+        schema = table.get("schema")
+        source = qualified(schema, table["name"])
+        added = 0
+        for fk in table.get("foreign_keys", []):
+            target = self._fk_target(fk, schema)
+            if target is None:
+                continue
+            if not self.graph.has_edge(source, target):
+                added += 1
+            self.graph.add_edge(
+                source,
+                target,
+                edge_type="foreign_key",
+                column=fk["column"],
+                referenced_column=fk["referenced_column"],
+            )
+        return added
 
     def _graph_changed(self) -> None:
         """Record that the graph is no longer what the snapshot was taken from."""
@@ -135,38 +264,18 @@ class GraphRetriever:
         self._graph_changed()
         self.graph.clear()
         self._tables_info = {}
-        # A rebuild replaces everything, membership included.
+        # A rebuild replaces everything, membership and the name index included.
         self._schema_tables = {}
+        self._by_name = {}
 
         # Add nodes (tables)
         for table in tables_info:
-            table_name = table["name"]
-            self._tables_info[table_name] = table
-            self._schema_tables.setdefault(table.get("schema"), set()).add(table_name)
-
-            self.graph.add_node(
-                table_name,
-                node_type="table",
-                column_count=len(table.get("columns", [])),
-                has_comment=bool(table.get("comment")),
-                comment=table.get("comment", ""),
-            )
+            identity = self._add_node(table)
+            self._schema_tables.setdefault(table.get("schema"), set()).add(identity)
 
         # Add edges (foreign key relationships)
         for table in tables_info:
-            table_name = table["name"]
-
-            for fk in table.get("foreign_keys", []):
-                referenced_table = fk["referenced_table"]
-
-                if referenced_table in self.graph:
-                    self.graph.add_edge(
-                        table_name,
-                        referenced_table,
-                        edge_type="foreign_key",
-                        column=fk["column"],
-                        referenced_column=fk["referenced_column"],
-                    )
+            self._add_foreign_keys(table)
 
         self._graph_changed()
         logger.info(
@@ -187,12 +296,6 @@ class GraphRetriever:
         added_nodes = 0
         added_edges = 0
 
-        # Read before the loop below overwrites it: which schema each name was
-        # last discovered under decides whether this discovery owns its edges.
-        schema_before = {
-            name: (info or {}).get("schema") for name, info in self._tables_info.items()
-        }
-
         # A schema in this batch reports its whole table set, so its membership
         # is replaced rather than added to: that is what makes a table missing
         # from a rediscovery a dropped table rather than an unmentioned one.
@@ -200,19 +303,11 @@ class GraphRetriever:
             self._schema_tables[schema] = set()
 
         for table in tables_info:
-            table_name = table["name"]
-            self._tables_info[table_name] = table
-            self._schema_tables.setdefault(table.get("schema"), set()).add(table_name)
-
-            if table_name not in self.graph:
+            identity = qualified(table.get("schema"), table["name"])
+            if identity not in self.graph:
                 added_nodes += 1
-            self.graph.add_node(
-                table_name,
-                node_type="table",
-                column_count=len(table.get("columns", [])),
-                has_comment=bool(table.get("comment")),
-                comment=table.get("comment", ""),
-            )
+            self._add_node(table)
+            self._schema_tables.setdefault(table.get("schema"), set()).add(identity)
 
         # A table's foreign keys are replaced, not merged. Rediscovery is what
         # happens after a schema changes, and a constraint dropped there used
@@ -221,46 +316,26 @@ class GraphRetriever:
         # is responsible for are removed: foreign keys leaving the tables in
         # this batch. Edges from tables in other schemas, and anything not
         # recorded as a foreign key, are left alone.
-        # Nodes are keyed by bare table name, so two schemas holding a table of
-        # the same name share one node. Replacing edges there would delete the
-        # other schema's relationships, which is worse than the stale edge this
-        # replacement exists to remove. Until identity is qualified, a name last
-        # discovered under a different schema keeps what it has.
+        # Identity carries the schema, so this is now exactly the tables this
+        # discovery reported: a table of the same name in another schema is a
+        # different node and keeps its own relationships. The guard that used
+        # to be needed -- keep the edges of a name last seen under a different
+        # schema -- is gone with the collision it worked around.
         removed_edges = 0
         for table in tables_info:
-            table_name = table["name"]
-            if table_name not in self.graph:
-                continue
-            previous_schema = schema_before.get(table_name)
-            if previous_schema is not None and previous_schema != table.get("schema"):
-                logger.debug(
-                    f"Keeping relationships of '{table_name}': last discovered "
-                    f"under schema '{previous_schema}', now seen under "
-                    f"'{table.get('schema')}'"
-                )
+            identity = qualified(table.get("schema"), table["name"])
+            if identity not in self.graph:
                 continue
             stale = [
-                (table_name, referenced)
-                for _, referenced, data in self.graph.out_edges(table_name, data=True)
+                (identity, referenced)
+                for _, referenced, data in self.graph.out_edges(identity, data=True)
                 if data.get("edge_type") == "foreign_key"
             ]
             self.graph.remove_edges_from(stale)
             removed_edges += len(stale)
 
         for table in tables_info:
-            table_name = table["name"]
-            for fk in table.get("foreign_keys", []):
-                referenced_table = fk["referenced_table"]
-                if referenced_table in self.graph:
-                    if not self.graph.has_edge(table_name, referenced_table):
-                        added_edges += 1
-                    self.graph.add_edge(
-                        table_name,
-                        referenced_table,
-                        edge_type="foreign_key",
-                        column=fk["column"],
-                        referenced_column=fk["referenced_column"],
-                    )
+            added_edges += self._add_foreign_keys(table)
 
         self._graph_changed()
         logger.info(
@@ -327,6 +402,8 @@ class GraphRetriever:
             Join specifications of each other shortest path; empty when the
             chosen path is the only one of its length.
         """
+        from_table = self.identity_for(from_table)
+        to_table = self.identity_for(to_table)
         if from_table not in self.graph or to_table not in self.graph:
             return []
         chosen_tables = [from_table, *(join["to_table"] for join in chosen)]
@@ -359,6 +436,8 @@ class GraphRetriever:
         Returns:
             List of join specifications or None if no path exists
         """
+        from_table = self.identity_for(from_table)
+        to_table = self.identity_for(to_table)
         if from_table not in self.graph or to_table not in self.graph:
             return None
 
@@ -429,6 +508,7 @@ class GraphRetriever:
         Returns:
             Dictionary with lists of related tables by distance
         """
+        table_name = self.identity_for(table_name)
         if table_name not in self.graph:
             return {}
 
@@ -503,6 +583,7 @@ class GraphRetriever:
         Returns:
             Dict with ``exists``, ordered ``tables`` list, and ``by_hop`` mapping.
         """
+        table_name = self.identity_for(table_name)
         if table_name not in self.graph:
             return {"exists": False, "tables": [], "by_hop": {}}
 
@@ -558,7 +639,8 @@ class GraphRetriever:
         """
         warnings = []
 
-        for table in tables:
+        for name in tables:
+            table = self.identity_for(name)
             if table not in self.graph:
                 continue
 
@@ -587,7 +669,7 @@ class GraphRetriever:
         Returns:
             Table metadata dictionary or None
         """
-        return self._tables_info.get(table_name)
+        return self._tables_info.get(self.identity_for(table_name))
 
     def get_graph_summary(self) -> dict[str, Any]:
         """
@@ -653,7 +735,10 @@ class GraphRetriever:
         nodes = [
             {
                 "id": node[0],
-                "label": node[0],
+                # The label is the table's own name; the id carries its schema,
+                # so two tables of the same name are two nodes that read alike.
+                "label": node[1].get("table") or display_name(node[0]),
+                "schema": node[1].get("schema"),
                 "type": "table",
                 "column_count": node[1].get("column_count", 0),
             }
