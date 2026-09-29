@@ -661,7 +661,9 @@ async def graphrag_search(
         return err
 
     try:
-        results = session.graphrag_manager.search_schema(
+        # Embedded in a worker, searched here. The manager is read once, so the
+        # answer describes the database this call was made on.
+        results = await session.graphrag_manager.asearch_schema(
             query=query, top_k=top_k, element_type=element_type
         )
 
@@ -750,7 +752,7 @@ async def graphrag_query_context(
         return err
 
     try:
-        context = session.graphrag_manager.get_query_context(
+        context = await session.graphrag_manager.aget_query_context(
             query=query, max_tables=max_tables, max_columns=max_columns
         )
 

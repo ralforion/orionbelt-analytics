@@ -234,6 +234,64 @@ class GraphRAGManager:
             f"Total tables: {self.graph_retriever.graph.number_of_nodes()}"
         )
 
+    def _try_embed(self, query: str) -> Any | None:
+        """Embed a query, or return None so the search falls back to text.
+
+        Args:
+            query: The query text.
+
+        Returns:
+            The vector, or None if the backend could not embed it.
+        """
+        try:
+            return self.embedder._embed_text(query)
+        except Exception as e:
+            logger.debug(f"Could not pre-embed the query, searching by text: {e}")
+            return None
+
+    async def aget_query_context(
+        self, query: str, max_tables: int = 5, max_columns: int = 20
+    ) -> dict[str, Any]:
+        """:meth:`get_query_context`, with the embedding off the event loop.
+
+        Embedding the query is 75 ms of the ~82 a retrieval costs on MiniLM, and
+        it ran on the loop for every call. It reads only the text and the
+        embedder, so it moves to a worker. The searches stay here: they read
+        the graph and the index, which indexing rewrites on the loop in one
+        block, and on the loop they see it before that block or after it --
+        from a thread they could see it half-way.
+
+        Args:
+            query: Natural language query or SQL requirement.
+            max_tables: Maximum tables to include.
+            max_columns: Maximum columns to include.
+
+        Returns:
+            What :meth:`get_query_context` returns.
+        """
+        embedding = await asyncio.to_thread(self._try_embed, query)
+        return self.get_query_context(
+            query, max_tables, max_columns, query_embedding=embedding
+        )
+
+    async def asearch_schema(
+        self, query: str, top_k: int = 5, element_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """:meth:`search_schema`, with the embedding off the event loop.
+
+        Args:
+            query: Natural language query.
+            top_k: Number of results.
+            element_type: Filter by type, or None for all.
+
+        Returns:
+            What :meth:`search_schema` returns.
+        """
+        embedding = await asyncio.to_thread(self._try_embed, query)
+        return self.search_schema(
+            query, top_k=top_k, element_type=element_type, query_embedding=embedding
+        )
+
     def _prepare_schema(
         self,
         tables_info: list[dict[str, Any]],
@@ -628,7 +686,11 @@ class GraphRAGManager:
         return result
 
     def get_query_context(
-        self, query: str, max_tables: int = 5, max_columns: int = 20
+        self,
+        query: str,
+        max_tables: int = 5,
+        max_columns: int = 20,
+        query_embedding: Any | None = None,
     ) -> dict[str, Any]:
         """
         Get optimized context for SQL query generation.
@@ -639,6 +701,8 @@ class GraphRAGManager:
             query: Natural language query or SQL requirement
             max_tables: Maximum tables to include
             max_columns: Maximum columns to include
+            query_embedding: The query already embedded, e.g. by
+                :meth:`aget_query_context` in a worker. Embedded here if absent.
 
         Returns:
             Optimized context dictionary
@@ -650,11 +714,8 @@ class GraphRAGManager:
         # alone, and this method searches tables and then columns with the same
         # text, so embedding it twice put the identical string through the model
         # for nothing.
-        query_embedding = None
-        try:
-            query_embedding = self.embedder._embed_text(query)
-        except Exception as e:
-            logger.debug(f"Could not pre-embed the query, searching by text: {e}")
+        if query_embedding is None:
+            query_embedding = self._try_embed(query)
 
         # Find relevant tables
         table_info = self.find_relevant_tables(
