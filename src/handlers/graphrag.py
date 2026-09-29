@@ -799,7 +799,32 @@ async def graphrag_find_join_path(
         return err
 
     try:
-        join_path = session.graphrag_manager.graph_retriever.find_join_path(
+        retriever = session.graphrag_manager.graph_retriever
+        current = getattr(session, "current_schema", None)
+
+        # A name that fits two schemas is reported, not guessed at. The model
+        # sends bare names, and picking whichever schema was indexed last is
+        # how a join path came to cross into the wrong copy of a table.
+        for given in (from_table, to_table):
+            found = retriever.resolve_name(given, current)
+            if found.ambiguous:
+                return {
+                    "success": False,
+                    "from": from_table,
+                    "to": to_table,
+                    "error_type": "ambiguous_table",
+                    "candidates": found.candidates,
+                    "message": (
+                        f"'{given}' names a table in more than one schema: "
+                        f"{', '.join(found.candidates)}. Ask again with the "
+                        f"one you mean."
+                    ),
+                }
+
+        from_table = retriever.identity_for(from_table, current)
+        to_table = retriever.identity_for(to_table, current)
+
+        join_path = retriever.find_join_path(
             from_table=from_table, to_table=to_table, max_hops=max_hops
         )
 
@@ -818,10 +843,8 @@ async def graphrag_find_join_path(
                     tables.append(join["to_table"])
             return tables
 
-        alternatives = (
-            session.graphrag_manager.graph_retriever.find_alternative_join_paths(
-                from_table, to_table, chosen=join_path
-            )
+        alternatives = retriever.find_alternative_join_paths(
+            from_table, to_table, chosen=join_path
         )
 
         await notify_client(
@@ -858,6 +881,39 @@ async def graphrag_find_join_path(
         return err
 
 
+def _resolve_table_for_session(
+    retriever: Any, name: str, session: Any, services: "HandlerContext"
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Which table a tool's argument means, with the session's schema in mind.
+
+    The same rules join-path discovery uses: an exact identity, a unique bare
+    name, then the schema the session is working in. With `sales.orders` and
+    `archive.orders` both indexed and the session in `sales`, `orders` is the
+    sales one; with no current schema it is reported as ambiguous, candidates
+    listed, rather than as "not found" -- which is what it used to say.
+
+    Args:
+        retriever: The graph retriever.
+        name: The table as the caller wrote it.
+        session: The calling session.
+        services: Request-scoped services.
+
+    Returns:
+        The identity to use and no error, or no identity and the error to
+        return.
+    """
+    found = retriever.resolve_name(name, getattr(session, "current_schema", None))
+    if found.ambiguous:
+        err: dict[str, Any] = services.create_error_response(
+            f"'{name}' names a table in more than one schema: "
+            f"{', '.join(found.candidates)}. Ask again with the one you mean.",
+            "ambiguous_table",
+        )
+        err["candidates"] = found.candidates
+        return None, err
+    return found.identity or name, None
+
+
 async def reachable_from(
     ctx: Context,
     table: str,
@@ -875,9 +931,13 @@ async def reachable_from(
         return err
 
     try:
-        result = session.graphrag_manager.graph_retriever.reachable_from(
-            table, max_hops=max_hops
+        retriever = session.graphrag_manager.graph_retriever
+        resolved, problem = _resolve_table_for_session(
+            retriever, table, session, services
         )
+        if problem is not None:
+            return problem
+        result = retriever.reachable_from(resolved, max_hops=max_hops)
         if not result["exists"]:
             err = services.create_error_response(
                 f"Table '{table}' not found in the schema graph.", "data_error"
@@ -891,6 +951,7 @@ async def reachable_from(
         return {
             "success": True,
             "table": table,
+            "resolved_table": resolved,
             "direction": "many_to_one",
             "capability": "dimension",
             "reachable_tables": result["tables"],
@@ -927,9 +988,13 @@ async def measurable_from(
         return err
 
     try:
-        result = session.graphrag_manager.graph_retriever.measurable_from(
-            table, max_hops=max_hops
+        retriever = session.graphrag_manager.graph_retriever
+        resolved, problem = _resolve_table_for_session(
+            retriever, table, session, services
         )
+        if problem is not None:
+            return problem
+        result = retriever.measurable_from(resolved, max_hops=max_hops)
         if not result["exists"]:
             err = services.create_error_response(
                 f"Table '{table}' not found in the schema graph.", "data_error"
@@ -942,6 +1007,7 @@ async def measurable_from(
         return {
             "success": True,
             "table": table,
+            "resolved_table": resolved,
             "direction": "one_to_many",
             "capability": "measure",
             "measurable_tables": result["tables"],
@@ -991,24 +1057,43 @@ async def plan_composite_query(
         return err
 
     retriever = session.graphrag_manager.graph_retriever
+    current = getattr(session, "current_schema", None)
 
-    missing = [f for f in facts if f not in retriever.graph]
-    if missing:
-        err = services.create_error_response(
-            f"Tables not found in schema graph: {', '.join(missing)}", "data_error"
-        )
-        return err
+    # Names arrive as a model wrote them, bare or qualified. Resolving them to
+    # identities first keeps every set operation below comparing like with
+    # like, and an ambiguous name is reported rather than picked.
+    def _resolved(
+        names: list[str], label: str
+    ) -> tuple[list[str], dict[str, Any] | None]:
+        resolved: list[str] = []
+        for name in names:
+            found = retriever.resolve_name(name, current)
+            if found.ambiguous:
+                return [], services.create_error_response(
+                    f"'{name}' names a table in more than one schema: "
+                    f"{', '.join(found.candidates)}. Ask again with the one "
+                    f"you mean.",
+                    "ambiguous_table",
+                )
+            resolved.append(found.identity or name)
+        missing_names = [n for n in resolved if n not in retriever.graph]
+        if missing_names:
+            return [], services.create_error_response(
+                f"{label} not found in schema graph: {', '.join(missing_names)}",
+                "data_error",
+            )
+        return resolved, None
+
+    facts, problem = _resolved(facts, "Tables")
+    if problem:
+        return problem
 
     # Validate explicit dimensions too — an unknown dimension would otherwise be
     # silently null-padded into every leg and mislead downstream SQL planning.
     if dimensions:
-        missing_dims = [d for d in dimensions if d not in retriever.graph]
-        if missing_dims:
-            err = services.create_error_response(
-                f"Dimensions not found in schema graph: {', '.join(missing_dims)}",
-                "data_error",
-            )
-            return err
+        dimensions, problem = _resolved(dimensions, "Dimensions")
+        if problem:
+            return problem
 
     facts = list(dict.fromkeys(facts))  # de-dupe, preserve order
 

@@ -338,8 +338,9 @@ class TestGraphRetriever:
 
         assert path is not None
         assert len(path) == 1
-        assert path[0]["from_table"] == "orders"
-        assert path[0]["to_table"] == "customers"
+        # Join specs name tables by identity, which is what the SQL needs.
+        assert path[0]["from_table"] == "public.orders"
+        assert path[0]["to_table"] == "public.customers"
 
     def test_find_join_path_multi_hop(self, sample_tables):
         """Test finding multi-hop join path."""
@@ -382,7 +383,7 @@ class TestGraphRetriever:
         related = retriever.get_related_tables("orders", max_distance=1)
 
         assert 1 in related  # Direct connections
-        assert "customers" in related[1]  # orders -> customers
+        assert "public.customers" in related[1]  # orders -> customers
 
     def test_detect_fan_traps(self, sample_tables):
         """Test fan-trap detection."""
@@ -622,12 +623,12 @@ class TestAmbiguousJoinPaths:
         )
 
         via = {chosen[0]["to_table"]} | {alt[0]["to_table"] for alt in alternatives}
-        assert via == {"customers", "warehouses"}
+        assert via == {"public.customers", "public.warehouses"}
         assert len(alternatives) == 1
-        assert [j["to_table"] for j in alternatives[0]][-1] == "regions"
+        assert [j["to_table"] for j in alternatives[0]][-1] == "public.regions"
         # Join columns follow the foreign keys, whichever way they point.
         first = alternatives[0][0]
-        assert first["from_table"] == "orders" and first["to_column"] == "id"
+        assert first["from_table"] == "public.orders" and first["to_column"] == "id"
 
     def test_a_single_route_has_no_alternatives(self, sample_tables):
         retriever = GraphRetriever()
@@ -653,7 +654,10 @@ class TestAmbiguousJoinPaths:
 
         chosen = retriever.find_join_path("carriers", "regions")
 
-        assert [j["to_table"] for j in chosen] == ["warehouses", "regions"]
+        assert [j["to_table"] for j in chosen] == [
+            "public.warehouses",
+            "public.regions",
+        ]
         assert (
             retriever.find_alternative_join_paths("carriers", "regions", chosen=chosen)
             == []
@@ -698,8 +702,8 @@ class TestJoinPathToolReportsAmbiguity:
         assert result["ambiguous"] is True
         assert len(result["alternatives"]) == 1
         routes = {result["path"][1], result["alternatives"][0]["path"][1]}
-        assert routes == {"customers", "warehouses"}
-        assert result["alternatives"][0]["path"][-1] == "regions"
+        assert routes == {"public.customers", "public.warehouses"}
+        assert result["alternatives"][0]["path"][-1] == "public.regions"
         assert "ask the user" in result["ambiguity_note"]
 
     async def test_the_only_route(self, sample_tables):

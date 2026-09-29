@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from .community_detector import CommunityDetector
 from .embedder import MODEL_TFIDF, SchemaEmbedder
+from .identity import qualified
 from .retriever import GraphRetriever
 
 if TYPE_CHECKING:
@@ -345,7 +346,13 @@ class GraphRAGManager:
         # name, so two schemas holding a table of the same name share one node,
         # and a name last seen under another schema is left alone -- the same
         # rule the edge replacement follows, for the same reason.
-        present = {table["name"] for table in tables_info}
+        # Identities on both sides. Membership records qualified identities, so
+        # comparing it with bare names made every table look dropped: each one
+        # was removed and re-added, and the edges *other* schemas had into it
+        # were not re-added with it.
+        present = {
+            qualified(table.get("schema"), table["name"]) for table in tables_info
+        }
         dropped = self.graph_retriever.tables_of_schema(schema_name) - present
         dropped -= self.graph_retriever.tables_claimed_elsewhere(schema_name, dropped)
         if dropped:
@@ -621,7 +628,10 @@ class GraphRAGManager:
             query, top_k=top_k, element_type="table", query_embedding=query_embedding
         )
 
-        primary_tables = [r["element"]["name"] for r in table_results]
+        # The element id, not the display name: it carries the schema, so a
+        # table of the same name in another schema is not confused with this
+        # one when its joins and community are looked up.
+        primary_tables = [r["element"]["id"] for r in table_results]
 
         result: dict[str, Any] = {
             "primary_tables": table_results,
@@ -746,8 +756,9 @@ class GraphRAGManager:
 
         # Add primary tables with their metadata
         for table_result in table_info["primary_tables"]:
+            identity = table_result["element"]["id"]
             table_name = table_result["element"]["name"]
-            table_meta = self.graph_retriever.get_table_metadata(table_name)
+            table_meta = self.graph_retriever.get_table_metadata(identity)
 
             if table_meta:
                 context["relevant_tables"].append(

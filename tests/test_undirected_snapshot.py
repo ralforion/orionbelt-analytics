@@ -71,8 +71,9 @@ class TestSnapshotIsReused:
 
         assert set(snapshot.nodes) == set(retriever.graph.nodes)
         assert snapshot.number_of_edges() == retriever.graph.number_of_edges()
-        # Undirected: reachable against the foreign key's direction.
-        assert snapshot.has_edge("dim0", "fact")
+        # Undirected: reachable against the foreign key's direction. Nodes
+        # are keyed by identity, and this star declares a schema.
+        assert snapshot.has_edge("sales.dim0", "sales.fact")
 
 
 class TestSnapshotIsDropped:
@@ -113,7 +114,7 @@ class TestSnapshotIsDropped:
         fresh = retriever._undirected_snapshot()
 
         assert fresh is not stale
-        assert fresh.has_edge("extra", "fact")
+        assert fresh.has_edge("sales.extra", "sales.fact")
 
     def test_a_dropped_foreign_key_stops_offering_the_join(self) -> None:
         """The reason invalidation matters: a removed edge must disappear."""

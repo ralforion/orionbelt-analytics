@@ -127,13 +127,14 @@ class TestIndexing:
     def test_does_not_modify_the_schema_element(self, manager):
         """Re-running discovery must not be able to clobber the context, and
         the column's own description must stay as discovery wrote it."""
-        before = manager.vector_store.get_by_id("sales.salesamount")
+        # The element id carries the schema the table was discovered under.
+        before = manager.vector_store.get_by_id("public.sales.salesamount")
         assert before is not None
         original = before.description
 
         manager.add_semantic_context("sales.salesamount", "Profit margin driver.")
 
-        after = manager.vector_store.get_by_id("sales.salesamount")
+        after = manager.vector_store.get_by_id("public.sales.salesamount")
         assert after is not None
         assert after.description == original
 
