@@ -475,12 +475,15 @@ async def initialize_graphrag(
     # this tool is the entry point -- which it is whenever AUTO_GRAPHRAG is
     # false or a client calls it directly. Without this the manual path
     # indexes tables only, and views reach GraphRAG on the auto path alone.
-    views_info = session.get_cached_views(effective_schema or "")
-    if not views_info:
+    # Asked by "was this discovered?", not "is it non-empty?": a schema with no
+    # views read the same as one nobody had looked at, so every call went back
+    # to the database. The empty answer is cached for the same reason.
+    if session.has_cached_views(effective_schema or ""):
+        views_info = session.get_cached_views(effective_schema or "")
+    else:
         try:
             views_info = await run_db(db_manager.get_views, effective_schema)
-            if views_info:
-                session.cache_views(effective_schema or "", views_info)
+            session.cache_views(effective_schema or "", views_info)
         except Exception as e:
             logger.warning(f"Could not fetch views for GraphRAG: {e}")
             views_info = []

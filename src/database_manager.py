@@ -197,6 +197,27 @@ class DatabaseManager:
     # Cache helpers
     # ------------------------------------------------------------------
 
+    def clear_metadata_cache(self) -> int:
+        """Drop every cached metadata answer, so the next one hits the database.
+
+        The table and view lists, and Snowflake's prefetched constraints, are
+        held for five minutes. A user who resets the cache to pick up a schema
+        change was still served that stale list, which is exactly the thing
+        they asked to get rid of.
+
+        All of it, not one schema's worth: the keys carry the schema name as
+        each caller spelled it -- upper-cased on Snowflake, ``default`` or
+        ``None`` when unqualified -- so a targeted sweep would quietly miss
+        entries. The cost of clearing too much is one extra reflection.
+
+        Returns:
+            How many entries were dropped.
+        """
+        dropped = len(self._metadata_cache)
+        self._metadata_cache.clear()
+        logger.debug(f"Metadata cache cleared: {dropped} entries")
+        return dropped
+
     def _get_cache_key(self, operation: str, *args: Any) -> str:
         """Generate cache key for metadata operations."""
         return f"{operation}:{':'.join(str(arg) for arg in args)}"

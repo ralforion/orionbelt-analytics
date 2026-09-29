@@ -90,6 +90,23 @@ class SchemaCache:
             return []
         return self._cached_views.get(schema_name or "_default_", [])
 
+    def has_cached_views(self, schema_name: str) -> bool:
+        """Whether views were ever discovered for *schema_name*.
+
+        Distinct from an empty list on purpose: a schema with no views and a
+        schema nobody has looked at both read as "no views", so a truthiness
+        check sent every caller back to the database forever.
+
+        Args:
+            schema_name: Schema to ask about.
+
+        Returns:
+            True if a discovery recorded a view set, empty or not.
+        """
+        if self._cached_views is None:
+            return False
+        return (schema_name or "_default_") in self._cached_views
+
     def get_all_cached_views(self) -> list[Any]:
         """Every discovered view across all schemas on this connection.
 
@@ -609,6 +626,10 @@ class SessionData:
     def get_cached_views(self, schema_name: str) -> list[Any]:
         """Get cached views, or an empty list when none were discovered."""
         return self.schema_cache.get_cached_views(schema_name)
+
+    def has_cached_views(self, schema_name: str) -> bool:
+        """Whether views were ever discovered for *schema_name*."""
+        return self.schema_cache.has_cached_views(schema_name)
 
     def get_all_cached_views(self) -> list[Any]:
         """Every discovered view across all schemas on this connection."""

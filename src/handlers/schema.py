@@ -105,6 +105,14 @@ async def reset_cache(
         session.r2rml_file = None
         cleared.append("schema")
 
+        # And the database metadata behind it. The manager holds table and view
+        # lists for five minutes, so resetting only the session's copy left the
+        # next discovery reading the same stale list this call exists to drop.
+        if session.db_manager is not None:
+            dropped = session.db_manager.clear_metadata_cache()
+            if dropped:
+                cleared.append(f"database metadata ({dropped} entries)")
+
     if cache_type_lower in ("ontology", "all"):
         session.ontology_file = None
         session.loaded_ontology = None
