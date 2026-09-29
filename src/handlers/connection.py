@@ -7,6 +7,7 @@ from typing import Any
 
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..constants import SUPPORTED_DB_TYPES
 from ..database_manager import DatabaseManager
 from ..exceptions import ConnectionError, ValidationError
@@ -95,7 +96,8 @@ async def connect_database(
                 f"{', '.join(missing_params)}. Please check your .env file."
             ).to_response()
 
-        success = db_manager.connect_postgresql(
+        success = await run_db(
+            db_manager.connect_postgresql,
             host=str(host),
             port=int(str(port)),
             database=str(database),
@@ -126,7 +128,8 @@ async def connect_database(
                 f"{', '.join(missing_params)}. Please check your .env file."
             ).to_response()
 
-        success = db_manager.connect_snowflake(
+        success = await run_db(
+            db_manager.connect_snowflake,
             account=str(account),
             username=str(username),
             password=str(password),
@@ -142,7 +145,9 @@ async def connect_database(
         dremio_pat = os.getenv("DREMIO_PAT")
 
         if dremio_uri and dremio_pat:
-            success = db_manager.connect_dremio(uri=dremio_uri, pat=dremio_pat)
+            success = await run_db(
+                db_manager.connect_dremio, uri=dremio_uri, pat=dremio_pat
+            )
             db_name = "DREMIO"
         else:
             # Fall back to legacy username/password authentication
@@ -166,7 +171,8 @@ async def connect_database(
                     "For PAT-based auth, set DREMIO_URI and DREMIO_PAT instead."
                 ).to_response()
 
-            success = db_manager.connect_dremio(
+            success = await run_db(
+                db_manager.connect_dremio,
                 host=str(host),
                 port=int(str(port)),
                 username=str(username),
@@ -194,7 +200,8 @@ async def connect_database(
                 f"{', '.join(missing_params)}. Please check your .env file."
             ).to_response()
 
-        success = db_manager.connect_clickhouse(
+        success = await run_db(
+            db_manager.connect_clickhouse,
             host=str(host),
             port=int(port),
             database=str(database),
@@ -219,7 +226,8 @@ async def connect_database(
                 f"{', '.join(missing_params)}. Please check your .env file."
             ).to_response()
 
-        success = db_manager.connect_bigquery(
+        success = await run_db(
+            db_manager.connect_bigquery,
             project_id=str(project_id),
             dataset=dataset or "",
             credentials_path=credentials_path,
@@ -232,7 +240,8 @@ async def connect_database(
         motherduck_token = os.getenv("MOTHERDUCK_TOKEN")
         read_only = os.getenv("DUCKDB_READ_ONLY", "false").lower() == "true"
 
-        success = db_manager.connect_duckdb(
+        success = await run_db(
+            db_manager.connect_duckdb,
             database_path=database_path,
             motherduck_token=motherduck_token,
             read_only=read_only,
@@ -258,7 +267,8 @@ async def connect_database(
                 f"{', '.join(missing_params)}. Please check your .env file."
             ).to_response()
 
-        success = db_manager.connect_databricks(
+        success = await run_db(
+            db_manager.connect_databricks,
             server_hostname=str(server_hostname),
             http_path=str(http_path),
             access_token=str(access_token),
@@ -288,7 +298,8 @@ async def connect_database(
                 f"{', '.join(missing_params)}. Please check your .env file."
             ).to_response()
 
-        success = db_manager.connect_mysql(
+        success = await run_db(
+            db_manager.connect_mysql,
             host=str(host),
             port=int(port),
             database=str(database),
@@ -411,7 +422,7 @@ async def list_schemas(ctx: Context, services: "HandlerContext") -> list[str]:
         List of schema names
     """
     db_manager = services.get_session_db_manager(ctx)
-    schemas = db_manager.get_schemas()
+    schemas = await run_db(db_manager.get_schemas)
     if schemas:
         await notify_client(
             ctx, f"Found {len(schemas)} schemas; next call should be discover_schema"

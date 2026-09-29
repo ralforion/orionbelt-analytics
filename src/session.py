@@ -10,6 +10,8 @@ Each MCP session gets its own SessionData instance containing:
 
 import asyncio
 import logging
+import threading
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Optional
 
@@ -89,6 +91,23 @@ class SchemaCache:
             return []
         return self._cached_views.get(schema_name or "_default_", [])
 
+    def has_cached_views(self, schema_name: str) -> bool:
+        """Whether views were ever discovered for *schema_name*.
+
+        Distinct from an empty list on purpose: a schema with no views and a
+        schema nobody has looked at both read as "no views", so a truthiness
+        check sent every caller back to the database forever.
+
+        Args:
+            schema_name: Schema to ask about.
+
+        Returns:
+            True if a discovery recorded a view set, empty or not.
+        """
+        if self._cached_views is None:
+            return False
+        return (schema_name or "_default_") in self._cached_views
+
     def get_all_cached_views(self) -> list[Any]:
         """Every discovered view across all schemas on this connection.
 
@@ -140,6 +159,13 @@ class GraphRAGState:
         # the accumulative multi-schema flow -- leaving them running against a
         # session that teardown had already finished with.
         self.init_tasks: set[asyncio.Task[Any]] = set()
+        # Serializes indexing on this connection. Embedding now happens off the
+        # event loop, so two indexings that used to be serialized by a blocked
+        # loop can interleave: both would see no manager and each build one, and
+        # the embedder's vocabulary would be fitted from two threads at once.
+        # Deliberately not the runtime's writer lock, which a teardown can hold
+        # while awaiting these very tasks.
+        self.index_lock = asyncio.Lock()
 
     def track_init_task(self, task: "asyncio.Task[Any]") -> None:
         """Register a background init task and forget it once it finishes.
@@ -178,6 +204,61 @@ class SchemaState:
         self.ontology = OntologyState()
 
 
+class PreparedOntologyCache:
+    """A few ontology extractions, keyed by revision, newest kept.
+
+    Bounded because an extraction of a large ontology is not small and two
+    sessions on one database may hold different ones: a single slot would have
+    them evict each other on every query.
+    """
+
+    def __init__(self, capacity: int = 4) -> None:
+        self._capacity = capacity
+        self._entries: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+        # Read and written from worker threads as well as the loop -- an
+        # ontology is prepared off the loop -- and a get moves an entry while a
+        # put may be evicting one.
+        self._guard = threading.Lock()
+
+    def get(self, key: tuple[Any, ...]) -> Any | None:
+        """The extraction stored under *key*, or None.
+
+        Args:
+            key: The revision identity the extraction was stored under.
+
+        Returns:
+            The prepared ontology, or None if it is not held.
+        """
+        with self._guard:
+            entry = self._entries.get(key)
+            if entry is not None:
+                self._entries.move_to_end(key)
+            return entry
+
+    def put(self, key: tuple[Any, ...], prepared: Any) -> None:
+        """Store an extraction, dropping the least recently used if full.
+
+        Args:
+            key: The revision identity to store it under.
+            prepared: The prepared ontology.
+        """
+        with self._guard:
+            self._entries[key] = prepared
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._capacity:
+                self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        """Drop every held extraction."""
+        with self._guard:
+            self._entries.clear()
+
+    def __len__(self) -> int:
+        """How many extractions are held."""
+        with self._guard:
+            return len(self._entries)
+
+
 class ConnectionRuntime:
     """Facts about one database, shared by every session connected to it.
 
@@ -213,6 +294,13 @@ class ConnectionRuntime:
         # parsed ontology is large and the next call almost always wants the
         # same one.
         self.ontology_review: tuple[tuple[str, int, int], Any] | None = None
+        # What OBQC extracts from an ontology, keyed by which ontology it was
+        # and the base URI it was read under. The extraction is the same for
+        # every session and every query -- 930ms of parsing and extracting at
+        # 300 tables, against 89ms when the graph is already in memory -- while
+        # the validator built from it stays per session, because its views and
+        # its per-query state are a user's.
+        self.obqc_prepared: PreparedOntologyCache = PreparedOntologyCache()
 
         # Serializes the tools that rewrite this state or the connection's
         # workspace on disk, which every session on the database shares
@@ -236,6 +324,16 @@ class SessionData:
         self.connection = ConnectionState()
         self.schema_cache = SchemaCache()
         self.rdf_store = RDFStoreState()
+
+        # Held while this session is rebound to a database, and while any of its
+        # tools publishes into the database it is bound to. Without it a
+        # `connect_database` could land between a tool's await and its write,
+        # and the write would reach whichever database the session had moved
+        # to -- another database's cache, workspace, RDF store and GraphRAG,
+        # shared with every session on it. The runtime's writer lock cannot
+        # prevent that: it belongs to the runtime being written, and a rebind
+        # makes it a different runtime. Not reentrant: take it once per call.
+        self.binding_lock = asyncio.Lock()
 
         # Shared per-connection state, once ServerState has bound this session
         # to it. Unbound (tests, no registry) the session owns private copies.
@@ -547,6 +645,10 @@ class SessionData:
     def get_cached_views(self, schema_name: str) -> list[Any]:
         """Get cached views, or an empty list when none were discovered."""
         return self.schema_cache.get_cached_views(schema_name)
+
+    def has_cached_views(self, schema_name: str) -> bool:
+        """Whether views were ever discovered for *schema_name*."""
+        return self.schema_cache.has_cached_views(schema_name)
 
     def get_all_cached_views(self) -> list[Any]:
         """Every discovered view across all schemas on this connection."""

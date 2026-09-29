@@ -32,6 +32,11 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on one write, whatever the client reports. ChromaDB 1.5 allows
+# 5,461; capping below it keeps the payload of a single call modest and leaves
+# room for a build that reports a larger figure than it can hold.
+DEFAULT_MAX_WRITE_BATCH = 2000
+
 # Every element_type the store can hold. Keep in step with the embedder's
 # create_*_embedding methods -- get_statistics() reports a per-type breakdown
 # and anything missing here is silently absent from it.
@@ -198,7 +203,9 @@ class ChromaDBVectorStore:
             else:
                 embedding = embedding[: self.dimension]
 
-        # Add to ChromaDB
+        # add, deliberately: this is the first-write-wins half of a documented
+        # pair, and upsert_element is the half that replaces. The batch path
+        # below is the one discovery uses, and that one must replace.
         try:
             self.collection.add(
                 ids=[element_id],
@@ -263,7 +270,7 @@ class ChromaDBVectorStore:
 
     def add_elements_batch(self, elements: list[Any]) -> None:
         """
-        Add multiple schema elements in batch.
+        Store multiple schema elements in batch, replacing any already held.
 
         Args:
             elements: List of SchemaElement objects from embedder
@@ -305,13 +312,87 @@ class ChromaDBVectorStore:
             embeddings.append(embedding.tolist())
             metadatas.append(chroma_metadata)
 
-        # Batch add to ChromaDB
+        # Upsert for the same reason as add_element: this is the path
+        # discover_schema takes, and it runs again every time a schema is
+        # rediscovered.
+        #
+        # In chunks the backend accepts. A wide schema reaches thousands of
+        # elements -- 500 tables of 20 columns is over 10,000 -- and ChromaDB
+        # refuses a single write past its own maximum, so one call would have
+        # failed on exactly the schemas that need the index most.
+        batch_size = self._max_write_batch()
         try:
-            self.collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas)
-            logger.info(f"Added {len(elements)} elements to ChromaDB vector store")
+            for start in range(0, len(ids), batch_size):
+                stop = start + batch_size
+                self.collection.upsert(
+                    ids=ids[start:stop],
+                    embeddings=embeddings[start:stop],
+                    metadatas=metadatas[start:stop],
+                )
+            logger.info(f"Stored {len(elements)} elements in ChromaDB vector store")
         except Exception as e:
-            logger.error(f"Failed to batch add elements: {e}")
+            logger.error(f"Failed to store elements: {e}")
             raise
+
+    def _max_write_batch(self) -> int:
+        """How many elements the client accepts in one write.
+
+        Returns:
+            The client's own maximum, or a conservative default if this
+            ChromaDB build does not report one.
+        """
+        try:
+            reported = int(self.client.get_max_batch_size())
+        except Exception as e:  # pragma: no cover - build without the method
+            logger.debug(f"ChromaDB did not report a maximum batch size: {e}")
+            return DEFAULT_MAX_WRITE_BATCH
+        return max(1, min(reported, DEFAULT_MAX_WRITE_BATCH))
+
+    def delete_tables(self, table_names: list[str]) -> int:
+        """Remove everything indexed for the given tables.
+
+        A table dropped from the database kept its vectors forever: nothing
+        here could delete, only add and replace. It stayed in every search
+        result, describing an object a query can no longer name.
+
+        Found by identity and by metadata rather than by guessing ids: the
+        table element is its own name, columns record the table they belong to,
+        and relationships record both ends. Semantic context is deliberately
+        left alone -- a person wrote it, and rediscovery is not the moment to
+        delete what they wrote.
+
+        Args:
+            table_names: Tables whose elements should go.
+
+        Returns:
+            How many elements were deleted.
+        """
+        if not table_names:
+            return 0
+
+        before = self.collection.count()
+        try:
+            for start in range(0, len(table_names), self._max_write_batch()):
+                batch = table_names[start : start + self._max_write_batch()]
+                # The tables themselves, by id.
+                self.collection.delete(ids=batch)
+                # Their columns, and the relationships at either end.
+                for clause in (
+                    {"table": {"$in": batch}},
+                    {"from_table": {"$in": batch}},
+                    {"to_table": {"$in": batch}},
+                ):
+                    self.collection.delete(where=clause)  # type: ignore[arg-type]
+        except Exception as e:
+            logger.error(f"Failed to delete elements for dropped tables: {e}")
+            raise
+
+        deleted = before - self.collection.count()
+        if deleted:
+            logger.info(
+                f"Deleted {deleted} elements for {len(table_names)} dropped table(s)"
+            )
+        return deleted
 
     def build_index(self) -> None:
         """Build the search index - no-op for ChromaDB (auto-indexed)."""
@@ -641,9 +722,12 @@ class ChromaDBVectorStore:
                 embeddings.append(elem_dict["embedding"])
                 metadatas.append(chroma_metadata)
 
-            # Batch add
+            # Upsert, so restoring over a collection that already holds some
+            # of these ids replaces them rather than keeping what was there.
             if ids:
-                self.collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas)
+                self.collection.upsert(
+                    ids=ids, embeddings=embeddings, metadatas=metadatas
+                )
 
             logger.info(
                 f"Imported ChromaDB vector store ({len(ids)} elements) from {filepath}"

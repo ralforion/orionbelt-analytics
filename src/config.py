@@ -80,6 +80,71 @@ def resolve_mcp_cache_ttl() -> int:
     return ttl
 
 
+DEFAULT_METADATA_CACHE_TTL_SECONDS = 300
+
+
+def resolve_metadata_cache_ttl() -> int:
+    """How long the database's own metadata may be reused, in seconds.
+
+    Its own setting, not the session idle timeout: how fast a *database's*
+    tables change has nothing to do with how long a *client* sits idle. A
+    development database that gains columns every few minutes wants a short
+    one; a warehouse whose schema changes quarterly can hold it for hours and
+    save the reflection.
+
+    A manual ``reset_cache`` is immediate whatever this says.
+
+    Returns:
+        Seconds to keep a metadata answer; 0 disables reuse entirely, and
+        anything unreadable keeps the default.
+    """
+    raw = os.getenv("METADATA_CACHE_TTL_SECONDS")
+    if raw is None or not raw.strip():
+        return DEFAULT_METADATA_CACHE_TTL_SECONDS
+    try:
+        ttl = int(raw)
+    except ValueError:
+        ttl = -1
+    if ttl < 0:
+        logger.warning(
+            f"Invalid METADATA_CACHE_TTL_SECONDS='{raw}'. Must be a whole "
+            f"number of seconds, 0 to disable reuse. Defaulting to "
+            f"{DEFAULT_METADATA_CACHE_TTL_SECONDS}."
+        )
+        return DEFAULT_METADATA_CACHE_TTL_SECONDS
+    return ttl
+
+
+DEFAULT_DB_MAX_QUEUED_CALLS = 32
+
+
+def resolve_db_max_queued_calls() -> int:
+    """How many calls may wait for one database connection at a time.
+
+    Calls on a connection run one after another -- an in-memory DuckDB engine
+    shares a single connection, and the order a blocked event loop used to give
+    is kept everywhere. This bounds the line behind a slow call.
+
+    Returns:
+        The most calls allowed to wait; 0 lets the line grow without bound,
+        and anything unreadable keeps the default.
+    """
+    raw = os.getenv("DB_MAX_QUEUED_CALLS")
+    if raw is None or not raw.strip():
+        return DEFAULT_DB_MAX_QUEUED_CALLS
+    try:
+        bound = int(raw)
+    except ValueError:
+        bound = -1
+    if bound < 0:
+        logger.warning(
+            f"Invalid DB_MAX_QUEUED_CALLS='{raw}'. Must be a whole number, 0 for "
+            f"no bound. Defaulting to {DEFAULT_DB_MAX_QUEUED_CALLS}."
+        )
+        return DEFAULT_DB_MAX_QUEUED_CALLS
+    return bound
+
+
 SESSIONLESS_FALLBACKS = ("sole_session", "none")
 
 

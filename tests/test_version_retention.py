@@ -898,6 +898,10 @@ def _fake_manager(schemas: list[str], payload: str = "{}"):
     manager.community_detector = None
     manager.vector_store = mock.Mock()
     manager.vector_store.save.side_effect = lambda p: Path(p).write_text(payload)
+    # save_state also writes the vocabulary its vectors were made against;
+    # this manager has no embedder, which is the "nothing to save" case.
+    manager.embedder = mock.Mock()
+    manager.embedder.vocabulary_state.return_value = None
     return manager
 
 
@@ -988,6 +992,11 @@ async def test_discover_schema_records_a_version(tmp_path, monkeypatch):
         foreign_keys=[],
         row_count=1,
     )
+    db.analyze_tables.side_effect = lambda names, schema=None: {
+        name: info
+        for name in names
+        if (info := db.analyze_table(name, schema)) is not None
+    }
 
     ctx = Mock()
     ctx.info = AsyncMock()

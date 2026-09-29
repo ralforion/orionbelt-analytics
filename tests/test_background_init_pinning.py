@@ -86,7 +86,7 @@ async def test_graphrag_init_lands_in_the_database_it_was_started_for(
             self.vector_store = Mock()
             self.vector_store.get_statistics.return_value = {"total_elements": 1}
 
-        def initialize_from_schema(self, **_kwargs):
+        async def aindex_schema(self, **_kwargs):
             pass
 
         def save_state(self, *_args):
@@ -234,7 +234,7 @@ async def test_the_chained_ontology_stays_with_the_old_database_too(
             self.vector_store = Mock()
             self.vector_store.get_statistics.return_value = {"total_elements": 1}
 
-        def initialize_from_schema(self, **_kwargs):
+        async def aindex_schema(self, **_kwargs):
             pass
 
         def save_state(self, *_args):

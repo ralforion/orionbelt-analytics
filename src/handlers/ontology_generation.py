@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..constants import DB_SQLGLOT_DIALECTS
 from ..database_manager import ColumnInfo, TableInfo
 from ..graphrag.manager import _annotate_view_sources
@@ -25,11 +26,21 @@ from ..lifecycle.metadata import (
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..utils import notify_client, utc_now, write_text_file
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _views_for_ontology(session: Any, schema_name: str | None) -> list[Any]:
+def _views_for_ontology(
+    session: Any,
+    schema_name: str | None,
+    views: list[Any] | None = None,
+    db_type: str | None = None,
+) -> list[Any]:
     """Discovered views for *schema_name*, with their lineage resolved.
 
     Lineage is filled in here rather than at discovery because it is only the
@@ -44,20 +55,24 @@ def _views_for_ontology(session: Any, schema_name: str | None) -> list[Any]:
     Args:
         session: The session holding the discovery cache.
         schema_name: Schema being generated, or None for the default.
+        views: Views captured earlier, used instead of the session's cache.
+            Background work passes what it was started with, because by the
+            time it runs the session may be on another database.
+        db_type: The database type those views came from, likewise.
 
     Returns:
         ViewInfo objects, empty when nothing was discovered or resolution
         failed.
     """
     try:
-        views = session.get_cached_views(schema_name or "")
+        if views is None:
+            views = session.get_cached_views(schema_name or "")
         if not views:
             return []
 
-        dialect = None
-        if getattr(session, "db_manager", None) is not None:
+        if db_type is None and getattr(session, "db_manager", None) is not None:
             db_type = session.db_manager.connection_info.get("type")
-            dialect = DB_SQLGLOT_DIALECTS.get(db_type) if db_type else None
+        dialect = DB_SQLGLOT_DIALECTS.get(db_type) if db_type else None
 
         annotated = _annotate_view_sources(
             [{"name": v.name, "definition": v.definition} for v in views],
@@ -158,6 +173,9 @@ async def generate_ontology(
     """
     # Resolve effective schema and set current schema for state isolation
     session = services.get_session_data(ctx)
+    # Generation awaits a worker before it writes anything; a reconnect in
+    # between must not receive this database's ontology.
+    pinned = pin_connection(session)
     effective_schema_for_state = schema_name
     if not effective_schema_for_state:
         effective_schema_for_state = session.get_last_analyzed_schema()
@@ -272,22 +290,29 @@ async def generate_ontology(
                 return err
 
             try:
-                tables = db_manager.get_tables(schema_name)
+                tables = await run_db(db_manager.get_tables, schema_name)
                 logger.info(
                     f"Found {len(tables)} tables in schema '{schema_name or 'default'}': {tables}"
                 )
 
                 if schema_name:
-                    db_manager.prefetch_schema_constraints(schema_name)
+                    await run_db(db_manager.prefetch_schema_constraints, schema_name)
 
-                for table_name in tables:
-                    try:
-                        table_info = db_manager.analyze_table(table_name, schema_name)
-                        if table_info:
-                            tables_info.append(table_info)
-                    except Exception as e:
-                        logger.error(f"Failed to analyze table {table_name}: {e}")
+                analyzed = await run_db(db_manager.analyze_tables, tables, schema_name)
+                tables_info.extend(
+                    analyzed[name] for name in tables if name in analyzed
+                )
 
+                # The cache is the runtime's, shared by every session on the
+                # database. Reflection ran in a worker; a reconnect meanwhile
+                # would put this database's tables in another one's cache.
+                if not still_connected(session, pinned):
+                    return connection_changed_response(
+                        services,
+                        f"schema '{schema_name or 'default'}' was being "
+                        f"analyzed for an ontology",
+                        "generate_ontology()",
+                    )
                 session.cache_schema_analysis(schema_name or "", tables_info)
 
             except Exception as e:
@@ -349,11 +374,18 @@ async def generate_ontology(
 
     # Save ontology to connection-scoped output folder
     ontology_filename = None
+    session = services.get_session_data(ctx)
+    if not still_connected(session, pinned):
+        return connection_changed_response(
+            services,
+            f"the ontology for schema '{schema_name or 'default'}' was being "
+            f"generated",
+            "generate_ontology()",
+        )
     try:
-        session = services.get_session_data(ctx)
         conn_dir = (
-            get_connection_dir(session.connection_id)
-            if session.connection_id
+            get_connection_dir(pinned.connection_id)
+            if pinned.connection_id
             else ensure_output_dir()
         )
 
@@ -364,7 +396,7 @@ async def generate_ontology(
         # otherwise each write a file, and the loser's prune would delete the
         # winner's just-written artifact.
         async with artifact_family_lock(
-            conn_dir, f"ontology_{session.connection_id or 'default'}_{schema_safe}"
+            conn_dir, f"ontology_{pinned.connection_id or 'default'}_{schema_safe}"
         ):
             ontology_filename = (
                 services.get_session_safe_filename(ctx, "ontology", schema_safe)
@@ -379,15 +411,38 @@ async def generate_ontology(
             )
             logger.info(f"Saved ontology to: {ontology_file_path}")
 
+            # The write above was an await. The file is in the right workspace
+            # either way; the session only adopts it if it is still there.
+            if not still_connected(session, pinned):
+                return connection_changed_response(
+                    services,
+                    f"the ontology for schema '{schema_name or 'default'}' was "
+                    f"being written",
+                    "generate_ontology()",
+                )
             previous_ontology_file = session.ontology_file
             session.ontology_file = ontology_filename
             session.obqc_validator = None
 
+            # The graph that produced this file is still in memory. Extract
+            # OBQC's view of it now, under the writer lock, rather than having
+            # the first query parse the Turtle back (930ms at 300 tables).
+            if services.provides("remember_prepared_ontology"):
+                await asyncio.to_thread(
+                    partial(
+                        services.remember_prepared_ontology,
+                        session,
+                        generator.graph,
+                        base_uri,
+                        path=ontology_file_path,
+                    )
+                )
+
             # Write workspace metadata for ontology section
-            if session.connection_id:
+            if pinned.connection_id:
                 try:
                     await update_workspace_section(
-                        connection_id=session.connection_id,
+                        connection_id=pinned.connection_id,
                         output_dir=OUTPUT_DIR,
                         schema_name=schema_name or "default",
                         section="ontology",
@@ -404,7 +459,7 @@ async def generate_ontology(
                     # from. The triple count is not known until the RDF load
                     # below, so it is filled in there against the same version.
                     await update_schema_version(
-                        connection_id=session.connection_id,
+                        connection_id=pinned.connection_id,
                         output_dir=OUTPUT_DIR,
                         schema_name=schema_name or "default",
                         updates={

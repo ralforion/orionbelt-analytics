@@ -24,6 +24,7 @@ class ErrorType(StrEnum):
     OBQC = "obqc_error"
     SESSION = "session_required"
     UNKNOWN_CONNECTION = "unknown_connection"
+    BUSY = "connection_busy"
 
 
 class OrionBeltError(Exception):
@@ -108,3 +109,15 @@ class DependencyError(OrionBeltError):
     """Missing optional dependency."""
 
     error_type = ErrorType.DEPENDENCY
+
+
+class ConnectionBusyError(OrionBeltError):
+    """Too many calls are already waiting on one database connection.
+
+    Calls on a connection run one at a time, so a slow query holds everything
+    queued behind it. Without a bound, a burst of requests queued without
+    limit -- each one a tool call nobody hears back from until the whole queue
+    ahead of it drains. Refusing at the door is the answer a caller can act on.
+    """
+
+    error_type = ErrorType.BUSY

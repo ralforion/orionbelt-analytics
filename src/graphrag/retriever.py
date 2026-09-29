@@ -24,6 +24,104 @@ class GraphRetriever:
         """Initialize the graph retriever."""
         self.graph = nx.DiGraph()
         self._tables_info: dict[str, dict[str, Any]] = {}
+        # Which tables each schema reported, kept apart from _tables_info.
+        # Nodes are keyed by bare name, so a table of the same name in a second
+        # schema overwrites the first one's record and the fact that the first
+        # schema also holds it would be lost -- which is how a rediscovery of
+        # one schema came to delete another's table. Membership is recorded per
+        # schema so that question can still be answered.
+        self._schema_tables: dict[str | None, set[str]] = {}
+        # Bumped by every method that changes the graph, so the undirected
+        # snapshot below can tell whether it is still current.
+        self._generation = 0
+        self._undirected: tuple[int, nx.Graph] | None = None
+
+    def tables_of_schema(self, schema_name: str | None) -> set[str]:
+        """Which tables *schema_name* reported the last time it was discovered.
+
+        Args:
+            schema_name: The schema to ask about.
+
+        Returns:
+            The table names it reported.
+        """
+        return set(self._schema_tables.get(schema_name, set()))
+
+    def tables_claimed_elsewhere(
+        self, schema_name: str | None, table_names: set[str]
+    ) -> set[str]:
+        """Which of *table_names* another schema also reported.
+
+        A node is one bare name shared by every schema that has a table of that
+        name, so removing it on one schema's behalf would take the others' with
+        it.
+
+        Args:
+            schema_name: The schema asking.
+            table_names: Names it no longer reports.
+
+        Returns:
+            The subset another schema still claims.
+        """
+        claimed: set[str] = set()
+        for other, tables in self._schema_tables.items():
+            if other == schema_name:
+                continue
+            claimed |= table_names & tables
+        return claimed
+
+    def remove_tables(self, table_names: set[str] | list[str]) -> int:
+        """Remove tables, and every relationship that touched them.
+
+        A table dropped from the database kept its node and its edges, so join
+        paths were still offered through a table SQL can no longer name.
+
+        Args:
+            table_names: Tables to remove.
+
+        Returns:
+            How many nodes were removed.
+        """
+        removed = 0
+        for name in table_names:
+            self._tables_info.pop(name, None)
+            for tables in self._schema_tables.values():
+                tables.discard(name)
+            if name in self.graph:
+                self.graph.remove_node(name)  # takes its edges with it
+                removed += 1
+        if removed:
+            self._graph_changed()
+            logger.info(f"Removed {removed} dropped table(s) from the graph")
+        return removed
+
+    def _graph_changed(self) -> None:
+        """Record that the graph is no longer what the snapshot was taken from."""
+        self._generation += 1
+        self._undirected = None
+
+    def _undirected_snapshot(self) -> nx.Graph:
+        """An undirected copy of the graph, reused until the graph changes.
+
+        Join lookups need an undirected reading, because a path may cross a
+        foreign key against its direction. Converting copies every node and
+        edge, which was paid per lookup: roughly 1ms on 400 tables and 2.6ms on
+        1,000, against 0.03ms and 0.06ms for reusing one.
+
+        A copy rather than ``to_undirected(as_view=True)``: a view reflects
+        later changes to the graph it was taken from, which is the opposite of
+        what a snapshot keyed to a generation means. Callers read it and must
+        not modify it.
+
+        Returns:
+            The undirected form of the current graph.
+        """
+        cached = self._undirected
+        if cached is not None and cached[0] == self._generation:
+            return cached[1]
+        snapshot = self.graph.to_undirected()
+        self._undirected = (self._generation, snapshot)
+        return snapshot
 
     def build_graph(self, tables_info: list[dict[str, Any]]) -> None:
         """
@@ -32,13 +130,19 @@ class GraphRetriever:
         Args:
             tables_info: List of table metadata with columns and foreign keys
         """
+        # Before and after: a build that raises midway must not leave a
+        # snapshot of the graph as it was, still matching the generation.
+        self._graph_changed()
         self.graph.clear()
         self._tables_info = {}
+        # A rebuild replaces everything, membership included.
+        self._schema_tables = {}
 
         # Add nodes (tables)
         for table in tables_info:
             table_name = table["name"]
             self._tables_info[table_name] = table
+            self._schema_tables.setdefault(table.get("schema"), set()).add(table_name)
 
             self.graph.add_node(
                 table_name,
@@ -64,6 +168,7 @@ class GraphRetriever:
                         referenced_column=fk["referenced_column"],
                     )
 
+        self._graph_changed()
         logger.info(
             f"Built graph with {self.graph.number_of_nodes()} nodes "
             f"and {self.graph.number_of_edges()} edges"
@@ -78,12 +183,26 @@ class GraphRetriever:
         Args:
             tables_info: List of table metadata with columns and foreign keys
         """
+        self._graph_changed()
         added_nodes = 0
         added_edges = 0
+
+        # Read before the loop below overwrites it: which schema each name was
+        # last discovered under decides whether this discovery owns its edges.
+        schema_before = {
+            name: (info or {}).get("schema") for name, info in self._tables_info.items()
+        }
+
+        # A schema in this batch reports its whole table set, so its membership
+        # is replaced rather than added to: that is what makes a table missing
+        # from a rediscovery a dropped table rather than an unmentioned one.
+        for schema in {table.get("schema") for table in tables_info}:
+            self._schema_tables[schema] = set()
 
         for table in tables_info:
             table_name = table["name"]
             self._tables_info[table_name] = table
+            self._schema_tables.setdefault(table.get("schema"), set()).add(table_name)
 
             if table_name not in self.graph:
                 added_nodes += 1
@@ -94,6 +213,39 @@ class GraphRetriever:
                 has_comment=bool(table.get("comment")),
                 comment=table.get("comment", ""),
             )
+
+        # A table's foreign keys are replaced, not merged. Rediscovery is what
+        # happens after a schema changes, and a constraint dropped there used
+        # to keep its edge forever -- so join paths were still offered through
+        # a relationship the database no longer has. Only edges this discovery
+        # is responsible for are removed: foreign keys leaving the tables in
+        # this batch. Edges from tables in other schemas, and anything not
+        # recorded as a foreign key, are left alone.
+        # Nodes are keyed by bare table name, so two schemas holding a table of
+        # the same name share one node. Replacing edges there would delete the
+        # other schema's relationships, which is worse than the stale edge this
+        # replacement exists to remove. Until identity is qualified, a name last
+        # discovered under a different schema keeps what it has.
+        removed_edges = 0
+        for table in tables_info:
+            table_name = table["name"]
+            if table_name not in self.graph:
+                continue
+            previous_schema = schema_before.get(table_name)
+            if previous_schema is not None and previous_schema != table.get("schema"):
+                logger.debug(
+                    f"Keeping relationships of '{table_name}': last discovered "
+                    f"under schema '{previous_schema}', now seen under "
+                    f"'{table.get('schema')}'"
+                )
+                continue
+            stale = [
+                (table_name, referenced)
+                for _, referenced, data in self.graph.out_edges(table_name, data=True)
+                if data.get("edge_type") == "foreign_key"
+            ]
+            self.graph.remove_edges_from(stale)
+            removed_edges += len(stale)
 
         for table in tables_info:
             table_name = table["name"]
@@ -110,9 +262,11 @@ class GraphRetriever:
                         referenced_column=fk["referenced_column"],
                     )
 
+        self._graph_changed()
         logger.info(
             f"Added to graph: +{added_nodes} nodes, +{added_edges} edges "
-            f"(total: {self.graph.number_of_nodes()} nodes, "
+            f"(-{removed_edges} replaced foreign keys; total: "
+            f"{self.graph.number_of_nodes()} nodes, "
             f"{self.graph.number_of_edges()} edges)"
         )
 
@@ -178,7 +332,7 @@ class GraphRetriever:
         chosen_tables = [from_table, *(join["to_table"] for join in chosen)]
         alternatives: list[list[dict[str, Any]]] = []
         try:
-            undirected = self.graph.to_undirected()
+            undirected = self._undirected_snapshot()
             for path in nx.all_shortest_paths(
                 undirected, source=from_table, target=to_table
             ):
@@ -227,7 +381,7 @@ class GraphRetriever:
 
             # Try undirected view for mixed-direction paths
             try:
-                undirected_graph = self.graph.to_undirected()
+                undirected_graph = self._undirected_snapshot()
                 path_undirected = nx.shortest_path(
                     undirected_graph, source=from_table, target=to_table
                 )
@@ -443,7 +597,7 @@ class GraphRetriever:
             Summary dictionary
         """
         # Find central tables (high degree centrality)
-        centrality = nx.degree_centrality(self.graph.to_undirected())
+        centrality = nx.degree_centrality(self._undirected_snapshot())
         top_central = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:5]
 
         # Find hub tables (many outgoing FKs)

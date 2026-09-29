@@ -8,6 +8,7 @@ from typing import Any
 
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..handler_context import HandlerContext
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import (
@@ -18,6 +19,12 @@ from ..lifecycle.metadata import (
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..r2rml_generator import R2RMLGenerator
 from ..utils import notify_client, utc_now, write_json_file, write_text_file
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
+from .graphrag import _Pinned
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +110,14 @@ async def reset_cache(
         session.schema_file = None
         session.r2rml_file = None
         cleared.append("schema")
+
+        # And the database metadata behind it. The manager holds table and view
+        # lists for five minutes, so resetting only the session's copy left the
+        # next discovery reading the same stale list this call exists to drop.
+        if session.db_manager is not None:
+            dropped = session.db_manager.clear_metadata_cache()
+            if dropped:
+                cleared.append(f"database metadata ({dropped} entries)")
 
     if cache_type_lower in ("ontology", "all"):
         session.ontology_file = None
@@ -220,6 +235,7 @@ async def discover_schema(
                     ctx=ctx,
                     version=cached_version,
                     views_info=session.get_cached_views(effective_schema or ""),
+                    pinned=_Pinned(session),
                 )
             )
             session.graphrag.track_init_task(task)
@@ -265,24 +281,33 @@ async def discover_schema(
             return result
 
     db_manager = services.get_session_db_manager(ctx)
-    tables = db_manager.get_tables(schema_name)
+    # Everything below runs in workers, and a reconnect in between would make
+    # these results describe a database the session has left.
+    pinned = pin_connection(session)
+    tables = await run_db(db_manager.get_tables, schema_name)
 
     # Views are discovered alongside tables but kept apart from them: they are
     # indexed into GraphRAG for search and never enter the ontology, so they
     # are cached separately rather than appended to the table list.
     try:
-        views = db_manager.get_views(schema_name)
+        views = await run_db(db_manager.get_views, schema_name)
         if views:
             logger.info(f"Discovered {len(views)} views in schema {schema_name}")
     except Exception as e:
         # A backend that cannot enumerate views must not fail discovery.
         logger.warning(f"Could not discover views for schema {schema_name}: {e}")
         views = []
+    if not still_connected(session, pinned):
+        return connection_changed_response(
+            services,
+            f"schema '{schema_name or 'default'}' was being analyzed",
+            "discover_schema()",
+        )
     session.cache_views(schema_name or "", views)
 
     # Prefetch PKs and FKs at schema level (Snowflake optimization)
     if schema_name:
-        db_manager.prefetch_schema_constraints(schema_name)
+        await run_db(db_manager.prefetch_schema_constraints, schema_name)
 
     # LIGHTWEIGHT MODE
     if lightweight:
@@ -292,30 +317,39 @@ async def discover_schema(
         relationships = {}
         fan_trap_warnings = []
 
+        # One call for the whole schema, in a worker: reflecting table by
+        # table held the event loop for every round trip of every table, and a
+        # driver that can answer for a schema at once gets to.
+        analyzed = await run_db(db_manager.analyze_tables, tables, schema_name)
+
         for table_name in tables:
-            try:
-                table_info = db_manager.analyze_table(table_name, schema_name)
-                if table_info:
-                    table_info_objects.append(table_info)
+            table_info = analyzed.get(table_name)
+            if not table_info:
+                continue
+            table_info_objects.append(table_info)
 
-                    if table_info.foreign_keys:
-                        relationships[table_name] = table_info.foreign_keys
+            if table_info.foreign_keys:
+                relationships[table_name] = table_info.foreign_keys
 
-                        if len(table_info.foreign_keys) > 1:
-                            referenced_tables = [
-                                fk["referenced_table"] for fk in table_info.foreign_keys
-                            ]
-                            fan_trap_warnings.append(
-                                {
-                                    "table": table_name,
-                                    "warning": f"Table {table_name} connects to multiple tables - potential fan-trap risk",
-                                    "referenced_tables": referenced_tables,
-                                    "recommendation": "Use separate CTEs or UNION approach for multi-fact aggregations",
-                                }
-                            )
-            except Exception as e:
-                logger.warning(f"Failed to analyze table {table_name}: {e}")
+                if len(table_info.foreign_keys) > 1:
+                    referenced_tables = [
+                        fk["referenced_table"] for fk in table_info.foreign_keys
+                    ]
+                    fan_trap_warnings.append(
+                        {
+                            "table": table_name,
+                            "warning": f"Table {table_name} connects to multiple tables - potential fan-trap risk",
+                            "referenced_tables": referenced_tables,
+                            "recommendation": "Use separate CTEs or UNION approach for multi-fact aggregations",
+                        }
+                    )
 
+        if not still_connected(session, pinned):
+            return connection_changed_response(
+                services,
+                f"schema '{schema_name or 'default'}' was being analyzed",
+                "discover_schema()",
+            )
         session.cache_schema_analysis(schema_name or "", table_info_objects)
         logger.info(
             f"Cached {len(table_info_objects)} tables for generate_ontology() reuse"
@@ -365,6 +399,7 @@ async def discover_schema(
                     ctx=ctx,
                     version=schema_version,
                     views_info=views,
+                    pinned=_Pinned(session),
                 )
             )
             session.graphrag.track_init_task(task)
@@ -380,8 +415,9 @@ async def discover_schema(
     # FULL MODE
     all_table_info = []
     table_info_objects = []
+    analyzed = await run_db(db_manager.analyze_tables, tables, schema_name)
     for table_name in tables:
-        table_info = db_manager.analyze_table(table_name, schema_name)
+        table_info = analyzed.get(table_name)
         if table_info:
             table_info_objects.append(table_info)
             table_dict = {
@@ -415,6 +451,12 @@ async def discover_schema(
     }
 
     session = services.get_session_data(ctx)
+    if not still_connected(session, pinned):
+        return connection_changed_response(
+            services,
+            f"schema '{schema_name or 'default'}' was being analyzed",
+            "discover_schema()",
+        )
     session.cache_schema_analysis(schema_name or "", table_info_objects)
 
     # Open the version before GraphRAG is kicked off further down: the
@@ -605,6 +647,7 @@ async def discover_schema(
                     ctx=ctx,
                     version=schema_version,
                     views_info=views,
+                    pinned=_Pinned(session),
                 )
             )
             session = services.get_session_data(ctx)
@@ -702,7 +745,7 @@ async def get_table_details(
     db_manager = services.get_session_db_manager(ctx)
 
     try:
-        table_info = db_manager.analyze_table(table_name, schema_name)
+        table_info = await run_db(db_manager.analyze_table, table_name, schema_name)
 
         if not table_info:
             await notify_client(

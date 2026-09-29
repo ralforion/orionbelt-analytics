@@ -1,6 +1,7 @@
 """GraphRAG initialization and search handler implementations."""
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -9,6 +10,7 @@ from typing import Any, cast
 
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..exceptions import ConnectionError
 from ..graphrag import GraphRAGManager
 from ..handler_context import HandlerContext
@@ -23,6 +25,11 @@ from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..session import GraphRAGState
 from ..utils import notify_client, utc_now, write_text_file
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +51,33 @@ class _Pinned:
         # A test double has no GraphRAGState; its own attributes stand in.
         self.graphrag: Any = state if isinstance(state, GraphRAGState) else session
         self.connection_id: str | None = session.connection_id
+        # The dialect the database speaks, for the chained ontology's view
+        # lineage. Read now for the same reason as the rest: later, the
+        # session's manager may be another database's.
+        manager = getattr(session, "db_manager", None)
+        info = getattr(manager, "connection_info", None)
+        self.db_type: str | None = info.get("type") if isinstance(info, dict) else None
+
+
+def _index_lock(state: Any) -> Any:
+    """The lock that serializes indexing on this connection.
+
+    Embedding runs off the event loop now, so two indexings that a blocked loop
+    used to serialize can interleave: each would find no manager and build one,
+    and the embedder would fit its vocabulary from two threads at once.
+
+    Args:
+        state: The GraphRAGState the work belongs to, or a test double.
+
+    Returns:
+        An async context manager to hold for the whole index step.
+    """
+    lock = getattr(state, "index_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        with contextlib.suppress(AttributeError):  # a read-only double
+            state.index_lock = lock
+    return lock
 
 
 async def _save_graphrag_state(
@@ -139,6 +173,8 @@ async def _auto_generate_ontology_background(
     ctx: Context,
     version: int | None = None,
     connection_id: Any = _FROM_SESSION,
+    views: list[Any] | None = None,
+    db_type: str | None = None,
 ) -> None:
     """Background task: Auto-generate ontology after GraphRAG completes.
 
@@ -172,7 +208,9 @@ async def _auto_generate_ontology_background(
             partial(
                 ontology_generator.generate_from_schema,
                 tables_info,
-                views_info=_views_for_ontology(session, schema_name),
+                views_info=_views_for_ontology(
+                    session, schema_name, views=views, db_type=db_type
+                ),
             )
         )
 
@@ -291,6 +329,7 @@ async def _auto_initialize_graphrag_background(
     ctx: Context,
     version: int | None = None,
     views_info: list[Any] | None = None,
+    pinned: _Pinned | None = None,
 ) -> None:
     """Background task: Auto-initialize or accumulate GraphRAG after schema analysis.
 
@@ -301,34 +340,40 @@ async def _auto_initialize_graphrag_background(
     task. It is threaded through rather than resolved on completion so a
     rediscovery of the same schema mid-run cannot capture this run's output.
     """
-    pinned = _Pinned(session)
+    # Pinned by whoever created this task, while it still held the session's
+    # binding lock. The body of a task runs only when the loop first schedules
+    # it -- after the creating tool has returned and released that lock -- so a
+    # pin taken here could already be the database a `connect_database` queued
+    # behind the tool had moved the session to.
+    pinned = pinned or _Pinned(session)
     graphrag = pinned.graphrag
     try:
         start_time = time.time()
         tables_dict = [_table_info_to_dict(t) for t in tables_info]
         views_dict = [_view_info_to_dict(v) for v in views_info or []]
 
-        if graphrag.graphrag_manager is None:
-            # First schema — initialize from scratch
-            logger.info(f"Initializing GraphRAG for schema '{schema_name}'...")
-            graphrag.graphrag_manager = GraphRAGManager(
-                connection_id=pinned.connection_id,
-                schema_name=schema_name,
-            )
-            graphrag.graphrag_manager.initialize_from_schema(
+        # Held across the whole step: the decision to create a manager and the
+        # writes that follow the off-loop embedding must not interleave with
+        # another schema's indexing on this connection.
+        async with _index_lock(graphrag):
+            accumulate = graphrag.graphrag_manager is not None
+            if not accumulate:
+                # First schema — initialize from scratch
+                logger.info(f"Initializing GraphRAG for schema '{schema_name}'...")
+                graphrag.graphrag_manager = GraphRAGManager(
+                    connection_id=pinned.connection_id,
+                    schema_name=schema_name,
+                )
+            else:
+                # Additional schema — accumulate into existing graph
+                logger.info(
+                    f"Accumulating schema '{schema_name}' into existing GraphRAG..."
+                )
+            await graphrag.graphrag_manager.aindex_schema(
                 tables_info=tables_dict,
                 schema_name=schema_name,
                 views_info=views_dict,
-            )
-        else:
-            # Additional schema — accumulate into existing graph
-            logger.info(
-                f"Accumulating schema '{schema_name}' into existing GraphRAG..."
-            )
-            graphrag.graphrag_manager.accumulate_schema(
-                tables_info=tables_dict,
-                schema_name=schema_name,
-                views_info=views_dict,
+                accumulate=accumulate,
             )
 
         await _save_graphrag_state(session, schema_name, version, pinned=pinned)
@@ -374,6 +419,10 @@ async def _auto_initialize_graphrag_background(
                 ctx=ctx,
                 version=version,
                 connection_id=pinned.connection_id,
+                # Not re-read from the session: by now it may hold another
+                # database's views, and speak another dialect.
+                views=views_info,
+                db_type=pinned.db_type,
             )
 
     except Exception as e:
@@ -401,6 +450,12 @@ async def initialize_graphrag(
             ).to_response(),
         )
 
+    # Reflection, the view fetch and embedding all await. The session's cache
+    # and GraphRAG are the runtime's, shared by every session on the database,
+    # so what this computes is published only into the runtime it came from.
+    pinned = pin_connection(session)
+    graph_pin = _Pinned(session)
+
     effective_schema = schema_name
     if not effective_schema:
         effective_schema = session.get_last_analyzed_schema()
@@ -414,23 +469,27 @@ async def initialize_graphrag(
 
     if not tables_info:
         try:
-            tables = db_manager.get_tables(effective_schema)
+            tables = await run_db(db_manager.get_tables, effective_schema)
             logger.info(
                 f"Found {len(tables)} tables in schema '{effective_schema or 'default'}'"
             )
 
             if effective_schema:
-                db_manager.prefetch_schema_constraints(effective_schema)
+                await run_db(db_manager.prefetch_schema_constraints, effective_schema)
 
-            tables_info = []
-            for table_name in tables:
-                try:
-                    table_info = db_manager.analyze_table(table_name, effective_schema)
-                    if table_info:
-                        tables_info.append(table_info)
-                except Exception as e:
-                    logger.error(f"Failed to analyze table {table_name}: {e}")
+            analyzed = await run_db(db_manager.analyze_tables, tables, effective_schema)
+            tables_info = [analyzed[name] for name in tables if name in analyzed]
 
+            if not still_connected(session, pinned):
+                return cast(
+                    str,
+                    connection_changed_response(
+                        services,
+                        f"schema '{effective_schema or 'default'}' was being "
+                        "analyzed",
+                        "initialize_graphrag()",
+                    ),
+                )
             session.cache_schema_analysis(effective_schema or "", tables_info)
 
         except Exception as e:
@@ -457,12 +516,22 @@ async def initialize_graphrag(
     # this tool is the entry point -- which it is whenever AUTO_GRAPHRAG is
     # false or a client calls it directly. Without this the manual path
     # indexes tables only, and views reach GraphRAG on the auto path alone.
-    views_info = session.get_cached_views(effective_schema or "")
-    if not views_info:
+    # Asked by "was this discovered?", not "is it non-empty?": a schema with no
+    # views read the same as one nobody had looked at, so every call went back
+    # to the database. The empty answer is cached for the same reason.
+    if session.has_cached_views(effective_schema or ""):
+        views_info = session.get_cached_views(effective_schema or "")
+    else:
         try:
-            views_info = db_manager.get_views(effective_schema)
-            if views_info:
-                session.cache_views(effective_schema or "", views_info)
+            views_info = await run_db(db_manager.get_views, effective_schema)
+            if not still_connected(session, pinned):
+                return cast(
+                    str,
+                    connection_changed_response(
+                        services, "views were being read", "initialize_graphrag()"
+                    ),
+                )
+            session.cache_views(effective_schema or "", views_info)
         except Exception as e:
             logger.warning(f"Could not fetch views for GraphRAG: {e}")
             views_info = []
@@ -473,48 +542,50 @@ async def initialize_graphrag(
     # Bound to the generation current when this call started; embedding a large
     # schema is slow enough for a rediscovery to land before it finishes.
     target_version: int | None = None
-    if session.connection_id:
+    if graph_pin.connection_id:
         try:
             target_version = await get_active_version_number(
-                session.connection_id, OUTPUT_DIR, eff_schema
+                graph_pin.connection_id, OUTPUT_DIR, eff_schema
             )
         except Exception as e:
             logger.warning(f"Failed to read active version: {e}")
 
     try:
-        if session.graphrag_manager is None:
-            session.graphrag_manager = GraphRAGManager(
-                embedding_model=embedding_model,
-                embedding_dimension=384,
-                connection_id=session.connection_id,
-                schema_name=eff_schema,
-            )
-            session.graphrag_manager.initialize_from_schema(
+        async with _index_lock(graph_pin.graphrag):
+            accumulate = graph_pin.graphrag.graphrag_manager is not None
+            if not accumulate:
+                graph_pin.graphrag.graphrag_manager = GraphRAGManager(
+                    embedding_model=embedding_model,
+                    embedding_dimension=384,
+                    connection_id=graph_pin.connection_id,
+                    schema_name=eff_schema,
+                )
+            await graph_pin.graphrag.graphrag_manager.aindex_schema(
                 tables_info=tables_dict,
                 schema_name=eff_schema,
                 views_info=views_dict,
-            )
-        else:
-            # Accumulate into existing graph
-            session.graphrag_manager.accumulate_schema(
-                tables_info=tables_dict,
-                schema_name=eff_schema,
-                views_info=views_dict,
+                accumulate=accumulate,
             )
 
-        session.graphrag_initialized = True
+        graph_pin.graphrag.graphrag_initialized = True
 
-        await _save_graphrag_state(session, eff_schema, target_version)
+        await _save_graphrag_state(
+            session, eff_schema, target_version, pinned=graph_pin
+        )
 
-        total_tables = session.graphrag_manager.graph_retriever.graph.number_of_nodes()
-        schemas = session.graphrag_manager._schema_names
+        total_tables = (
+            graph_pin.graphrag.graphrag_manager.graph_retriever.graph.number_of_nodes()
+        )
+        schemas = graph_pin.graphrag.graphrag_manager._schema_names
 
         # Write workspace metadata for graphrag section
-        if session.connection_id:
+        if graph_pin.connection_id:
             try:
-                stats = session.graphrag_manager.vector_store.get_statistics()
+                stats = (
+                    graph_pin.graphrag.graphrag_manager.vector_store.get_statistics()
+                )
                 await update_workspace_section(
-                    connection_id=session.connection_id,
+                    connection_id=graph_pin.connection_id,
                     output_dir=OUTPUT_DIR,
                     schema_name=eff_schema,
                     section="graphrag",
@@ -528,6 +599,19 @@ async def initialize_graphrag(
                 )
             except Exception as e:
                 logger.warning(f"Failed to write workspace metadata: {e}")
+
+        # The index went into the database it was built from. If the session
+        # has moved on meanwhile, saying "initialized" would describe the wrong
+        # database to the caller.
+        if not still_connected(session, pinned):
+            return cast(
+                str,
+                connection_changed_response(
+                    services,
+                    f"schema '{eff_schema}' was being indexed",
+                    "initialize_graphrag()",
+                ),
+            )
 
         await notify_client(
             ctx,
@@ -577,7 +661,9 @@ async def graphrag_search(
         return err
 
     try:
-        results = session.graphrag_manager.search_schema(
+        # Embedded in a worker, searched here. The manager is read once, so the
+        # answer describes the database this call was made on.
+        results = await session.graphrag_manager.asearch_schema(
             query=query, top_k=top_k, element_type=element_type
         )
 
@@ -666,7 +752,7 @@ async def graphrag_query_context(
         return err
 
     try:
-        context = session.graphrag_manager.get_query_context(
+        context = await session.graphrag_manager.aget_query_context(
             query=query, max_tables=max_tables, max_columns=max_columns
         )
 

@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Rediscovering a schema replaces what changed.** A schema is rediscovered
+  precisely when it has changed, and two halves of the derived data kept the
+  old state anyway. The vector store wrote batches with ChromaDB's `add`, which
+  keeps the first write for an id it already holds, so a re-commented or
+  renamed table kept answering searches with its old description. The
+  relationship graph merged foreign keys, so a constraint dropped from the
+  database kept offering a join path forever. Batch writes now replace, and a
+  rediscovered table's foreign keys are replaced rather than merged. Tables
+  outside the discovery, and anything not recorded as a foreign key, are left
+  alone; the single-element `add`/`upsert` pair is unchanged. Two schemas
+  holding a table of the same name still share one graph node, so a name
+  last discovered under a different schema keeps its relationships rather
+  than having another schema's discovery delete them.
+- **A requested row limit now bounds the result.** The limit was applied by
+  looking for the word `LIMIT` in the query text, so a string literal, a
+  comment, or an explicit larger limit suppressed it: `limit=10` returned 6000
+  rows with `limit_applied=false`, and every row was fetched and serialized.
+  Two independent bounds replace that. The statement is limited from its parsed
+  form, in the dialect's own syntax, and a query's own smaller limit is left
+  alone. The driver fetches at most one row past the limit, so a statement that
+  cannot carry a `LIMIT` still cannot materialize an unbounded result. A
+  bounded result says so, and one that fits does not.
+
+### Changed
+- **A query is embedded once per retrieval, not twice.**
+  `get_query_context` searches tables and then columns with the same text, and
+  each search embedded that text itself. The vector depends on the text alone,
+  so the identical string went through the model twice. It is now computed once
+  and reused; a search called on its own still embeds its own query. Results
+  and their order are unchanged.
+- **Executing SQL no longer performs vector retrieval.** `execute_sql_query`
+  embedded a query intent and searched the GraphRAG store before running the
+  statement, then used the result for a single log line and discarded it.
+  Nothing read it, not the executor and not OBQC. Retrieval stays available
+  through `graphrag_query_context`, where it informs writing a query rather
+  than running one. The `query_intent` argument is unchanged.
+
 ### Added
 - **A connection handle, so a client without a transport session can work.**
   MCP 2026-07-28 removed protocol-level sessions and tells servers with state

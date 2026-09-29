@@ -1,75 +1,47 @@
 """SQL validation and execution handler implementations."""
 
 import logging
-import re
 from typing import Any
 
 import mcp.types as mcp_types
 from fastmcp import Context
 
-from ..exceptions import ConnectionError, ParameterError, ValidationError
+from ..async_utils import run_db
+from ..exceptions import (
+    ConnectionBusyError,
+    ConnectionError,
+    ParameterError,
+    ValidationError,
+)
 from ..handler_context import HandlerContext
 from ..utils import notify_client
 from .confirmation import Confirmation, ask_to_confirm
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_query_intent(sql: str) -> str:
-    """Extract natural language intent from SQL query for context retrieval.
+async def _obqc_validator(ctx: Context, services: "HandlerContext") -> Any:
+    """The session's validator, built off the event loop when it has to be.
+
+    Building one on a cache miss parses the ontology -- 709 ms at 300 tables --
+    which the synchronous getter does on the loop. The asynchronous one does it
+    in a worker; callers that only supply the synchronous one still work.
 
     Args:
-        sql: SQL query string
+        ctx: FastMCP request context.
+        services: Request-scoped services.
 
     Returns:
-        Natural language description of query intent
+        The validator, or None when the session has no ontology.
     """
-    # Normalize whitespace
-    sql = " ".join(sql.split())
-
-    # Extract table names
-    tables = []
-    from_matches = re.findall(r"FROM\s+(?:[\w.]+\.)?(\w+)", sql, re.IGNORECASE)
-    tables.extend(from_matches)
-    join_matches = re.findall(r"JOIN\s+(?:[\w.]+\.)?(\w+)", sql, re.IGNORECASE)
-    tables.extend(join_matches)
-
-    # Deduplicate
-    seen = set()
-    unique_tables = []
-    for t in tables:
-        if t.lower() not in seen:
-            seen.add(t.lower())
-            unique_tables.append(t)
-
-    # Extract aggregation functions
-    aggs = re.findall(r"\b(SUM|AVG|COUNT|MAX|MIN)\s*\(", sql, re.IGNORECASE)
-    aggs = list({a.upper() for a in aggs})
-
-    # Extract WHERE conditions
-    where_match = re.search(
-        r"WHERE\s+(.+?)(?:GROUP BY|ORDER BY|LIMIT|$)", sql, re.IGNORECASE
-    )
-    conditions = []
-    if where_match:
-        where_clause = where_match.group(1)
-        cond_cols = re.findall(
-            r"\b(\w+)\s*(?:=|>|<|LIKE|IN)", where_clause, re.IGNORECASE
-        )
-        conditions = list(set(cond_cols[:3]))
-
-    # Build intent string
-    if aggs and unique_tables:
-        intent = f"aggregate {', '.join(aggs)} from {', '.join(unique_tables)}"
-    elif unique_tables:
-        intent = f"query {', '.join(unique_tables)}"
-    else:
-        intent = "database query"
-
-    if conditions:
-        intent += f" filtered by {', '.join(conditions)}"
-
-    return intent
+    if services.provides("aget_session_obqc_validator"):
+        return await services.aget_session_obqc_validator(ctx)
+    return services.get_session_obqc_validator(ctx)
 
 
 async def validate_sql_syntax(
@@ -86,6 +58,9 @@ async def validate_sql_syntax(
         get_session_obqc_validator: Function to get OBQC validator
     """
     try:
+        # The database checks the syntax and the ontology judges the meaning;
+        # both must be the same connection's. Pinned before either is read.
+        pinned = pin_connection(services.get_session_data(ctx))
         db_manager = services.get_session_db_manager(ctx)
 
         if not db_manager.has_engine():
@@ -114,8 +89,8 @@ async def validate_sql_syntax(
                 "database_dialect": "unknown",
             }
 
-        validation_result: dict[str, Any] = db_manager.validate_sql_syntax(
-            sql_query.strip()
+        validation_result: dict[str, Any] = await run_db(
+            db_manager.validate_sql_syntax, sql_query.strip()
         )
 
         if "warnings" not in validation_result:
@@ -124,7 +99,14 @@ async def validate_sql_syntax(
             validation_result["suggestions"] = []
 
         # OBQC validation
-        obqc_validator = services.get_session_obqc_validator(ctx)
+        obqc_validator = await _obqc_validator(ctx, services)
+        if not still_connected(services.get_session_data(ctx), pinned):
+            return {
+                "is_valid": False,
+                **connection_changed_response(
+                    services, "the query was being validated", "validate_sql_syntax()"
+                ),
+            }
         if obqc_validator:
             db_type = db_manager.connection_info.get("type", "postgresql")
             obqc_result = obqc_validator.validate(sql_query.strip(), dialect=db_type)
@@ -189,6 +171,10 @@ async def validate_sql_syntax(
             )
 
         return validation_result
+
+    except ConnectionBusyError as e:
+        logger.info(f"Refused a validation on a busy connection: {e}")
+        return {"is_valid": False, **e.to_response()}
 
     except Exception as e:
         logger.error(f"SQL validation error: {e}")
@@ -269,6 +255,13 @@ async def execute_sql_query(
             response["obqc_fan_trap"] = fan_trap_report
             return response
 
+        # The query runs on this manager and is judged by the session's
+        # ontology, and those two must belong to the same connection. Building
+        # the validator can await; a reconnect meanwhile would pair the old
+        # database with the new session's ontology -- or with none, which skips
+        # OBQC and lets a fan trap that should block run. Pinned before either
+        # is read, and checked once the validator is in hand.
+        pinned = pin_connection(services.get_session_data(ctx))
         db_manager = services.get_session_db_manager(ctx)
 
         if not db_manager.has_engine():
@@ -306,7 +299,16 @@ async def execute_sql_query(
         # OBQC validation (fan-trap detection, ontology-aware checks)
         obqc_warnings = []
         session = services.get_session_data(ctx)
-        obqc_validator = services.get_session_obqc_validator(ctx)
+        obqc_validator = await _obqc_validator(ctx, services)
+        if not still_connected(session, pinned):
+            # Refused, not run: neither pairing is safe. The old manager with
+            # the new ontology checks the wrong schema, and with no ontology it
+            # checks nothing at all.
+            return _with_verdict(
+                connection_changed_response(
+                    services, "the query was being checked", "execute_sql_query()"
+                )
+            )
         if obqc_validator:
             db_type = db_manager.connection_info.get("type", "postgresql")
             obqc_result = obqc_validator.validate(
@@ -408,29 +410,15 @@ async def execute_sql_query(
                 f"issues={len(obqc_result.issues)}"
             )
 
-        # Auto-inject GraphRAG context if available
-        if session.graphrag_initialized and session.graphrag_manager:
-            try:
-                if query_intent:
-                    logger.info(f"Using provided query intent: '{query_intent}'")
-                    intent_to_use = query_intent
-                else:
-                    intent_to_use = _extract_query_intent(sql_query)
-                    logger.info(f"Auto-extracted intent from SQL: '{intent_to_use}'")
+        # No GraphRAG retrieval here. Executing a statement used to embed an
+        # intent and search the vector store first, then use the result for one
+        # log line and discard it: nothing read it, not the executor and not
+        # OBQC. Retrieval belongs to graphrag_query_context, where it informs
+        # writing a query rather than running one.
 
-                context = session.graphrag_manager.get_query_context(
-                    query=intent_to_use, max_tables=3, max_columns=15
-                )
-
-                if context and "relevant_tables" in context:
-                    table_count = len(context["relevant_tables"])
-                    logger.info(
-                        f"Auto-retrieved context: {table_count} relevant tables"
-                    )
-            except Exception as e:
-                logger.debug(f"Context auto-retrieval failed (non-critical): {e}")
-
-        result: dict[str, Any] = db_manager.execute_sql_query(sql_query.strip(), limit)
+        result: dict[str, Any] = await run_db(
+            db_manager.execute_sql_query, sql_query.strip(), limit
+        )
 
         # Merge OBQC warnings into result
         if obqc_warnings:
@@ -465,6 +453,19 @@ async def execute_sql_query(
             )
 
         return result
+
+    except ConnectionBusyError as e:
+        # Not a system failure: the connection is working, and busy. Say so,
+        # with what to do, rather than as an internal error.
+        logger.info(f"Refused a query on a busy connection: {e}")
+        busy: dict[str, Any] = e.to_response()
+        busy["obqc_fan_trap"] = {
+            "evaluated": False,
+            "detected": False,
+            "blocking": False,
+            "findings": [],
+        }
+        return busy
 
     except Exception as e:
         logger.error(f"Critical error in SQL execution: {e}")

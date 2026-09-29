@@ -419,6 +419,11 @@ class TestMCPToolsAsync:
             sample_users_table,
             sample_orders_table,
         ]
+        mock_db_manager.analyze_tables.side_effect = lambda names, schema=None: {
+            name: info
+            for name in names
+            if (info := mock_db_manager.analyze_table(name, schema)) is not None
+        }
         mock_session_data.db_manager = mock_db_manager
 
         # The function raises exception (no internal error handling)
@@ -479,6 +484,11 @@ class TestMCPToolsAsync:
         mock_db_manager = Mock()
         mock_db_manager.get_tables.return_value = ["users"]
         mock_db_manager.analyze_table.return_value = sample_users_table
+        mock_db_manager.analyze_tables.side_effect = lambda names, schema=None: {
+            name: info
+            for name in names
+            if (info := mock_db_manager.analyze_table(name, schema)) is not None
+        }
         mock_session_data.db_manager = mock_db_manager
         mock_session_data.ontology_file = None
 

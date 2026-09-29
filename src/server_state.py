@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from .database_manager import DatabaseManager
 from .exceptions import SessionRequiredError, UnknownConnectionError
-from .obqc_validator import OBQCValidator
+from .obqc_validator import OBQCValidator, PreparedOntology, prepare_ontology
 from .ontology_generator import OntologyGenerator
 from .oxigraph_store import OXIGRAPH_AVAILABLE, OxigraphStoreManager
 from .paths import (
@@ -41,6 +41,10 @@ from .utils import is_stateless_era, utc_now
 from .workspace import workspace_identity
 
 logger = logging.getLogger(__name__)
+
+# Disconnects waiting for a worker to leave the database. Held here because the
+# event loop keeps only weak references to tasks it runs.
+_deferred_disconnects: set["asyncio.Task[None]"] = set()
 
 
 # A connection handle looks like ``ob_k2m9qa``. The alphabet leaves out the
@@ -533,6 +537,25 @@ class ServerState:
             runtime.db_manager = None
         logger.info(f"Closed connection runtime {runtime.connection_id[:8]}...")
 
+    def binding_lock(self, session: Any) -> AbstractAsyncContextManager[Any]:
+        """The lock that keeps a session on one database for a whole tool call.
+
+        Taken before :meth:`writer_lock`, always, so the runtime that lock
+        resolves to cannot change underneath the tool.
+
+        Args:
+            session: The calling session.
+
+        Returns:
+            The session's binding lock, or a no-op context for a test double
+            that has none.
+        """
+        lock = getattr(session, "binding_lock", None)
+        # isinstance, not a None check: a test double's attribute is a Mock.
+        if isinstance(lock, asyncio.Lock):
+            return lock
+        return nullcontext()
+
     def writer_lock(self, session: Any) -> AbstractAsyncContextManager[Any]:
         """The lock a tool must hold while it rewrites shared connection state.
 
@@ -562,6 +585,48 @@ class ServerState:
 
     @staticmethod
     def _disconnect_manager(db_manager: Any, why: str) -> None:
+        """Close a manager, or schedule it to close once its worker is done.
+
+        A call running in a worker holds the manager's query lock until the
+        thread exits. Disposing the engine under it breaks that query -- on an
+        in-memory DuckDB, whose StaticPool shares one connection, it closes the
+        connection the query is running on. Readers take no session lock, so a
+        reconnect can drop a runtime's last holder while one is in flight.
+
+        Args:
+            db_manager: The manager to close.
+            why: Why, for the log.
+        """
+        lock = getattr(db_manager, "query_lock", None)
+        if isinstance(lock, asyncio.Lock) and lock.locked():
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                task = loop.create_task(
+                    ServerState._disconnect_when_idle(db_manager, why)
+                )
+                # The loop keeps only a weak reference to a task.
+                _deferred_disconnects.add(task)
+                task.add_done_callback(_deferred_disconnects.discard)
+                logger.debug(f"Deferred closing {why} manager until its query ends")
+                return
+        ServerState._disconnect_now(db_manager, why)
+
+    @staticmethod
+    async def _disconnect_when_idle(db_manager: Any, why: str) -> None:
+        """Wait for the worker holding the manager, then close it.
+
+        Args:
+            db_manager: The manager to close.
+            why: Why, for the log.
+        """
+        async with db_manager.query_lock:
+            ServerState._disconnect_now(db_manager, why)
+
+    @staticmethod
+    def _disconnect_now(db_manager: Any, why: str) -> None:
         try:
             db_manager.disconnect()
         except Exception as e:
@@ -739,10 +804,7 @@ class ServerState:
             # still land in the state the remaining sessions share.
             self.unbind_session(session, detach=False)
         elif session.db_manager:
-            try:
-                session.db_manager.disconnect()
-            except Exception as e:
-                logger.warning(f"Error disconnecting db for session {session_id}: {e}")
+            self._disconnect_manager(session.db_manager, f"session {session_id}")
         if session.rdf_store.oxigraph_store:
             try:
                 self.release_oxigraph_store(session.rdf_store.oxigraph_store)
@@ -978,6 +1040,231 @@ def get_session_db_manager(ctx: Context) -> DatabaseManager:
     return cast(DatabaseManager, session.db_manager)
 
 
+def _file_revision_key(path: Path, base_uri: str) -> tuple[Any, ...] | None:
+    """Identity of an ontology file: its path, mtime and size, plus the URI.
+
+    Args:
+        path: The ontology file.
+        base_uri: The base URI it would be read under.
+
+    Returns:
+        The identity, or None if the file cannot be stat'ed.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return ("file", str(path), stat.st_mtime_ns, stat.st_size, base_uri)
+
+
+def _text_revision_key(text: str, base_uri: str) -> tuple[Any, ...]:
+    """Identity of an ontology held as text: its digest, plus the URI.
+
+    Args:
+        text: The ontology source.
+        base_uri: The base URI it would be read under.
+
+    Returns:
+        The identity.
+    """
+    return ("text", hashlib.sha256(text.encode("utf-8")).hexdigest(), base_uri)
+
+
+def _ontology_revision_key(
+    session: SessionData, base_uri: str
+) -> tuple[Any, ...] | None:
+    """What identifies the ontology this session would validate against.
+
+    Two sessions share an extraction only when they would have read the same
+    bytes under the same base URI. A file is identified by its path, mtime and
+    size, as the review cache identifies one; an ontology loaded as text by the
+    digest of that text.
+
+    Args:
+        session: The session whose ontology to identify.
+        base_uri: The base URI the extraction would use.
+
+    Returns:
+        The identity, or None if there is no ontology to read.
+    """
+    if session.ontology_file is not None:
+        conn_dir = (
+            get_connection_dir(session.connection_id)
+            if session.connection_id
+            else ensure_output_dir()
+        )
+        return _file_revision_key(conn_dir / session.ontology_file, base_uri)
+
+    if session.loaded_ontology is not None:
+        return _text_revision_key(session.loaded_ontology, base_uri)
+
+    return None
+
+
+def _prepared_ontology_for(
+    session: SessionData, base_uri: str
+) -> PreparedOntology | None:
+    """The extraction for this session's ontology, parsing it at most once.
+
+    Parsing Turtle and extracting from it is what the first query after an
+    ontology is generated or loaded pays for: 930ms at 300 tables. It depends
+    on the ontology and the base URI and on nothing else, so the result is kept
+    on the connection and shared. The validator built from it stays per
+    session.
+
+    Args:
+        session: The session whose ontology to prepare.
+        base_uri: The base URI to read it under.
+
+    Returns:
+        The extraction, or None if the session has no readable ontology.
+    """
+    key = _ontology_revision_key(session, base_uri)
+    if key is None:
+        return None
+
+    cache = getattr(getattr(session, "runtime", None), "obqc_prepared", None)
+    if cache is not None:
+        held = cache.get(key)
+        if held is not None:
+            logger.debug("OBQC reusing the prepared ontology held for this connection")
+            return cast(PreparedOntology, held)
+
+    generator = OntologyGenerator(base_uri)
+    if key[0] == "file":
+        generator.load_from_file(key[1])
+        logger.debug(f"OBQC loaded ontology from session file: {session.ontology_file}")
+    else:
+        assert session.loaded_ontology is not None
+        generator.load_from_string(session.loaded_ontology)
+        logger.debug(
+            f"OBQC loaded ontology from session's loaded ontology: "
+            f"{session.loaded_ontology_path}"
+        )
+
+    prepared = prepare_ontology(generator.graph, base_uri)
+    if cache is not None:
+        cache.put(key, prepared)
+    return prepared
+
+
+def remember_prepared_ontology(
+    session: SessionData,
+    graph: Any,
+    base_uri: str,
+    *,
+    path: Path | None = None,
+    text: str | None = None,
+) -> None:
+    """Keep the extraction for an ontology just produced, so no query reparses it.
+
+    The graph is already in memory when an ontology is generated, enriched or
+    loaded. Writing the Turtle and parsing it back on the first query was the
+    whole 930ms at 300 tables; extracting from the graph in hand costs 89ms,
+    and happens here while the writer lock is still held.
+
+    Keyed exactly as a query would look it up, so a base URI that does not
+    match the one the validator reads (``ONTOLOGY_BASE_URI``) simply misses and
+    the query prepares the ontology itself. Failure is never an error for the
+    same reason.
+
+    Args:
+        session: The session whose connection should hold the extraction.
+        graph: The rdflib graph the ontology was written from.
+        base_uri: The base URI it was produced under.
+        path: Where it was written, for an ontology the session names by file.
+        text: Its source, for an ontology the session holds as text.
+    """
+    cache = getattr(getattr(session, "runtime", None), "obqc_prepared", None)
+    if cache is None:
+        return
+    try:
+        key = (
+            _file_revision_key(path, base_uri)
+            if path is not None
+            else _text_revision_key(text or "", base_uri)
+        )
+        if key is None:
+            return
+        cache.put(key, prepare_ontology(graph, base_uri))
+        logger.debug("Prepared OBQC semantics for the ontology just written")
+    except Exception as e:
+        logger.debug(f"Could not prepare OBQC semantics: {e}")
+
+
+def _parse_and_prepare(
+    key: tuple[Any, ...], loaded_text: str | None, base_uri: str
+) -> PreparedOntology:
+    """Parse an ontology and extract OBQC's view of it, from explicit inputs.
+
+    Everything it needs is passed in, and it touches no session and no cache,
+    so it can run in a worker while the session it came from moves on.
+
+    Args:
+        key: The revision identity, which for a file carries its path.
+        loaded_text: The ontology source, for an ontology held as text.
+        base_uri: The base URI to read it under.
+
+    Returns:
+        The extraction.
+    """
+    generator = OntologyGenerator(base_uri)
+    if key[0] == "file":
+        generator.load_from_file(key[1])
+    else:
+        generator.load_from_string(loaded_text or "")
+    return prepare_ontology(generator.graph, base_uri)
+
+
+async def aget_session_obqc_validator(ctx: Context) -> OBQCValidator | None:
+    """:func:`get_session_obqc_validator`, with any parsing off the event loop.
+
+    A validator is built on the first query after an ontology changes, and
+    after every restart, because the prepared extractions live in memory. On a
+    miss that meant parsing the Turtle on the loop -- 709 ms at 300 tables,
+    every other session frozen for it.
+
+    This only warms the connection's cache, in a worker, and then hands over to
+    the synchronous getter, which now finds the extraction there and builds the
+    validator in one block with nothing awaited half-way. If the session moved
+    to another database meanwhile, that getter works out the revision for
+    where the session is *now*: the extraction just made lands in the cache of
+    the connection it came from, where it belongs, and cannot be used for the
+    other one.
+
+    Args:
+        ctx: FastMCP request context.
+
+    Returns:
+        What :func:`get_session_obqc_validator` returns.
+    """
+    session = get_session_data(ctx)
+    if session.obqc_validator is None and (
+        session.ontology_file is not None or session.loaded_ontology is not None
+    ):
+        base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
+        key = _ontology_revision_key(session, base_uri)
+        cache = getattr(getattr(session, "runtime", None), "obqc_prepared", None)
+        if key is not None and (cache is None or cache.get(key) is None):
+            loaded_text = session.loaded_ontology if key[0] == "text" else None
+            prepared = await asyncio.to_thread(
+                _parse_and_prepare, key, loaded_text, base_uri
+            )
+            if cache is not None:
+                cache.put(key, prepared)
+            elif (
+                session.obqc_validator is None
+                and _ontology_revision_key(session, base_uri) == key
+            ):
+                # No shared cache to warm (an unbound session): build from
+                # what was just parsed rather than parsing again on the loop --
+                # provided the session still names the ontology it parsed.
+                validator = OBQCValidator()
+                validator.load_prepared(prepared)
+                session.obqc_validator = validator
+    return get_session_obqc_validator(ctx)
+
+
 def get_session_obqc_validator(ctx: Context) -> OBQCValidator | None:
     """Get or create OBQC validator for the current session."""
     session = get_session_data(ctx)
@@ -992,27 +1279,9 @@ def get_session_obqc_validator(ctx: Context) -> OBQCValidator | None:
         session.obqc_validator = OBQCValidator()
 
         base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
-        ontology_generator = OntologyGenerator(base_uri)
-
-        if session.ontology_file is not None:
-            conn_dir = (
-                get_connection_dir(session.connection_id)
-                if session.connection_id
-                else ensure_output_dir()
-            )
-            ontology_path = conn_dir / session.ontology_file
-            if ontology_path.exists():
-                ontology_generator.load_from_file(str(ontology_path))
-                logger.debug(
-                    f"OBQC loaded ontology from session file: {session.ontology_file}"
-                )
-        elif session.loaded_ontology is not None:
-            ontology_generator.load_from_string(session.loaded_ontology)
-            logger.debug(
-                f"OBQC loaded ontology from session's loaded ontology: {session.loaded_ontology_path}"
-            )
-
-        session.obqc_validator.load_ontology(ontology_generator.graph, base_uri)
+        prepared = _prepared_ontology_for(session, base_uri)
+        if prepared is not None:
+            session.obqc_validator.load_prepared(prepared)
         logger.debug(f"Initialized OBQC validator for session: {session.handle}")
 
     # Registered outside the creation branch, and on every call: views may be

@@ -29,6 +29,11 @@ from ..utils import (
     utc_now,
     write_text_file,
 )
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
 from .ontology_generation import _build_minimal_graph_summary
 
 logger = logging.getLogger(__name__)
@@ -682,11 +687,14 @@ async def apply_semantic_names(
     """Apply LLM-suggested semantic names to an existing ontology."""
     try:
         session = services.get_session_data(ctx)
+        # Loading, renaming and writing all await; a reconnect in between
+        # must not receive this database's renamed ontology.
+        pinned = pin_connection(session)
         try:
             if ontology_file:
                 conn_dir = (
-                    get_connection_dir(session.connection_id)
-                    if session.connection_id
+                    get_connection_dir(pinned.connection_id)
+                    if pinned.connection_id
                     else ensure_output_dir()
                 )
                 ontology_path = conn_dir / ontology_file
@@ -735,8 +743,8 @@ async def apply_semantic_names(
         if save_to_file:
             try:
                 conn_dir = (
-                    get_connection_dir(session.connection_id)
-                    if session.connection_id
+                    get_connection_dir(pinned.connection_id)
+                    if pinned.connection_id
                     else ensure_output_dir()
                 )
                 # Scope the artifact family to the schema. Every other writer
@@ -758,7 +766,7 @@ async def apply_semantic_names(
                 # pruned as stale.
                 async with artifact_family_lock(
                     conn_dir,
-                    f"ontology_{session.connection_id or 'default'}"
+                    f"ontology_{pinned.connection_id or 'default'}"
                     f"_{enriched_schema_safe}_semantic",
                 ):
                     new_ontology_filename = (
@@ -772,20 +780,42 @@ async def apply_semantic_names(
                     await write_text_file(ontology_file_path, updated_ontology)
 
                     logger.info(f"Saved semantic ontology to: {ontology_file_path}")
+                    # The session adopts the renamed ontology only if it is still
+                    # on the database it was renamed for; the file itself is in
+                    # that database's workspace either way.
+                    if not still_connected(session, pinned):
+                        return connection_changed_response(
+                            services,
+                            "semantic names were being applied",
+                            "apply_semantic_names()",
+                        )
                     previous_ontology_file = session.ontology_file
                     session.ontology_file = new_ontology_filename
                     session.ontology_enriched = True
                     session.obqc_validator = None
 
+                    # Prepare OBQC's view from the enriched graph in hand, so
+                    # the next query does not parse the file back.
+                    if services.provides("remember_prepared_ontology"):
+                        await asyncio.to_thread(
+                            partial(
+                                services.remember_prepared_ontology,
+                                session,
+                                generator.graph,
+                                str(generator.base_uri),
+                                path=ontology_file_path,
+                            )
+                        )
+
                     # Update workspace: mark ontology as enriched
-                    if session.connection_id:
+                    if pinned.connection_id:
                         try:
                             # Same schema the artifact family is scoped to --
                             # these previously disagreed (current_schema here vs
                             # get_last_analyzed_schema below).
                             schema_name = enriched_schema
                             await update_workspace_section(
-                                connection_id=session.connection_id,
+                                connection_id=pinned.connection_id,
                                 output_dir=OUTPUT_DIR,
                                 schema_name=schema_name,
                                 section="ontology",

@@ -22,6 +22,7 @@ Two backends are available:
     still works with no model available (offline install, restricted network).
 """
 
+import hashlib
 import logging
 import os
 from dataclasses import dataclass
@@ -43,6 +44,27 @@ DEFAULT_EMBEDDING_MODEL = MODEL_MINILM
 # 384 dimensions, so a stale index loads without any shape error and silently
 # returns nonsense -- the fingerprint is what makes that detectable.
 EMBEDDING_SCHEMA_VERSION = 2
+
+# Texts submitted to a backend per inference call. Batching is what makes
+# indexing bearable -- 256 column texts through MiniLM cost 16.3 s one at a
+# time and 2.5 s in one batch, for bit-identical vectors -- but a whole schema
+# in a single call would hold every intermediate tensor in memory at once.
+EMBEDDING_BATCH_SIZE = 256
+
+
+def vocabulary_fingerprint(vocabulary: dict[str, int]) -> str:
+    """Identify a fitted vocabulary, so two vector spaces are never mixed.
+
+    Args:
+        vocabulary: Term to column index, as scikit-learn fits it.
+
+    Returns:
+        A short digest of the vocabulary, stable across processes.
+    """
+    joined = "\u0000".join(
+        f"{term}:{index}" for term, index in sorted(vocabulary.items())
+    )
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
 def resolve_embedding_model(requested: str | None = None) -> str:
@@ -180,6 +202,31 @@ class SchemaEmbedder:
         Returns:
             SchemaElement with embedding
         """
+        element = self._describe_table(table_name, columns, comment, foreign_keys)
+        element.embedding = self._embed_text(element.description)
+        return element
+
+    def _describe_table(
+        self,
+        table_name: str,
+        columns: list[dict[str, Any]],
+        comment: str | None = None,
+        foreign_keys: list[dict[str, Any]] | None = None,
+    ) -> SchemaElement:
+        """Build a table's element and its text, without embedding it.
+
+        Separated from :meth:`create_table_embedding` so a whole schema's texts
+        can be written first and inferred in batches afterwards.
+
+        Args:
+            table_name: Name of the table.
+            columns: List of column metadata.
+            comment: Optional table comment/description.
+            foreign_keys: Optional foreign key relationships.
+
+        Returns:
+            SchemaElement whose ``embedding`` is still None.
+        """
         # Build text representation
         text_parts = [table_name.replace("_", " ")]
 
@@ -201,9 +248,6 @@ class SchemaEmbedder:
 
         description = " ".join(text_parts)
 
-        # Generate embedding
-        embedding = self._embed_text(description)
-
         return SchemaElement(
             element_type="table",
             element_id=table_name,
@@ -215,7 +259,6 @@ class SchemaEmbedder:
                 "has_foreign_keys": bool(foreign_keys),
                 "comment": comment,
             },
-            embedding=embedding,
         )
 
     def create_column_embedding(
@@ -243,6 +286,42 @@ class SchemaEmbedder:
         Returns:
             SchemaElement with embedding
         """
+        element = self._describe_column(
+            table_name,
+            column_name,
+            data_type,
+            is_primary_key,
+            is_foreign_key,
+            foreign_key_table,
+            comment,
+        )
+        element.embedding = self._embed_text(element.description)
+        return element
+
+    def _describe_column(
+        self,
+        table_name: str,
+        column_name: str,
+        data_type: str,
+        is_primary_key: bool = False,
+        is_foreign_key: bool = False,
+        foreign_key_table: str | None = None,
+        comment: str | None = None,
+    ) -> SchemaElement:
+        """Build a column's element and its text, without embedding it.
+
+        Args:
+            table_name: Parent table name.
+            column_name: Column name.
+            data_type: SQL data type.
+            is_primary_key: Whether the column is a primary key.
+            is_foreign_key: Whether the column is a foreign key.
+            foreign_key_table: Referenced table if a foreign key.
+            comment: Optional column comment.
+
+        Returns:
+            SchemaElement whose ``embedding`` is still None.
+        """
         # Build text representation
         text_parts = [
             table_name.replace("_", " "),
@@ -261,9 +340,6 @@ class SchemaEmbedder:
 
         description = " ".join(text_parts)
 
-        # Generate embedding
-        embedding = self._embed_text(description)
-
         return SchemaElement(
             element_type="column",
             element_id=f"{table_name}.{column_name}",
@@ -276,7 +352,6 @@ class SchemaEmbedder:
                 "is_foreign_key": is_foreign_key,
                 "foreign_key_table": foreign_key_table,
             },
-            embedding=embedding,
         )
 
     def create_relationship_embedding(
@@ -298,14 +373,35 @@ class SchemaEmbedder:
         Returns:
             SchemaElement with embedding
         """
+        element = self._describe_relationship(
+            from_table, to_table, join_columns, relationship_type
+        )
+        element.embedding = self._embed_text(element.description)
+        return element
+
+    def _describe_relationship(
+        self,
+        from_table: str,
+        to_table: str,
+        join_columns: list[tuple],
+        relationship_type: str = "one_to_many",
+    ) -> SchemaElement:
+        """Build a relationship's element and its text, without embedding it.
+
+        Args:
+            from_table: Source table.
+            to_table: Target table.
+            join_columns: List of (from_col, to_col) tuples.
+            relationship_type: Type of relationship.
+
+        Returns:
+            SchemaElement whose ``embedding`` is still None.
+        """
         # Build text representation
         join_desc = ", ".join([f"{fc} to {tc}" for fc, tc in join_columns])
         description = (
             f"{from_table} joins {to_table} on {join_desc} ({relationship_type})"
         )
-
-        # Generate embedding
-        embedding = self._embed_text(description)
 
         return SchemaElement(
             element_type="relationship",
@@ -318,7 +414,6 @@ class SchemaEmbedder:
                 "join_columns": join_columns,
                 "relationship_type": relationship_type,
             },
-            embedding=embedding,
         )
 
     def _embed_text(self, text: str) -> np.ndarray:
@@ -344,9 +439,156 @@ class SchemaEmbedder:
             # first, so this only covers a lone embed before any indexing.
             self.vectorizer.fit([text])
             self._is_fitted = True
+            logger.warning(
+                "TF-IDF embedded a text before any schema was indexed, so its "
+                "vocabulary is that text's own words. A vector made this way "
+                "cannot be compared with indexed ones."
+            )
 
         embedding = self.vectorizer.transform([text]).toarray()[0]
         return np.asarray(embedding)
+
+    def vocabulary_state(self) -> dict[str, Any] | None:
+        """The fitted TF-IDF vocabulary, in a form that can be written to disk.
+
+        A TF-IDF vector only means something against the vocabulary and
+        document frequencies it was produced with. Those are fitted when a
+        schema is indexed and were then lost with the process, so a restart
+        left the stored vectors describing a space nothing could reproduce.
+
+        Returns:
+            The vocabulary, its inverse document frequencies and a fingerprint,
+            or None for a backend that has no such state or is not fitted.
+        """
+        if self.embedding_model != MODEL_TFIDF or not self._is_fitted:
+            return None
+        try:
+            vocabulary = {
+                term: int(index) for term, index in self.vectorizer.vocabulary_.items()
+            }
+            idf = [float(value) for value in self.vectorizer.idf_]
+        except AttributeError:  # pragma: no cover - not actually fitted
+            return None
+        return {
+            "backend": MODEL_TFIDF,
+            "vocabulary": vocabulary,
+            "idf": idf,
+            "fingerprint": vocabulary_fingerprint(vocabulary),
+        }
+
+    def load_vocabulary_state(self, state: dict[str, Any]) -> bool:
+        """Restore a vocabulary saved by :meth:`vocabulary_state`.
+
+        Restored rather than refitted: refitting on a different corpus gives a
+        different space, and mixing spaces is what makes a search silently
+        wrong rather than loudly broken.
+
+        Args:
+            state: What ``vocabulary_state`` produced.
+
+        Returns:
+            True if this embedder now embeds in the saved space.
+        """
+        if self.embedding_model != MODEL_TFIDF:
+            return False
+        vocabulary = state.get("vocabulary")
+        idf = state.get("idf")
+        if not vocabulary or not idf or len(vocabulary) != len(idf):
+            logger.warning("Saved TF-IDF vocabulary is incomplete; not restoring it")
+            return False
+
+        # The file has to be the one the fingerprint describes. A half-written
+        # or hand-edited vocabulary would embed queries in a space the stored
+        # vectors do not share, which is the failure this whole mechanism
+        # exists to prevent.
+        expected = state.get("fingerprint")
+        if expected and expected != vocabulary_fingerprint(vocabulary):
+            logger.warning(
+                "Saved TF-IDF vocabulary does not match its own fingerprint; "
+                "not restoring it"
+            )
+            return False
+
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+
+            restored = TfidfVectorizer(
+                max_features=384,
+                stop_words="english",
+                ngram_range=(1, 2),
+                vocabulary=vocabulary,
+            )
+            # One fit builds the transformer the saved frequencies then replace.
+            # The vocabulary is fixed by the constructor, so the placeholder
+            # corpus cannot change which terms exist.
+            restored.fit([" ".join(list(vocabulary)[:1]) or "placeholder"])
+            restored.idf_ = np.asarray(idf, dtype=np.float64)
+        except Exception as e:
+            logger.warning(f"Could not restore the saved TF-IDF vocabulary: {e}")
+            return False
+
+        self.vectorizer = restored
+        self._is_fitted = True
+        logger.info(f"Restored a TF-IDF vocabulary of {len(vocabulary)} terms")
+        return True
+
+    def _embed_texts(self, texts: list[str]) -> list[np.ndarray]:
+        """Embed many texts, in bounded batches, in the order given.
+
+        Every backend is faster asked once for many texts than many times for
+        one: the ONNX MiniLM session pays its per-call overhead once, and
+        TF-IDF transforms one matrix instead of one row at a time. Vectors are
+        identical either way -- both backends treat a row independently of the
+        rest of the batch -- so this is inference cost only, not a change in
+        what is indexed.
+
+        Args:
+            texts: Texts to embed.
+
+        Returns:
+            One vector per text, in the same order.
+        """
+        if not texts:
+            return []
+
+        if self.embedding_model == MODEL_MINILM:
+            vectors: list[np.ndarray] = []
+            for start in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+                batch = texts[start : start + EMBEDDING_BATCH_SIZE]
+                vectors.extend(
+                    np.asarray(vector, dtype=np.float32)
+                    for vector in self._embedding_function(batch)
+                )
+            return vectors
+
+        if self.embedding_model == MODEL_SENTENCE_TRANSFORMERS:
+            encoded = self.model.encode(
+                texts, convert_to_numpy=True, batch_size=EMBEDDING_BATCH_SIZE
+            )
+            return [np.asarray(vector) for vector in encoded]
+
+        # TF-IDF. Fitting on this corpus rather than on one text is the same
+        # concession _embed_text makes, one document wider.
+        if not self._is_fitted:
+            self.vectorizer.fit(texts)
+            self._is_fitted = True
+
+        matrix = self.vectorizer.transform(texts).toarray()
+        return [np.asarray(row) for row in matrix]
+
+    def _attach_embeddings(self, elements: list[SchemaElement]) -> None:
+        """Embed the descriptions of already-built elements, in place.
+
+        Args:
+            elements: Elements from the ``_describe_*`` methods, whose
+                ``embedding`` is still None.
+        """
+        if not elements:
+            return
+
+        vectors = self._embed_texts([element.description for element in elements])
+        for element, vector in zip(elements, vectors, strict=True):
+            element.embedding = vector
 
     def batch_embed_tables(
         self, tables_info: list[dict[str, Any]]
@@ -360,16 +602,16 @@ class SchemaEmbedder:
         Returns:
             List of SchemaElements with embeddings
         """
-        elements = []
-
-        for table in tables_info:
-            element = self.create_table_embedding(
+        elements = [
+            self._describe_table(
                 table_name=table["name"],
                 columns=table.get("columns", []),
                 comment=table.get("comment"),
                 foreign_keys=table.get("foreign_keys", []),
             )
-            elements.append(element)
+            for table in tables_info
+        ]
+        self._attach_embeddings(elements)
 
         logger.info(f"Created embeddings for {len(elements)} tables")
         return elements
@@ -398,6 +640,28 @@ class SchemaEmbedder:
         Returns:
             SchemaElement of type "view".
         """
+        element = self._describe_view(view_name, definition, comment, referenced_tables)
+        element.embedding = self._embed_text(element.description)
+        return element
+
+    def _describe_view(
+        self,
+        view_name: str,
+        definition: str | None = None,
+        comment: str | None = None,
+        referenced_tables: list[str] | None = None,
+    ) -> SchemaElement:
+        """Build a view's element and its text, without embedding it.
+
+        Args:
+            view_name: Name of the view.
+            definition: The view's SQL body, if the backend exposed it.
+            comment: Optional view comment.
+            referenced_tables: Base tables the view reads, when known.
+
+        Returns:
+            SchemaElement whose ``embedding`` is still None.
+        """
         text_parts = [view_name.replace("_", " ")]
 
         if comment:
@@ -412,7 +676,6 @@ class SchemaEmbedder:
             text_parts.append(definition.replace("_", " "))
 
         description = " ".join(text_parts)
-        embedding = self._embed_text(description)
 
         return SchemaElement(
             element_type="view",
@@ -425,7 +688,6 @@ class SchemaEmbedder:
                 "comment": comment,
                 "is_view": True,
             },
-            embedding=embedding,
         )
 
     def batch_embed_schema(
@@ -486,7 +748,7 @@ class SchemaEmbedder:
         # Create table embeddings
         for table in tables_info:
             # Table embedding
-            table_element = self.create_table_embedding(
+            table_element = self._describe_table(
                 table_name=table["name"],
                 columns=table.get("columns", []),
                 comment=table.get("comment"),
@@ -496,7 +758,7 @@ class SchemaEmbedder:
 
             # Column embeddings
             for col in table.get("columns", []):
-                col_element = self.create_column_embedding(
+                col_element = self._describe_column(
                     table_name=table["name"],
                     column_name=col["name"],
                     data_type=col["data_type"],
@@ -509,7 +771,7 @@ class SchemaEmbedder:
 
             # Relationship embeddings
             for fk in table.get("foreign_keys", []):
-                rel_element = self.create_relationship_embedding(
+                rel_element = self._describe_relationship(
                     from_table=table["name"],
                     to_table=fk["referenced_table"],
                     join_columns=[(fk["column"], fk["referenced_column"])],
@@ -519,13 +781,18 @@ class SchemaEmbedder:
 
         # View embeddings
         for view in views_info or []:
-            view_element = self.create_view_embedding(
+            view_element = self._describe_view(
                 view_name=view["name"],
                 definition=view.get("definition"),
                 comment=view.get("comment"),
                 referenced_tables=view.get("referenced_tables"),
             )
             result["views"].append(view_element)
+
+        # One inference pass over the whole schema, in bounded batches.
+        self._attach_embeddings(
+            [element for group in result.values() for element in group]
+        )
 
         logger.info(
             f"Created embeddings for schema: "

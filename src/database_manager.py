@@ -5,6 +5,7 @@ while managing cross-cutting concerns: caching, credentials, reconnection,
 connection pooling configuration, and security validation.
 """
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -18,7 +19,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 
+from .config import resolve_db_max_queued_calls, resolve_metadata_cache_ttl
 from .constants import DB_SQLGLOT_DIALECTS, DEFAULT_SAMPLE_LIMIT, IDENTIFIER_PATTERN
+from .result_limits import apply_row_limit, effective_row_limit
 from .security import (
     SecureCredentialManager,
     SecurityLevel,
@@ -180,19 +183,61 @@ class DatabaseManager:
         # Security and performance
         self._credential_manager = SecureCredentialManager()
         self._metadata_cache: dict[str, Any] = {}
-        self._cache_ttl = 300  # 5 minutes
+        # Read per manager, so a reconnect picks up a changed setting without
+        # a restart. How fast this database's schema changes is its own
+        # question, unrelated to how long a client stays idle.
+        self._cache_ttl = resolve_metadata_cache_ttl()
         self._connection_id: str | None = None
+
+        # Held by async callers (see async_utils.run_db) around a blocking call
+        # they run in a worker. Every driver takes a fresh pooled connection per
+        # call, but an in-memory DuckDB engine uses StaticPool -- one connection
+        # shared by every thread -- so two workers must not be inside the
+        # database at once. It also keeps what a blocked event loop used to
+        # guarantee: the calls on one connection stay in order.
+        self.query_lock = asyncio.Lock()
+        # How many callers are waiting for that lock, and how many may. Counted
+        # on the event loop only, so it needs no lock of its own.
+        self.query_waiters = 0
+        self.max_queued_calls = resolve_db_max_queued_calls()
 
     # ------------------------------------------------------------------
     # Cache helpers
     # ------------------------------------------------------------------
+
+    def clear_metadata_cache(self) -> int:
+        """Drop every cached metadata answer, so the next one hits the database.
+
+        The table and view lists, and Snowflake's prefetched constraints, are
+        held for five minutes. A user who resets the cache to pick up a schema
+        change was still served that stale list, which is exactly the thing
+        they asked to get rid of.
+
+        All of it, not one schema's worth: the keys carry the schema name as
+        each caller spelled it -- upper-cased on Snowflake, ``default`` or
+        ``None`` when unqualified -- so a targeted sweep would quietly miss
+        entries. The cost of clearing too much is one extra reflection.
+
+        Returns:
+            How many entries were dropped.
+        """
+        dropped = len(self._metadata_cache)
+        self._metadata_cache.clear()
+        logger.debug(f"Metadata cache cleared: {dropped} entries")
+        return dropped
 
     def _get_cache_key(self, operation: str, *args: Any) -> str:
         """Generate cache key for metadata operations."""
         return f"{operation}:{':'.join(str(arg) for arg in args)}"
 
     def _is_cache_valid(self, cache_entry: dict[str, Any]) -> bool:
-        """Check if cache entry is still valid."""
+        """Check if cache entry is still valid.
+
+        A TTL of zero means never reuse: the operator has said this database's
+        metadata changes faster than any window worth keeping.
+        """
+        if self._cache_ttl <= 0:
+            return False
         return bool(time.time() - cache_entry.get("timestamp", 0) < self._cache_ttl)
 
     def _get_from_cache(self, cache_key: str) -> Any | None:
@@ -1107,6 +1152,58 @@ class DatabaseManager:
             self._driver.analyze_table(table_name, schema_name),
         )
 
+    def analyze_tables(
+        self, table_names: list[str], schema_name: str | None = None
+    ) -> dict[str, "TableInfo"]:
+        """Analyze several tables in one call.
+
+        Discovery reflected table by table, each call checking the connection
+        and asking the driver separately. Asking once lets a driver answer for
+        the whole schema, and lets the caller move the batch off the event loop
+        in one go rather than a hundred times.
+
+        Args:
+            table_names: Tables to analyze.
+            schema_name: Schema they live in, or None for the default.
+
+        Returns:
+            The metadata by table name, without the tables that could not be
+            read.
+        """
+        if not self._dremio_rest_connection:
+            self._ensure_connection()
+
+        if not self._driver:
+            raise RuntimeError("No driver available")
+
+        from .drivers.snowflake import SnowflakeDriver
+
+        if isinstance(self._driver, SnowflakeDriver):
+            # Snowflake reads its prefetched constraint cache through these
+            # extra arguments, which the driver-level batch cannot pass. Same
+            # error isolation as the default: a table that cannot be read is
+            # left out, it does not cost the schema its discovery.
+            analyzed: dict[str, TableInfo] = {}
+            for name in table_names:
+                try:
+                    info = self._driver.analyze_table(
+                        name,
+                        schema_name,
+                        cache_get=self._get_from_cache,
+                        log_sql=self._log_sql_query,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to analyze table {name}: {e}")
+                    continue
+                if info is not None:
+                    analyzed[name] = info
+            return analyzed
+
+        return cast(
+            dict[str, "TableInfo"],
+            self._driver.analyze_tables(table_names, schema_name),
+        )
+
     # ------------------------------------------------------------------
     # Sample & query (delegated to driver with validation layer)
     # ------------------------------------------------------------------
@@ -1331,9 +1428,7 @@ class DatabaseManager:
                 raise RuntimeError("No driver available - use connect_* methods")
             raise RuntimeError("No database connection established")
 
-        # Validate and cap the limit
-        if limit <= 0 or limit > 5000:
-            limit = min(max(limit, 100), 5000)
+        limit = effective_row_limit(limit)
 
         # Mandatory validation
         validation = self.validate_sql_syntax(sql_query)
@@ -1353,21 +1448,19 @@ class DatabaseManager:
             }
             return result_data
 
-        # Apply safety limits
+        # Bound the result. The statement is limited from its parsed form, not
+        # by looking for the word LIMIT in its text: a string literal, a comment
+        # or a column name containing it used to suppress the cap entirely, and
+        # an explicit larger limit was taken at face value. The driver bounds
+        # the fetch as well, so a statement that cannot carry a LIMIT still
+        # cannot materialize an unbounded result.
         query_to_execute = sql_query.strip().rstrip(";")
-        query_upper = query_to_execute.upper()
-
-        needs_limit = (
-            validation["query_type"] in ["SELECT", "CTE_SELECT"]
-            and "LIMIT" not in query_upper
-            and "TOP " not in query_upper
-        )
-
         warnings = list(validation.get("warnings", []))
-        limit_applied = False
-        if needs_limit:
-            query_to_execute = f"{query_to_execute} LIMIT {limit}"
-            limit_applied = True
+        db_type = (self.connection_info or {}).get("type")
+        query_to_execute, limit_applied = apply_row_limit(
+            query_to_execute, limit, db_type
+        )
+        if limit_applied:
             warnings.append(
                 f"Safety LIMIT {limit} applied to prevent large result sets"
             )
@@ -1378,14 +1471,22 @@ class DatabaseManager:
         # Merge warnings
         result_data.setdefault("warnings", [])
         result_data["warnings"] = warnings + result_data["warnings"]
+        # Two ways the caller can be missing rows. The driver reports reading
+        # past the limit, which happens when the statement could not carry a
+        # LIMIT and only the fetch bound stopped it -- that is certain. When the
+        # database did the limiting, a result exactly `limit` rows long is the
+        # only clue left, and it is a strong one.
+        certainly_truncated = bool(result_data.pop("truncated", False))
         if limit_applied:
             result_data["limit_applied"] = True
-            if result_data.get("row_count", 0) == limit and result_data.get(
-                "limit_applied"
-            ):
-                result_data["warnings"].append(
-                    f"Result set may be truncated at {limit} rows"
-                )
+        if certainly_truncated or (
+            limit_applied and result_data.get("row_count", 0) == limit
+        ):
+            result_data["limit_applied"] = True
+            result_data["warnings"].append(
+                f"Result set limited to {limit} rows and there may be more; "
+                "raise the limit argument or narrow the query"
+            )
 
         return cast(dict[str, Any], result_data)
 

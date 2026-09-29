@@ -5,21 +5,28 @@ import logging
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from fastmcp import Context
 
+from ..async_utils import run_db
 from ..constants import OBA_NAMESPACE
 from ..handler_context import HandlerContext
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import PROJECT_ROOT
 from ..utils import notify_client, read_text_file, write_text_file
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _check_ontology_db_compatibility(
+async def _check_ontology_db_compatibility(
     graph: Any,
     ctx: Context,
     get_session_db_manager: Callable[..., Any],
@@ -60,7 +67,7 @@ def _check_ontology_db_compatibility(
 
         # Get actual database tables
         try:
-            db_tables_list = db_manager.get_tables(schema_name)
+            db_tables_list = await run_db(db_manager.get_tables, schema_name)
             db_tables = {t.lower(): t for t in db_tables_list}
         except Exception as e:
             logger.warning(
@@ -131,6 +138,9 @@ async def load_my_ontology(
     file_name: str | None = None,
 ) -> dict[str, Any]:
     """Load an ontology from inline content or the newest .ttl file from the import folder."""
+    # Reading, parsing and the compatibility check all await; a reconnect in
+    # between must not have this ontology validating another database.
+    pinned = pin_connection(services.get_session_data(ctx))
     try:
         from rdflib import Graph
         from rdflib.namespace import OWL, RDF
@@ -216,9 +226,27 @@ async def load_my_ontology(
         )
 
         session = services.get_session_data(ctx)
+        if not still_connected(session, pinned):
+            return connection_changed_response(
+                services, "the ontology was being loaded", "load_my_ontology()"
+            )
         session.loaded_ontology = ontology_content
         session.loaded_ontology_path = str(newest_file)
         session.obqc_validator = None
+
+        # The file has just been parsed into `graph`; extract OBQC's view from
+        # it now instead of parsing the same content again on the first query.
+        if services.provides("remember_prepared_ontology"):
+            base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
+            await asyncio.to_thread(
+                partial(
+                    services.remember_prepared_ontology,
+                    session,
+                    graph,
+                    base_uri,
+                    text=ontology_content,
+                )
+            )
 
         logger.info(f"Loaded ontology from: {newest_file}")
         logger.info(
@@ -228,8 +256,16 @@ async def load_my_ontology(
         # Check compatibility with connected database
         compatibility = None
         if services.provides("get_session_db_manager"):
-            compatibility = _check_ontology_db_compatibility(
+            compatibility = await _check_ontology_db_compatibility(
                 graph, ctx, services.get_session_db_manager, session
+            )
+
+        # The compatibility check above reflects the database in a worker. The
+        # store written below is whichever the session has *now*, so check once
+        # more before persisting into it.
+        if not still_connected(session, pinned):
+            return connection_changed_response(
+                services, "the ontology was being loaded", "load_my_ontology()"
             )
 
         # Auto-persist to RDF store

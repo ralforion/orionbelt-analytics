@@ -10,7 +10,9 @@ as ``{"success": false, "error": ...}`` outright: the caller sees
 import pytest
 from fastmcp import Client
 
+import src.main as main_module
 from src.main import _h_rdf, mcp
+from src.session import SessionData
 
 RETURNS_DICT_ON_ERROR = [
     "connect_database",
@@ -58,6 +60,11 @@ async def test_store_error_reaches_the_client_intact(monkeypatch):
         return error
 
     monkeypatch.setattr(_h_rdf, "store_ontology_in_rdf", failing_handler)
+    # The tool now takes the session's locks before calling its handler, and
+    # this in-memory client has neither a transport session nor a handle. What
+    # is under test is the output schema, so give it a session to lock.
+    session = SessionData()
+    monkeypatch.setattr(main_module, "get_session_data", lambda _ctx: session)
 
     async with Client(mcp) as client:
         result = await client.call_tool("store_ontology_in_rdf", {})

@@ -143,6 +143,44 @@ class VectorStore:
 
         logger.info(f"Added {len(elements)} elements to vector store")
 
+    def delete_tables(self, table_names: list[str]) -> int:
+        """Remove everything indexed for the given tables.
+
+        The same contract as the ChromaDB store: the tables themselves, their
+        columns and the relationships at either end go; semantic context a
+        person wrote stays.
+
+        Args:
+            table_names: Tables whose elements should go.
+
+        Returns:
+            How many elements were deleted.
+        """
+        if not table_names:
+            return 0
+
+        doomed = set(table_names)
+
+        def belongs(element: StoredElement) -> bool:
+            if element.element_id in doomed:
+                return True
+            metadata = element.metadata or {}
+            return bool(
+                metadata.get("table") in doomed
+                or metadata.get("from_table") in doomed
+                or metadata.get("to_table") in doomed
+            )
+
+        before = len(self.elements)
+        self.elements = [e for e in self.elements if not belongs(e)]
+        deleted = before - len(self.elements)
+        if deleted:
+            self._index_built = False
+            logger.info(
+                f"Deleted {deleted} elements for {len(table_names)} dropped table(s)"
+            )
+        return deleted
+
     def build_index(self) -> None:
         """Build the search index from stored elements."""
         if not self.elements:
