@@ -9,7 +9,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import Any
+from typing import Any, cast
 
 from .constants import CONNECTION_TIMEOUT
 
@@ -74,5 +74,17 @@ async def run_db[T](call: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
     if not isinstance(lock, asyncio.Lock):
         # A double, or a manager built before this existed: nothing to protect.
         return await asyncio.to_thread(work)
-    async with lock:
-        return await asyncio.to_thread(work)
+
+    # The lock is released when the *worker* finishes, not when this await
+    # returns. Cancelling an await does not stop a thread already inside the
+    # database: `async with lock` would hand the lock to the next caller while
+    # the previous query was still running, which is exactly the overlap the
+    # lock exists to prevent on a shared in-memory DuckDB connection.
+    await lock.acquire()
+    worker = asyncio.ensure_future(asyncio.to_thread(work))
+    worker.add_done_callback(lambda _finished: lock.release())
+    # Shielded, so a cancelled caller does not leave the callback waiting on a
+    # future nobody is going to resolve. The thread runs to completion either
+    # way; cancellation says the caller stopped caring, not that the database
+    # stopped working.
+    return cast(T, await asyncio.shield(worker))

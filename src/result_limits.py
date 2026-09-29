@@ -43,13 +43,42 @@ def effective_row_limit(requested: int) -> int:
     return min(requested, HARD_ROW_CAP)
 
 
-def _existing_limit(statement: exp.Query) -> int | None:
-    """The row count of the statement's own outer LIMIT, if it has a literal one."""
+def _existing_limit(statement: exp.Query) -> tuple[bool, int | None]:
+    """What the statement already says about how many rows it wants.
+
+    Three answers, and the difference matters:
+
+    * no limit of its own -- one can be imposed;
+    * a limit of *n* -- narrowing to a smaller cap is fine, widening never is;
+    * a limit that exists but cannot be read here -- ``LIMIT (SELECT 3)``, a
+      parameter, an expression. Rewriting that would *replace* the caller's
+      limit with the tool's, which can only make the result bigger. The fetch
+      bound is what protects those.
+
+    ``FETCH FIRST n ROWS ONLY`` is the same statement in another spelling, and
+    sqlglot parks it under the same ``limit`` argument as an ``exp.Fetch`` with
+    a ``count``; reading only ``expression`` missed it, so ``FETCH FIRST 3``
+    became ``LIMIT 10``.
+
+    Args:
+        statement: The parsed statement.
+
+    Returns:
+        Whether it carries a limit at all, and that limit's row count when it
+        can be read.
+    """
     limit = statement.args.get("limit")
-    expression = getattr(limit, "expression", None) if limit is not None else None
-    if isinstance(expression, exp.Literal) and expression.is_int:
-        return int(expression.this)
-    return None
+    if limit is None:
+        return False, None
+
+    count = (
+        limit.args.get("count")
+        if isinstance(limit, exp.Fetch)
+        else getattr(limit, "expression", None)
+    )
+    if isinstance(count, exp.Literal) and count.is_int:
+        return True, int(count.this)
+    return True, None
 
 
 def apply_row_limit(
@@ -82,8 +111,10 @@ def apply_row_limit(
         # SHOW, DESCRIBE, PRAGMA and friends take no LIMIT.
         return sql_query, False
 
-    existing = _existing_limit(statement)
-    if existing is not None and existing <= limit:
+    has_limit, existing = _existing_limit(statement)
+    if has_limit and (existing is None or existing <= limit):
+        # Its own limit already governs, or cannot be evaluated without running
+        # the query. Either way, imposing this one could only widen the result.
         return sql_query, False
 
     try:
