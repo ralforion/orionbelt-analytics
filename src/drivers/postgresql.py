@@ -17,6 +17,7 @@ from ..constants import (
     POSTGRES_SYSTEM_SCHEMAS,
 )
 from ..database_manager import ColumnInfo, TableInfo
+from ..result_limits import fetch_bounded
 from ..security import (
     SecureCredentialManager,
     SecurityLevel,
@@ -389,7 +390,8 @@ class PostgreSQLDriver(DatabaseDriver):
                     if result.returns_rows:
                         result_data["columns"] = list(result.keys())
                         try:
-                            raw_rows = result.fetchall()
+                            raw_rows, truncated = fetch_bounded(result, limit)
+                            result_data["truncated"] = truncated
                         except Exception as fetch_error:
                             logger.error(f"Error fetching results: {fetch_error}")
                             try:

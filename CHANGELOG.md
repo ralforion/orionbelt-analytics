@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A requested row limit now bounds the result.** The limit was applied by
+  looking for the word `LIMIT` in the query text, so a string literal, a
+  comment, or an explicit larger limit suppressed it: `limit=10` returned 6000
+  rows with `limit_applied=false`, and every row was fetched and serialized.
+  Two independent bounds replace that. The statement is limited from its parsed
+  form, in the dialect's own syntax, and a query's own smaller limit is left
+  alone. The driver fetches at most one row past the limit, so a statement that
+  cannot carry a `LIMIT` still cannot materialize an unbounded result. A
+  bounded result says so, and one that fits does not.
+
+### Changed
+- **Executing SQL no longer performs vector retrieval.** `execute_sql_query`
+  embedded a query intent and searched the GraphRAG store before running the
+  statement, then used the result for a single log line and discarded it.
+  Nothing read it, not the executor and not OBQC. Retrieval stays available
+  through `graphrag_query_context`, where it informs writing a query rather
+  than running one. The `query_intent` argument is unchanged.
+
 ### Added
 - **A connection handle, so a client without a transport session can work.**
   MCP 2026-07-28 removed protocol-level sessions and tells servers with state

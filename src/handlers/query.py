@@ -1,7 +1,6 @@
 """SQL validation and execution handler implementations."""
 
 import logging
-import re
 from typing import Any
 
 import mcp.types as mcp_types
@@ -13,63 +12,6 @@ from ..utils import notify_client
 from .confirmation import Confirmation, ask_to_confirm
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_query_intent(sql: str) -> str:
-    """Extract natural language intent from SQL query for context retrieval.
-
-    Args:
-        sql: SQL query string
-
-    Returns:
-        Natural language description of query intent
-    """
-    # Normalize whitespace
-    sql = " ".join(sql.split())
-
-    # Extract table names
-    tables = []
-    from_matches = re.findall(r"FROM\s+(?:[\w.]+\.)?(\w+)", sql, re.IGNORECASE)
-    tables.extend(from_matches)
-    join_matches = re.findall(r"JOIN\s+(?:[\w.]+\.)?(\w+)", sql, re.IGNORECASE)
-    tables.extend(join_matches)
-
-    # Deduplicate
-    seen = set()
-    unique_tables = []
-    for t in tables:
-        if t.lower() not in seen:
-            seen.add(t.lower())
-            unique_tables.append(t)
-
-    # Extract aggregation functions
-    aggs = re.findall(r"\b(SUM|AVG|COUNT|MAX|MIN)\s*\(", sql, re.IGNORECASE)
-    aggs = list({a.upper() for a in aggs})
-
-    # Extract WHERE conditions
-    where_match = re.search(
-        r"WHERE\s+(.+?)(?:GROUP BY|ORDER BY|LIMIT|$)", sql, re.IGNORECASE
-    )
-    conditions = []
-    if where_match:
-        where_clause = where_match.group(1)
-        cond_cols = re.findall(
-            r"\b(\w+)\s*(?:=|>|<|LIKE|IN)", where_clause, re.IGNORECASE
-        )
-        conditions = list(set(cond_cols[:3]))
-
-    # Build intent string
-    if aggs and unique_tables:
-        intent = f"aggregate {', '.join(aggs)} from {', '.join(unique_tables)}"
-    elif unique_tables:
-        intent = f"query {', '.join(unique_tables)}"
-    else:
-        intent = "database query"
-
-    if conditions:
-        intent += f" filtered by {', '.join(conditions)}"
-
-    return intent
 
 
 async def validate_sql_syntax(
@@ -408,27 +350,11 @@ async def execute_sql_query(
                 f"issues={len(obqc_result.issues)}"
             )
 
-        # Auto-inject GraphRAG context if available
-        if session.graphrag_initialized and session.graphrag_manager:
-            try:
-                if query_intent:
-                    logger.info(f"Using provided query intent: '{query_intent}'")
-                    intent_to_use = query_intent
-                else:
-                    intent_to_use = _extract_query_intent(sql_query)
-                    logger.info(f"Auto-extracted intent from SQL: '{intent_to_use}'")
-
-                context = session.graphrag_manager.get_query_context(
-                    query=intent_to_use, max_tables=3, max_columns=15
-                )
-
-                if context and "relevant_tables" in context:
-                    table_count = len(context["relevant_tables"])
-                    logger.info(
-                        f"Auto-retrieved context: {table_count} relevant tables"
-                    )
-            except Exception as e:
-                logger.debug(f"Context auto-retrieval failed (non-critical): {e}")
+        # No GraphRAG retrieval here. Executing a statement used to embed an
+        # intent and search the vector store first, then use the result for one
+        # log line and discard it: nothing read it, not the executor and not
+        # OBQC. Retrieval belongs to graphrag_query_context, where it informs
+        # writing a query rather than running one.
 
         result: dict[str, Any] = db_manager.execute_sql_query(sql_query.strip(), limit)
 

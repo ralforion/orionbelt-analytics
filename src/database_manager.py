@@ -19,6 +19,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 
 from .constants import DB_SQLGLOT_DIALECTS, DEFAULT_SAMPLE_LIMIT, IDENTIFIER_PATTERN
+from .result_limits import apply_row_limit, effective_row_limit
 from .security import (
     SecureCredentialManager,
     SecurityLevel,
@@ -1331,9 +1332,7 @@ class DatabaseManager:
                 raise RuntimeError("No driver available - use connect_* methods")
             raise RuntimeError("No database connection established")
 
-        # Validate and cap the limit
-        if limit <= 0 or limit > 5000:
-            limit = min(max(limit, 100), 5000)
+        limit = effective_row_limit(limit)
 
         # Mandatory validation
         validation = self.validate_sql_syntax(sql_query)
@@ -1353,21 +1352,19 @@ class DatabaseManager:
             }
             return result_data
 
-        # Apply safety limits
+        # Bound the result. The statement is limited from its parsed form, not
+        # by looking for the word LIMIT in its text: a string literal, a comment
+        # or a column name containing it used to suppress the cap entirely, and
+        # an explicit larger limit was taken at face value. The driver bounds
+        # the fetch as well, so a statement that cannot carry a LIMIT still
+        # cannot materialize an unbounded result.
         query_to_execute = sql_query.strip().rstrip(";")
-        query_upper = query_to_execute.upper()
-
-        needs_limit = (
-            validation["query_type"] in ["SELECT", "CTE_SELECT"]
-            and "LIMIT" not in query_upper
-            and "TOP " not in query_upper
-        )
-
         warnings = list(validation.get("warnings", []))
-        limit_applied = False
-        if needs_limit:
-            query_to_execute = f"{query_to_execute} LIMIT {limit}"
-            limit_applied = True
+        db_type = (self.connection_info or {}).get("type")
+        query_to_execute, limit_applied = apply_row_limit(
+            query_to_execute, limit, db_type
+        )
+        if limit_applied:
             warnings.append(
                 f"Safety LIMIT {limit} applied to prevent large result sets"
             )
@@ -1378,14 +1375,22 @@ class DatabaseManager:
         # Merge warnings
         result_data.setdefault("warnings", [])
         result_data["warnings"] = warnings + result_data["warnings"]
+        # Two ways the caller can be missing rows. The driver reports reading
+        # past the limit, which happens when the statement could not carry a
+        # LIMIT and only the fetch bound stopped it -- that is certain. When the
+        # database did the limiting, a result exactly `limit` rows long is the
+        # only clue left, and it is a strong one.
+        certainly_truncated = bool(result_data.pop("truncated", False))
         if limit_applied:
             result_data["limit_applied"] = True
-            if result_data.get("row_count", 0) == limit and result_data.get(
-                "limit_applied"
-            ):
-                result_data["warnings"].append(
-                    f"Result set may be truncated at {limit} rows"
-                )
+        if certainly_truncated or (
+            limit_applied and result_data.get("row_count", 0) == limit
+        ):
+            result_data["limit_applied"] = True
+            result_data["warnings"].append(
+                f"Result set limited to {limit} rows and there may be more; "
+                "raise the limit argument or narrow the query"
+            )
 
         return cast(dict[str, Any], result_data)
 
