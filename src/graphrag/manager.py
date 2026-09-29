@@ -798,6 +798,16 @@ class GraphRAGManager:
                 "domain_names": self.community_detector.suggest_domain_names(),
             }
 
+        # The vocabulary the stored vectors were made against. Without it a
+        # restart embeds a query against a vocabulary fitted on that query's
+        # own words -- a different space of a different size, padded to the
+        # same width by the store, so the search returns plausible nonsense
+        # instead of failing.
+        vocabulary = self.embedder.vocabulary_state()
+        if vocabulary is not None:
+            with open(connection_dir / "embedder_vocabulary.json", "w") as f:
+                json.dump(vocabulary, f)
+
         # Save combined graph
         graph_path = connection_dir / "graph_combined.json"
         graph_data = {
@@ -913,6 +923,24 @@ class GraphRAGManager:
 
         schema_name = self._schema_name or "default"
         restored_components = []
+
+        # Before anything reads the vectors: they only mean something against
+        # the vocabulary they were made with.
+        vocabulary_path = connection_dir / "embedder_vocabulary.json"
+        if vocabulary_path.exists():
+            try:
+                with open(vocabulary_path) as f:
+                    saved_vocabulary = json.load(f)
+                if self.embedder.load_vocabulary_state(saved_vocabulary):
+                    restored_components.append("embedding vocabulary")
+            except (OSError, ValueError) as e:
+                logger.warning(f"Could not read the saved vocabulary: {e}")
+        elif self.embedder.embedding_model == MODEL_TFIDF:
+            logger.warning(
+                "No saved TF-IDF vocabulary beside this index: it was written "
+                "by an older version. Searches cannot be compared with the "
+                "stored vectors until the schema is discovered again."
+            )
 
         # 1. Verify ChromaDB has data (reconnected implicitly in __init__)
         try:

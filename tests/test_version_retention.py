@@ -898,6 +898,10 @@ def _fake_manager(schemas: list[str], payload: str = "{}"):
     manager.community_detector = None
     manager.vector_store = mock.Mock()
     manager.vector_store.save.side_effect = lambda p: Path(p).write_text(payload)
+    # save_state also writes the vocabulary its vectors were made against;
+    # this manager has no embedder, which is the "nothing to save" case.
+    manager.embedder = mock.Mock()
+    manager.embedder.vocabulary_state.return_value = None
     return manager
 
 

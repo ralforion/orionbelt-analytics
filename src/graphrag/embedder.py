@@ -22,6 +22,7 @@ Two backends are available:
     still works with no model available (offline install, restricted network).
 """
 
+import hashlib
 import logging
 import os
 from dataclasses import dataclass
@@ -49,6 +50,21 @@ EMBEDDING_SCHEMA_VERSION = 2
 # time and 2.5 s in one batch, for bit-identical vectors -- but a whole schema
 # in a single call would hold every intermediate tensor in memory at once.
 EMBEDDING_BATCH_SIZE = 256
+
+
+def vocabulary_fingerprint(vocabulary: dict[str, int]) -> str:
+    """Identify a fitted vocabulary, so two vector spaces are never mixed.
+
+    Args:
+        vocabulary: Term to column index, as scikit-learn fits it.
+
+    Returns:
+        A short digest of the vocabulary, stable across processes.
+    """
+    joined = "\u0000".join(
+        f"{term}:{index}" for term, index in sorted(vocabulary.items())
+    )
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
 def resolve_embedding_model(requested: str | None = None) -> str:
@@ -423,9 +439,98 @@ class SchemaEmbedder:
             # first, so this only covers a lone embed before any indexing.
             self.vectorizer.fit([text])
             self._is_fitted = True
+            logger.warning(
+                "TF-IDF embedded a text before any schema was indexed, so its "
+                "vocabulary is that text's own words. A vector made this way "
+                "cannot be compared with indexed ones."
+            )
 
         embedding = self.vectorizer.transform([text]).toarray()[0]
         return np.asarray(embedding)
+
+    def vocabulary_state(self) -> dict[str, Any] | None:
+        """The fitted TF-IDF vocabulary, in a form that can be written to disk.
+
+        A TF-IDF vector only means something against the vocabulary and
+        document frequencies it was produced with. Those are fitted when a
+        schema is indexed and were then lost with the process, so a restart
+        left the stored vectors describing a space nothing could reproduce.
+
+        Returns:
+            The vocabulary, its inverse document frequencies and a fingerprint,
+            or None for a backend that has no such state or is not fitted.
+        """
+        if self.embedding_model != MODEL_TFIDF or not self._is_fitted:
+            return None
+        try:
+            vocabulary = {
+                term: int(index) for term, index in self.vectorizer.vocabulary_.items()
+            }
+            idf = [float(value) for value in self.vectorizer.idf_]
+        except AttributeError:  # pragma: no cover - not actually fitted
+            return None
+        return {
+            "backend": MODEL_TFIDF,
+            "vocabulary": vocabulary,
+            "idf": idf,
+            "fingerprint": vocabulary_fingerprint(vocabulary),
+        }
+
+    def load_vocabulary_state(self, state: dict[str, Any]) -> bool:
+        """Restore a vocabulary saved by :meth:`vocabulary_state`.
+
+        Restored rather than refitted: refitting on a different corpus gives a
+        different space, and mixing spaces is what makes a search silently
+        wrong rather than loudly broken.
+
+        Args:
+            state: What ``vocabulary_state`` produced.
+
+        Returns:
+            True if this embedder now embeds in the saved space.
+        """
+        if self.embedding_model != MODEL_TFIDF:
+            return False
+        vocabulary = state.get("vocabulary")
+        idf = state.get("idf")
+        if not vocabulary or not idf or len(vocabulary) != len(idf):
+            logger.warning("Saved TF-IDF vocabulary is incomplete; not restoring it")
+            return False
+
+        # The file has to be the one the fingerprint describes. A half-written
+        # or hand-edited vocabulary would embed queries in a space the stored
+        # vectors do not share, which is the failure this whole mechanism
+        # exists to prevent.
+        expected = state.get("fingerprint")
+        if expected and expected != vocabulary_fingerprint(vocabulary):
+            logger.warning(
+                "Saved TF-IDF vocabulary does not match its own fingerprint; "
+                "not restoring it"
+            )
+            return False
+
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+
+            restored = TfidfVectorizer(
+                max_features=384,
+                stop_words="english",
+                ngram_range=(1, 2),
+                vocabulary=vocabulary,
+            )
+            # One fit builds the transformer the saved frequencies then replace.
+            # The vocabulary is fixed by the constructor, so the placeholder
+            # corpus cannot change which terms exist.
+            restored.fit([" ".join(list(vocabulary)[:1]) or "placeholder"])
+            restored.idf_ = np.asarray(idf, dtype=np.float64)
+        except Exception as e:
+            logger.warning(f"Could not restore the saved TF-IDF vocabulary: {e}")
+            return False
+
+        self.vectorizer = restored
+        self._is_fitted = True
+        logger.info(f"Restored a TF-IDF vocabulary of {len(vocabulary)} terms")
+        return True
 
     def _embed_texts(self, texts: list[str]) -> list[np.ndarray]:
         """Embed many texts, in bounded batches, in the order given.
