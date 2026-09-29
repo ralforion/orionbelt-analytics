@@ -80,6 +80,41 @@ def resolve_mcp_cache_ttl() -> int:
     return ttl
 
 
+DEFAULT_METADATA_CACHE_TTL_SECONDS = 300
+
+
+def resolve_metadata_cache_ttl() -> int:
+    """How long the database's own metadata may be reused, in seconds.
+
+    Its own setting, not the session idle timeout: how fast a *database's*
+    tables change has nothing to do with how long a *client* sits idle. A
+    development database that gains columns every few minutes wants a short
+    one; a warehouse whose schema changes quarterly can hold it for hours and
+    save the reflection.
+
+    A manual ``reset_cache`` is immediate whatever this says.
+
+    Returns:
+        Seconds to keep a metadata answer; 0 disables reuse entirely, and
+        anything unreadable keeps the default.
+    """
+    raw = os.getenv("METADATA_CACHE_TTL_SECONDS")
+    if raw is None or not raw.strip():
+        return DEFAULT_METADATA_CACHE_TTL_SECONDS
+    try:
+        ttl = int(raw)
+    except ValueError:
+        ttl = -1
+    if ttl < 0:
+        logger.warning(
+            f"Invalid METADATA_CACHE_TTL_SECONDS='{raw}'. Must be a whole "
+            f"number of seconds, 0 to disable reuse. Defaulting to "
+            f"{DEFAULT_METADATA_CACHE_TTL_SECONDS}."
+        )
+        return DEFAULT_METADATA_CACHE_TTL_SECONDS
+    return ttl
+
+
 SESSIONLESS_FALLBACKS = ("sole_session", "none")
 
 

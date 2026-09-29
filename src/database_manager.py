@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 
+from .config import resolve_metadata_cache_ttl
 from .constants import DB_SQLGLOT_DIALECTS, DEFAULT_SAMPLE_LIMIT, IDENTIFIER_PATTERN
 from .result_limits import apply_row_limit, effective_row_limit
 from .security import (
@@ -182,7 +183,10 @@ class DatabaseManager:
         # Security and performance
         self._credential_manager = SecureCredentialManager()
         self._metadata_cache: dict[str, Any] = {}
-        self._cache_ttl = 300  # 5 minutes
+        # Read per manager, so a reconnect picks up a changed setting without
+        # a restart. How fast this database's schema changes is its own
+        # question, unrelated to how long a client stays idle.
+        self._cache_ttl = resolve_metadata_cache_ttl()
         self._connection_id: str | None = None
 
         # Held by async callers (see async_utils.run_db) around a blocking call
@@ -223,7 +227,13 @@ class DatabaseManager:
         return f"{operation}:{':'.join(str(arg) for arg in args)}"
 
     def _is_cache_valid(self, cache_entry: dict[str, Any]) -> bool:
-        """Check if cache entry is still valid."""
+        """Check if cache entry is still valid.
+
+        A TTL of zero means never reuse: the operator has said this database's
+        metadata changes faster than any window worth keeping.
+        """
+        if self._cache_ttl <= 0:
+            return False
         return bool(time.time() - cache_entry.get("timestamp", 0) < self._cache_ttl)
 
     def _get_from_cache(self, cache_key: str) -> Any | None:

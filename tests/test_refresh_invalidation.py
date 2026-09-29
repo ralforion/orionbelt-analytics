@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from src.config import DEFAULT_METADATA_CACHE_TTL_SECONDS
 from src.database_manager import ColumnInfo, DatabaseManager, TableInfo
 from src.handler_context import HandlerContext
 from src.handlers import graphrag as graphrag_handler
@@ -181,6 +182,47 @@ class TestTheCallerStopsRepeatingTheWork:
 
         # Nothing was learned, so the next call must ask again.
         assert session.has_cached_views("public") is False
+
+
+class TestTheStalenessPolicy:
+    """How long database metadata may be reused is its own setting."""
+
+    def test_the_default_is_five_minutes(self, monkeypatch):
+        monkeypatch.delenv("METADATA_CACHE_TTL_SECONDS", raising=False)
+
+        assert DatabaseManager()._cache_ttl == DEFAULT_METADATA_CACHE_TTL_SECONDS
+
+    def test_zero_never_reuses_an_answer(self, monkeypatch):
+        monkeypatch.setenv("METADATA_CACHE_TTL_SECONDS", "0")
+        manager = DatabaseManager()
+
+        manager._store_in_cache("get_tables:public", ["orders"])
+
+        assert manager._get_from_cache("get_tables:public") is None
+
+    def test_a_longer_window_is_honoured(self, monkeypatch):
+        monkeypatch.setenv("METADATA_CACHE_TTL_SECONDS", "3600")
+
+        assert DatabaseManager()._cache_ttl == 3600
+
+    def test_nonsense_keeps_the_default(self, monkeypatch):
+        monkeypatch.setenv("METADATA_CACHE_TTL_SECONDS", "whenever")
+
+        assert DatabaseManager()._cache_ttl == DEFAULT_METADATA_CACHE_TTL_SECONDS
+
+    def test_a_negative_window_keeps_the_default(self, monkeypatch):
+        monkeypatch.setenv("METADATA_CACHE_TTL_SECONDS", "-5")
+
+        assert DatabaseManager()._cache_ttl == DEFAULT_METADATA_CACHE_TTL_SECONDS
+
+    def test_a_manual_reset_is_immediate_whatever_the_window(self, monkeypatch):
+        monkeypatch.setenv("METADATA_CACHE_TTL_SECONDS", "3600")
+        manager = DatabaseManager()
+        manager._store_in_cache("get_tables:public", ["orders"])
+
+        manager.clear_metadata_cache()
+
+        assert manager._get_from_cache("get_tables:public") is None
 
 
 @pytest.mark.parametrize("cache_type", ["schema", "all"])
