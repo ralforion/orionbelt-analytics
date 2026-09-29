@@ -274,7 +274,11 @@ class GraphRAGManager:
         )
 
     def search_schema(
-        self, query: str, top_k: int = 5, element_type: str | None = None
+        self,
+        query: str,
+        top_k: int = 5,
+        element_type: str | None = None,
+        query_embedding: Any | None = None,
     ) -> list[dict[str, Any]]:
         """
         Search schema using natural language.
@@ -283,6 +287,10 @@ class GraphRAGManager:
             query: Natural language query
             top_k: Number of results
             element_type: Filter by type ("table", "column", "relationship")
+            query_embedding: The query already embedded. Pass it when the same
+                query is searched more than once, so the text is put through
+                the model only once; the vector depends on the text alone, not
+                on which element type is being searched.
 
         Returns:
             List of matching schema elements with scores
@@ -292,12 +300,17 @@ class GraphRAGManager:
                 "GraphRAG not initialized. Call initialize_from_schema() first."
             )
 
-        results = self.vector_store.search_by_text(
-            query_text=query,
-            embedder=self.embedder,
-            top_k=top_k,
-            element_type=element_type,
-        )
+        if query_embedding is None:
+            results = self.vector_store.search_by_text(
+                query_text=query,
+                embedder=self.embedder,
+                top_k=top_k,
+                element_type=element_type,
+            )
+        else:
+            results = self.vector_store.search(
+                query_embedding, top_k=top_k, element_type=element_type
+            )
 
         return [
             {
@@ -435,12 +448,15 @@ class GraphRAGManager:
         top_k: int = 5,
         include_related: bool = True,
         max_related_distance: int = 1,
+        query_embedding: Any | None = None,
     ) -> dict[str, Any]:
         """
         Find tables relevant to a natural language query.
 
         Args:
             query: Natural language description of what user wants
+            query_embedding: The query already embedded, when the caller is
+                searching the same text more than once.
             top_k: Number of primary tables to find
             include_related: Whether to include related tables
             max_related_distance: Maximum graph distance for related tables
@@ -452,7 +468,9 @@ class GraphRAGManager:
             raise RuntimeError("GraphRAG not initialized")
 
         # Step 1: Vector search for relevant tables
-        table_results = self.search_schema(query, top_k=top_k, element_type="table")
+        table_results = self.search_schema(
+            query, top_k=top_k, element_type="table", query_embedding=query_embedding
+        )
 
         primary_tables = [r["element"]["name"] for r in table_results]
 
@@ -537,14 +555,31 @@ class GraphRAGManager:
         if not self._initialized:
             raise RuntimeError("GraphRAG not initialized")
 
+        # One embedding for both searches. The vector depends on the query text
+        # alone, and this method searches tables and then columns with the same
+        # text, so embedding it twice put the identical string through the model
+        # for nothing.
+        query_embedding = None
+        try:
+            query_embedding = self.embedder._embed_text(query)
+        except Exception as e:
+            logger.debug(f"Could not pre-embed the query, searching by text: {e}")
+
         # Find relevant tables
         table_info = self.find_relevant_tables(
-            query, top_k=max_tables, include_related=True, max_related_distance=1
+            query,
+            top_k=max_tables,
+            include_related=True,
+            max_related_distance=1,
+            query_embedding=query_embedding,
         )
 
         # Find relevant columns
         column_results = self.search_schema(
-            query, top_k=max_columns, element_type="column"
+            query,
+            top_k=max_columns,
+            element_type="column",
+            query_embedding=query_embedding,
         )
 
         # Build minimal context

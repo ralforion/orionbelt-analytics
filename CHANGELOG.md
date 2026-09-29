@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounded result says so, and one that fits does not.
 
 ### Changed
+- **A query is embedded once per retrieval, not twice.**
+  `get_query_context` searches tables and then columns with the same text, and
+  each search embedded that text itself. The vector depends on the text alone,
+  so the identical string went through the model twice. It is now computed once
+  and reused; a search called on its own still embeds its own query. Results
+  and their order are unchanged.
 - **Executing SQL no longer performs vector retrieval.** `execute_sql_query`
   embedded a query intent and searched the GraphRAG store before running the
   statement, then used the result for a single log line and discarded it.
