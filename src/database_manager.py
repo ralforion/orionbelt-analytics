@@ -1117,6 +1117,58 @@ class DatabaseManager:
             self._driver.analyze_table(table_name, schema_name),
         )
 
+    def analyze_tables(
+        self, table_names: list[str], schema_name: str | None = None
+    ) -> dict[str, "TableInfo"]:
+        """Analyze several tables in one call.
+
+        Discovery reflected table by table, each call checking the connection
+        and asking the driver separately. Asking once lets a driver answer for
+        the whole schema, and lets the caller move the batch off the event loop
+        in one go rather than a hundred times.
+
+        Args:
+            table_names: Tables to analyze.
+            schema_name: Schema they live in, or None for the default.
+
+        Returns:
+            The metadata by table name, without the tables that could not be
+            read.
+        """
+        if not self._dremio_rest_connection:
+            self._ensure_connection()
+
+        if not self._driver:
+            raise RuntimeError("No driver available")
+
+        from .drivers.snowflake import SnowflakeDriver
+
+        if isinstance(self._driver, SnowflakeDriver):
+            # Snowflake reads its prefetched constraint cache through these
+            # extra arguments, which the driver-level batch cannot pass. Same
+            # error isolation as the default: a table that cannot be read is
+            # left out, it does not cost the schema its discovery.
+            analyzed: dict[str, TableInfo] = {}
+            for name in table_names:
+                try:
+                    info = self._driver.analyze_table(
+                        name,
+                        schema_name,
+                        cache_get=self._get_from_cache,
+                        log_sql=self._log_sql_query,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to analyze table {name}: {e}")
+                    continue
+                if info is not None:
+                    analyzed[name] = info
+            return analyzed
+
+        return cast(
+            dict[str, "TableInfo"],
+            self._driver.analyze_tables(table_names, schema_name),
+        )
+
     # ------------------------------------------------------------------
     # Sample & query (delegated to driver with validation layer)
     # ------------------------------------------------------------------

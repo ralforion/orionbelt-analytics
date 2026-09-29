@@ -26,6 +26,7 @@ from ..security import (
 )
 from ..serialization import serialize_rows
 from .base import DatabaseDriver
+from .reflection import reflect_tables
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,31 @@ class PostgreSQLDriver(DatabaseDriver):
         except SQLAlchemyError as e:
             logger.error(f"Failed to get views: {e}")
             return {}
+
+    def analyze_tables(
+        self, table_names: list[str], schema_name: str | None = None
+    ) -> dict[str, TableInfo]:
+        """Reflect the whole batch in one pass, falling back to one at a time.
+
+        Args:
+            table_names: Tables to analyze.
+            schema_name: Schema they live in, or None for the default.
+
+        Returns:
+            The metadata by table name, without the tables that could not be
+            read.
+        """
+        if not table_names or self.engine is None:
+            return super().analyze_tables(table_names, schema_name)
+        try:
+            return reflect_tables(
+                self.engine, table_names, schema_name, schema_name or "public"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Schema-wide reflection failed ({e}); reflecting one table at a time"
+            )
+            return super().analyze_tables(table_names, schema_name)
 
     def analyze_table(
         self, table_name: str, schema_name: str | None = None

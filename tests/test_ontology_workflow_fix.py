@@ -123,6 +123,12 @@ def mock_db_manager():
         return None
 
     manager.analyze_table.side_effect = mock_analyze_table
+    # Mirrors the driver default: the batch is the per-table call, looped.
+    manager.analyze_tables.side_effect = lambda names, schema=None: {
+        name: info
+        for name in names
+        if (info := manager.analyze_table(name, schema)) is not None
+    }
     manager.has_engine.return_value = True
     manager.prefetch_schema_constraints.return_value = None
 

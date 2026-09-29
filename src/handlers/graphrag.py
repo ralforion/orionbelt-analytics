@@ -444,16 +444,10 @@ async def initialize_graphrag(
             )
 
             if effective_schema:
-                db_manager.prefetch_schema_constraints(effective_schema)
+                await run_db(db_manager.prefetch_schema_constraints, effective_schema)
 
-            tables_info = []
-            for table_name in tables:
-                try:
-                    table_info = db_manager.analyze_table(table_name, effective_schema)
-                    if table_info:
-                        tables_info.append(table_info)
-                except Exception as e:
-                    logger.error(f"Failed to analyze table {table_name}: {e}")
+            analyzed = await run_db(db_manager.analyze_tables, tables, effective_schema)
+            tables_info = [analyzed[name] for name in tables if name in analyzed]
 
             session.cache_schema_analysis(effective_schema or "", tables_info)
 

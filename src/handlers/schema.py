@@ -283,7 +283,7 @@ async def discover_schema(
 
     # Prefetch PKs and FKs at schema level (Snowflake optimization)
     if schema_name:
-        db_manager.prefetch_schema_constraints(schema_name)
+        await run_db(db_manager.prefetch_schema_constraints, schema_name)
 
     # LIGHTWEIGHT MODE
     if lightweight:
@@ -293,29 +293,32 @@ async def discover_schema(
         relationships = {}
         fan_trap_warnings = []
 
+        # One call for the whole schema, in a worker: reflecting table by
+        # table held the event loop for every round trip of every table, and a
+        # driver that can answer for a schema at once gets to.
+        analyzed = await run_db(db_manager.analyze_tables, tables, schema_name)
+
         for table_name in tables:
-            try:
-                table_info = db_manager.analyze_table(table_name, schema_name)
-                if table_info:
-                    table_info_objects.append(table_info)
+            table_info = analyzed.get(table_name)
+            if not table_info:
+                continue
+            table_info_objects.append(table_info)
 
-                    if table_info.foreign_keys:
-                        relationships[table_name] = table_info.foreign_keys
+            if table_info.foreign_keys:
+                relationships[table_name] = table_info.foreign_keys
 
-                        if len(table_info.foreign_keys) > 1:
-                            referenced_tables = [
-                                fk["referenced_table"] for fk in table_info.foreign_keys
-                            ]
-                            fan_trap_warnings.append(
-                                {
-                                    "table": table_name,
-                                    "warning": f"Table {table_name} connects to multiple tables - potential fan-trap risk",
-                                    "referenced_tables": referenced_tables,
-                                    "recommendation": "Use separate CTEs or UNION approach for multi-fact aggregations",
-                                }
-                            )
-            except Exception as e:
-                logger.warning(f"Failed to analyze table {table_name}: {e}")
+                if len(table_info.foreign_keys) > 1:
+                    referenced_tables = [
+                        fk["referenced_table"] for fk in table_info.foreign_keys
+                    ]
+                    fan_trap_warnings.append(
+                        {
+                            "table": table_name,
+                            "warning": f"Table {table_name} connects to multiple tables - potential fan-trap risk",
+                            "referenced_tables": referenced_tables,
+                            "recommendation": "Use separate CTEs or UNION approach for multi-fact aggregations",
+                        }
+                    )
 
         session.cache_schema_analysis(schema_name or "", table_info_objects)
         logger.info(
@@ -381,8 +384,9 @@ async def discover_schema(
     # FULL MODE
     all_table_info = []
     table_info_objects = []
+    analyzed = await run_db(db_manager.analyze_tables, tables, schema_name)
     for table_name in tables:
-        table_info = db_manager.analyze_table(table_name, schema_name)
+        table_info = analyzed.get(table_name)
         if table_info:
             table_info_objects.append(table_info)
             table_dict = {
@@ -703,7 +707,7 @@ async def get_table_details(
     db_manager = services.get_session_db_manager(ctx)
 
     try:
-        table_info = db_manager.analyze_table(table_name, schema_name)
+        table_info = await run_db(db_manager.analyze_table, table_name, schema_name)
 
         if not table_info:
             await notify_client(

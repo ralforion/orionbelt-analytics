@@ -1,9 +1,12 @@
 """Abstract base class for database drivers."""
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
 from ..database_manager import TableInfo
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseDriver(ABC):
@@ -68,6 +71,38 @@ class DatabaseDriver(ABC):
         self, table_name: str, schema_name: str | None = None
     ) -> TableInfo | None:
         """Analyze a table and return its metadata."""
+
+    def analyze_tables(
+        self, table_names: list[str], schema_name: str | None = None
+    ) -> dict[str, TableInfo]:
+        """Analyze several tables, skipping the ones that fail.
+
+        Concrete, not abstract: the default reflects one table at a time, which
+        is what every caller did before this existed. A driver whose backend can
+        answer for a whole schema in one round trip overrides it -- discovery
+        asks once per schema, so the work belongs where the dialect is known.
+
+        A table that cannot be reflected is left out rather than failing the
+        batch: one unreadable table must not cost the schema its discovery.
+
+        Args:
+            table_names: Tables to analyze.
+            schema_name: Schema they live in, or None for the default.
+
+        Returns:
+            The metadata by table name, in the order asked, without the
+            tables that could not be read.
+        """
+        analyzed: dict[str, TableInfo] = {}
+        for name in table_names:
+            try:
+                info = self.analyze_table(name, schema_name)
+            except Exception as e:
+                logger.warning(f"Failed to analyze table {name}: {e}")
+                continue
+            if info is not None:
+                analyzed[name] = info
+        return analyzed
 
     @abstractmethod
     def validate_sql_syntax(

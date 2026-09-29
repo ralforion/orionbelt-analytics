@@ -988,6 +988,11 @@ async def test_discover_schema_records_a_version(tmp_path, monkeypatch):
         foreign_keys=[],
         row_count=1,
     )
+    db.analyze_tables.side_effect = lambda names, schema=None: {
+        name: info
+        for name in names
+        if (info := db.analyze_table(name, schema)) is not None
+    }
 
     ctx = Mock()
     ctx.info = AsyncMock()

@@ -279,15 +279,12 @@ async def generate_ontology(
                 )
 
                 if schema_name:
-                    db_manager.prefetch_schema_constraints(schema_name)
+                    await run_db(db_manager.prefetch_schema_constraints, schema_name)
 
-                for table_name in tables:
-                    try:
-                        table_info = db_manager.analyze_table(table_name, schema_name)
-                        if table_info:
-                            tables_info.append(table_info)
-                    except Exception as e:
-                        logger.error(f"Failed to analyze table {table_name}: {e}")
+                analyzed = await run_db(db_manager.analyze_tables, tables, schema_name)
+                tables_info.extend(
+                    analyzed[name] for name in tables if name in analyzed
+                )
 
                 session.cache_schema_analysis(schema_name or "", tables_info)
 
