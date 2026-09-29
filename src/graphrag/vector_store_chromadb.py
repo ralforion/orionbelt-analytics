@@ -32,6 +32,11 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on one write, whatever the client reports. ChromaDB 1.5 allows
+# 5,461; capping below it keeps the payload of a single call modest and leaves
+# room for a build that reports a larger figure than it can hold.
+DEFAULT_MAX_WRITE_BATCH = 2000
+
 # Every element_type the store can hold. Keep in step with the embedder's
 # create_*_embedding methods -- get_statistics() reports a per-type breakdown
 # and anything missing here is silently absent from it.
@@ -310,12 +315,38 @@ class ChromaDBVectorStore:
         # Upsert for the same reason as add_element: this is the path
         # discover_schema takes, and it runs again every time a schema is
         # rediscovered.
+        #
+        # In chunks the backend accepts. A wide schema reaches thousands of
+        # elements -- 500 tables of 20 columns is over 10,000 -- and ChromaDB
+        # refuses a single write past its own maximum, so one call would have
+        # failed on exactly the schemas that need the index most.
+        batch_size = self._max_write_batch()
         try:
-            self.collection.upsert(ids=ids, embeddings=embeddings, metadatas=metadatas)
+            for start in range(0, len(ids), batch_size):
+                stop = start + batch_size
+                self.collection.upsert(
+                    ids=ids[start:stop],
+                    embeddings=embeddings[start:stop],
+                    metadatas=metadatas[start:stop],
+                )
             logger.info(f"Stored {len(elements)} elements in ChromaDB vector store")
         except Exception as e:
             logger.error(f"Failed to store elements: {e}")
             raise
+
+    def _max_write_batch(self) -> int:
+        """How many elements the client accepts in one write.
+
+        Returns:
+            The client's own maximum, or a conservative default if this
+            ChromaDB build does not report one.
+        """
+        try:
+            reported = int(self.client.get_max_batch_size())
+        except Exception as e:  # pragma: no cover - build without the method
+            logger.debug(f"ChromaDB did not report a maximum batch size: {e}")
+            return DEFAULT_MAX_WRITE_BATCH
+        return max(1, min(reported, DEFAULT_MAX_WRITE_BATCH))
 
     def build_index(self) -> None:
         """Build the search index - no-op for ChromaDB (auto-indexed)."""
