@@ -720,30 +720,57 @@ class GraphRAGManager:
         # Combined graph with all schemas' tables_info
         all_tables_info = list(self.graph_retriever._tables_info.values())
 
+        # Derived once and written into several files. The graph and the
+        # communities are connection-wide, so recomputing them per accumulated
+        # schema produced the same answer each time -- for five schemas, six
+        # whole-graph exports and six rounds of community summarization.
+        visualization = self.graph_retriever.export_graph_for_visualization()
+        communities_data: dict[str, Any] | None = None
+        if self.community_detector:
+            communities_data = {
+                "summaries": self.community_detector.get_all_summaries(),
+                "domain_names": self.community_detector.suggest_domain_names(),
+            }
+
         # Save combined graph
         graph_path = connection_dir / "graph_combined.json"
         graph_data = {
             "schema_names": self._schema_names,
             "tables_info": all_tables_info,
-            "visualization": self.graph_retriever.export_graph_for_visualization(),
+            "visualization": visualization,
         }
         with open(graph_path, "w") as f:
             json.dump(graph_data, f, indent=2)
 
         # Save combined communities
-        if self.community_detector:
+        if communities_data is not None:
             communities_path = connection_dir / "communities_combined.json"
-            communities_data = {
-                "summaries": self.community_detector.get_all_summaries(),
-                "domain_names": self.community_detector.suggest_domain_names(),
-            }
             with open(communities_path, "w") as f:
                 json.dump(communities_data, f, indent=2)
 
         # Also save per-schema files (backward compat with workspace metadata)
+        exported_vectors: Path | None = None
         for schema_name in self._schema_names:
             vector_store_path = connection_dir / f"vector_store_{schema_name}.json"
-            self.vector_store.save(vector_store_path)
+            # The vector store is connection-scoped and accumulative, so every
+            # schema's file held an export of the same whole collection. It was
+            # serialized once per schema: five schemas wrote 38 MB of five
+            # identical exports, 915 ms against 206 ms. Exported once now, and
+            # copied --
+            # which also makes the files byte-identical, where before they
+            # differed in the order ChromaDB happened to return metadata keys.
+            if exported_vectors is None:
+                self.vector_store.save(vector_store_path)
+                exported_vectors = vector_store_path
+            else:
+                try:
+                    shutil.copy2(exported_vectors, vector_store_path)
+                except OSError as e:
+                    logger.warning(
+                        f"Failed to copy the vector export to "
+                        f"{vector_store_path.name} ({e}); exporting again"
+                    )
+                    self.vector_store.save(vector_store_path)
 
             # Per-schema graph subset
             schema_tables = [
@@ -754,20 +781,16 @@ class GraphRAGManager:
             per_schema_graph_path = connection_dir / f"graph_{schema_name}.json"
             per_schema_data = {
                 "tables_info": schema_tables,
-                "visualization": self.graph_retriever.export_graph_for_visualization(),
+                "visualization": visualization,
             }
             with open(per_schema_graph_path, "w") as f:
                 json.dump(per_schema_data, f, indent=2)
 
             schema_communities_path: Path | None = None
-            if self.community_detector:
+            if communities_data is not None:
                 schema_communities_path = (
                     connection_dir / f"communities_{schema_name}.json"
                 )
-                communities_data = {
-                    "summaries": self.community_detector.get_all_summaries(),
-                    "domain_names": self.community_detector.suggest_domain_names(),
-                }
                 with open(schema_communities_path, "w") as f:
                     json.dump(communities_data, f, indent=2)
 
