@@ -5,6 +5,7 @@ Coordinates embeddings, vector search, graph traversal, and community detection
 to provide intelligent schema navigation and context-aware query generation.
 """
 
+import asyncio
 import json
 import logging
 import shutil
@@ -190,32 +191,12 @@ class GraphRAGManager:
         )
 
         self._schema_name = schema_name
-        views_info = _annotate_view_sources(views_info)
-
-        # Step 1: Create embeddings
-        logger.info("Creating embeddings...")
-        embeddings = self.embedder.batch_embed_schema(tables_info, views_info)
-
-        # Step 2: Add to vector store
-        logger.info("Building vector store...")
-        self.vector_store.add_elements_batch(embeddings["tables"])
-        self.vector_store.add_elements_batch(embeddings["columns"])
-        self.vector_store.add_elements_batch(embeddings["relationships"])
-        self.vector_store.add_elements_batch(embeddings["views"])
-        self.vector_store.build_index()
-
-        # Step 3: Build graph
-        logger.info("Building relationship graph...")
-        self.graph_retriever.build_graph(tables_info)
-
-        # Step 4: Detect communities
-        logger.info("Detecting schema communities...")
-        self.community_detector = CommunityDetector(self.graph_retriever.graph)
-        self.community_detector.detect_communities(method="label_propagation")
-
-        self._initialized = True
-        if schema_name not in self._schema_names:
-            self._schema_names.append(schema_name)
+        self._publish_schema(
+            self._prepare_schema(tables_info, views_info),
+            tables_info,
+            schema_name,
+            accumulate=False,
+        )
         logger.info("GraphRAG initialization complete")
 
     def accumulate_schema(
@@ -241,35 +222,120 @@ class GraphRAGManager:
             f"existing schemas: {self._schema_names})"
         )
 
-        views_info = _annotate_view_sources(views_info)
+        self._publish_schema(
+            self._prepare_schema(tables_info, views_info),
+            tables_info,
+            schema_name,
+            accumulate=True,
+        )
 
-        # Step 1: Create embeddings for new tables
-        logger.info("Creating embeddings for new schema...")
-        embeddings = self.embedder.batch_embed_schema(tables_info, views_info)
+        logger.info(
+            f"Schema '{schema_name}' accumulated. Total schemas: {self._schema_names}, "
+            f"Total tables: {self.graph_retriever.graph.number_of_nodes()}"
+        )
 
-        # Step 2: Add to vector store (ChromaDB upserts by ID, JSON appends)
+    def _prepare_schema(
+        self,
+        tables_info: list[dict[str, Any]],
+        views_info: list[dict[str, Any]] | None,
+    ) -> dict[str, list[Any]]:
+        """Build the embeddings for a schema, touching no shared state.
+
+        This is where indexing spends its time -- 8.2 s of the 8.3 s a
+        60-table schema costs on MiniLM, the default backend -- and it reads
+        only its arguments and the embedder, so it is the half that can run off
+        the event loop.
+
+        Args:
+            tables_info: Table metadata to embed.
+            views_info: View metadata to embed, or None.
+
+        Returns:
+            Elements by kind, as ``batch_embed_schema`` returns them.
+        """
+        logger.info("Creating embeddings...")
+        return self.embedder.batch_embed_schema(
+            tables_info, _annotate_view_sources(views_info)
+        )
+
+    def _publish_schema(
+        self,
+        embeddings: dict[str, list[Any]],
+        tables_info: list[dict[str, Any]],
+        schema_name: str,
+        *,
+        accumulate: bool,
+    ) -> None:
+        """Write prepared embeddings and the graph into the shared state.
+
+        Synchronous on purpose, with no await inside: every reader of this
+        manager runs on the same event loop, so an atomic block is what lets
+        them see either the schema or not, never a graph mid-rebuild.
+
+        Args:
+            embeddings: What :meth:`_prepare_schema` produced.
+            tables_info: The same table metadata, for the relationship graph.
+            schema_name: The schema being indexed.
+            accumulate: Add to the existing graph rather than replacing it.
+        """
+        logger.info("Building vector store...")
         self.vector_store.add_elements_batch(embeddings["tables"])
         self.vector_store.add_elements_batch(embeddings["columns"])
         self.vector_store.add_elements_batch(embeddings["relationships"])
         self.vector_store.add_elements_batch(embeddings["views"])
         self.vector_store.build_index()
 
-        # Step 3: Add to graph (accumulative, no clear)
-        logger.info("Adding to relationship graph...")
-        self.graph_retriever.add_to_graph(tables_info)
+        if accumulate:
+            logger.info("Adding to relationship graph...")
+            self.graph_retriever.add_to_graph(tables_info)
+            logger.info("Re-detecting communities on combined graph...")
+        else:
+            logger.info("Building relationship graph...")
+            self.graph_retriever.build_graph(tables_info)
+            logger.info("Detecting schema communities...")
 
-        # Step 4: Re-detect communities on the combined graph
-        logger.info("Re-detecting communities on combined graph...")
         self.community_detector = CommunityDetector(self.graph_retriever.graph)
         self.community_detector.detect_communities(method="label_propagation")
 
-        self._schema_name = schema_name  # Last added schema
+        self._schema_name = schema_name
         if schema_name not in self._schema_names:
             self._schema_names.append(schema_name)
         self._initialized = True
 
+    async def aindex_schema(
+        self,
+        tables_info: list[dict[str, Any]],
+        schema_name: str = "default",
+        views_info: list[dict[str, Any]] | None = None,
+        *,
+        accumulate: bool,
+    ) -> None:
+        """Index a schema with the embedding work off the event loop.
+
+        Embedding is 99% of indexing on the default backend and held the loop
+        for its whole duration, so every other session on the server was frozen
+        while one schema was indexed -- 8.2 s for 60 tables. It runs in a worker
+        here, and only the writes to the shared graph and vector store happen
+        back on the loop, in one synchronous block.
+
+        The caller serializes calls per connection: the embedder fits its
+        vocabulary as it goes, and two concurrent indexings of one manager would
+        interleave their writes.
+
+        Args:
+            tables_info: Table metadata to index.
+            schema_name: The schema being indexed.
+            views_info: View metadata, indexed for search only.
+            accumulate: Add to the existing graph rather than replacing it.
+        """
+        embeddings = await asyncio.to_thread(
+            self._prepare_schema, tables_info, views_info
+        )
+        self._publish_schema(
+            embeddings, tables_info, schema_name, accumulate=accumulate
+        )
         logger.info(
-            f"Schema '{schema_name}' accumulated. Total schemas: {self._schema_names}, "
+            f"Schema '{schema_name}' indexed. Total schemas: {self._schema_names}, "
             f"Total tables: {self.graph_retriever.graph.number_of_nodes()}"
         )
 

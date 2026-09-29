@@ -141,6 +141,13 @@ class GraphRAGState:
         # the accumulative multi-schema flow -- leaving them running against a
         # session that teardown had already finished with.
         self.init_tasks: set[asyncio.Task[Any]] = set()
+        # Serializes indexing on this connection. Embedding now happens off the
+        # event loop, so two indexings that used to be serialized by a blocked
+        # loop can interleave: both would see no manager and each build one, and
+        # the embedder's vocabulary would be fitted from two threads at once.
+        # Deliberately not the runtime's writer lock, which a teardown can hold
+        # while awaiting these very tasks.
+        self.index_lock = asyncio.Lock()
 
     def track_init_task(self, task: "asyncio.Task[Any]") -> None:
         """Register a background init task and forget it once it finishes.

@@ -1,6 +1,7 @@
 """GraphRAG initialization and search handler implementations."""
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -44,6 +45,27 @@ class _Pinned:
         # A test double has no GraphRAGState; its own attributes stand in.
         self.graphrag: Any = state if isinstance(state, GraphRAGState) else session
         self.connection_id: str | None = session.connection_id
+
+
+def _index_lock(state: Any) -> Any:
+    """The lock that serializes indexing on this connection.
+
+    Embedding runs off the event loop now, so two indexings that a blocked loop
+    used to serialize can interleave: each would find no manager and build one,
+    and the embedder would fit its vocabulary from two threads at once.
+
+    Args:
+        state: The GraphRAGState the work belongs to, or a test double.
+
+    Returns:
+        An async context manager to hold for the whole index step.
+    """
+    lock = getattr(state, "index_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        with contextlib.suppress(AttributeError):  # a read-only double
+            state.index_lock = lock
+    return lock
 
 
 async def _save_graphrag_state(
@@ -308,27 +330,28 @@ async def _auto_initialize_graphrag_background(
         tables_dict = [_table_info_to_dict(t) for t in tables_info]
         views_dict = [_view_info_to_dict(v) for v in views_info or []]
 
-        if graphrag.graphrag_manager is None:
-            # First schema — initialize from scratch
-            logger.info(f"Initializing GraphRAG for schema '{schema_name}'...")
-            graphrag.graphrag_manager = GraphRAGManager(
-                connection_id=pinned.connection_id,
-                schema_name=schema_name,
-            )
-            graphrag.graphrag_manager.initialize_from_schema(
+        # Held across the whole step: the decision to create a manager and the
+        # writes that follow the off-loop embedding must not interleave with
+        # another schema's indexing on this connection.
+        async with _index_lock(graphrag):
+            accumulate = graphrag.graphrag_manager is not None
+            if not accumulate:
+                # First schema — initialize from scratch
+                logger.info(f"Initializing GraphRAG for schema '{schema_name}'...")
+                graphrag.graphrag_manager = GraphRAGManager(
+                    connection_id=pinned.connection_id,
+                    schema_name=schema_name,
+                )
+            else:
+                # Additional schema — accumulate into existing graph
+                logger.info(
+                    f"Accumulating schema '{schema_name}' into existing GraphRAG..."
+                )
+            await graphrag.graphrag_manager.aindex_schema(
                 tables_info=tables_dict,
                 schema_name=schema_name,
                 views_info=views_dict,
-            )
-        else:
-            # Additional schema — accumulate into existing graph
-            logger.info(
-                f"Accumulating schema '{schema_name}' into existing GraphRAG..."
-            )
-            graphrag.graphrag_manager.accumulate_schema(
-                tables_info=tables_dict,
-                schema_name=schema_name,
-                views_info=views_dict,
+                accumulate=accumulate,
             )
 
         await _save_graphrag_state(session, schema_name, version, pinned=pinned)
@@ -482,24 +505,20 @@ async def initialize_graphrag(
             logger.warning(f"Failed to read active version: {e}")
 
     try:
-        if session.graphrag_manager is None:
-            session.graphrag_manager = GraphRAGManager(
-                embedding_model=embedding_model,
-                embedding_dimension=384,
-                connection_id=session.connection_id,
-                schema_name=eff_schema,
-            )
-            session.graphrag_manager.initialize_from_schema(
+        async with _index_lock(getattr(session, "graphrag", session)):
+            accumulate = session.graphrag_manager is not None
+            if not accumulate:
+                session.graphrag_manager = GraphRAGManager(
+                    embedding_model=embedding_model,
+                    embedding_dimension=384,
+                    connection_id=session.connection_id,
+                    schema_name=eff_schema,
+                )
+            await session.graphrag_manager.aindex_schema(
                 tables_info=tables_dict,
                 schema_name=eff_schema,
                 views_info=views_dict,
-            )
-        else:
-            # Accumulate into existing graph
-            session.graphrag_manager.accumulate_schema(
-                tables_info=tables_dict,
-                schema_name=eff_schema,
-                views_info=views_dict,
+                accumulate=accumulate,
             )
 
         session.graphrag_initialized = True
