@@ -10,6 +10,7 @@ cannot carry a LIMIT still must not materialize an unbounded result.
 
 import pytest
 
+from src.constants import DB_SQLGLOT_DIALECTS
 from src.database_manager import DatabaseManager
 from src.result_limits import (
     DEFAULT_ROW_LIMIT,
@@ -236,3 +237,40 @@ async def test_executing_sql_does_no_vector_retrieval():
     assert result["success"] is True
     assert result["row_count"] == 3
     graphrag.get_query_context.assert_not_called()
+
+
+# --- every dialect this server speaks ---
+
+
+@pytest.mark.parametrize("db_type", sorted(DB_SQLGLOT_DIALECTS))
+def test_the_limit_is_written_for_every_supported_database(db_type):
+    limited, applied = apply_row_limit("SELECT a FROM t", 10, db_type)
+
+    assert applied is True, db_type
+    assert "10" in limited, db_type
+
+
+def test_a_dialects_own_limit_form_is_understood():
+    """Snowflake's TOP is a limit; a smaller one is kept, a larger one bounded."""
+    small = "SELECT TOP 3 a FROM t"
+    assert apply_row_limit(small, 10, "snowflake") == (small, False)
+
+    bounded, applied = apply_row_limit("SELECT TOP 9000 a FROM t", 10, "snowflake")
+    assert applied is True
+    assert "10" in bounded
+
+
+def test_an_offset_survives_being_bounded():
+    """MySQL's `LIMIT offset, count`: the count is bounded, the offset kept."""
+    bounded, applied = apply_row_limit("SELECT a FROM t LIMIT 5, 20", 10, "mysql")
+
+    assert applied is True
+    assert "OFFSET 5" in bounded.upper()
+    assert "LIMIT 10" in bounded.upper()
+
+
+def test_an_unknown_database_type_still_gets_a_limit():
+    bounded, applied = apply_row_limit("SELECT a FROM t", 10, "something-new")
+
+    assert applied is True
+    assert "10" in bounded
