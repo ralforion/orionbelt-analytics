@@ -20,6 +20,25 @@ from .confirmation import Confirmation, ask_to_confirm
 logger = logging.getLogger(__name__)
 
 
+async def _obqc_validator(ctx: Context, services: "HandlerContext") -> Any:
+    """The session's validator, built off the event loop when it has to be.
+
+    Building one on a cache miss parses the ontology -- 709 ms at 300 tables --
+    which the synchronous getter does on the loop. The asynchronous one does it
+    in a worker; callers that only supply the synchronous one still work.
+
+    Args:
+        ctx: FastMCP request context.
+        services: Request-scoped services.
+
+    Returns:
+        The validator, or None when the session has no ontology.
+    """
+    if services.provides("aget_session_obqc_validator"):
+        return await services.aget_session_obqc_validator(ctx)
+    return services.get_session_obqc_validator(ctx)
+
+
 async def validate_sql_syntax(
     ctx: Context,
     sql_query: str,
@@ -72,7 +91,7 @@ async def validate_sql_syntax(
             validation_result["suggestions"] = []
 
         # OBQC validation
-        obqc_validator = services.get_session_obqc_validator(ctx)
+        obqc_validator = await _obqc_validator(ctx, services)
         if obqc_validator:
             db_type = db_manager.connection_info.get("type", "postgresql")
             obqc_result = obqc_validator.validate(sql_query.strip(), dialect=db_type)
@@ -258,7 +277,7 @@ async def execute_sql_query(
         # OBQC validation (fan-trap detection, ontology-aware checks)
         obqc_warnings = []
         session = services.get_session_data(ctx)
-        obqc_validator = services.get_session_obqc_validator(ctx)
+        obqc_validator = await _obqc_validator(ctx, services)
         if obqc_validator:
             db_type = db_manager.connection_info.get("type", "postgresql")
             obqc_result = obqc_validator.validate(

@@ -10,6 +10,7 @@ Each MCP session gets its own SessionData instance containing:
 
 import asyncio
 import logging
+import threading
 from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Optional
@@ -214,6 +215,10 @@ class PreparedOntologyCache:
     def __init__(self, capacity: int = 4) -> None:
         self._capacity = capacity
         self._entries: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+        # Read and written from worker threads as well as the loop -- an
+        # ontology is prepared off the loop -- and a get moves an entry while a
+        # put may be evicting one.
+        self._guard = threading.Lock()
 
     def get(self, key: tuple[Any, ...]) -> Any | None:
         """The extraction stored under *key*, or None.
@@ -224,10 +229,11 @@ class PreparedOntologyCache:
         Returns:
             The prepared ontology, or None if it is not held.
         """
-        entry = self._entries.get(key)
-        if entry is not None:
-            self._entries.move_to_end(key)
-        return entry
+        with self._guard:
+            entry = self._entries.get(key)
+            if entry is not None:
+                self._entries.move_to_end(key)
+            return entry
 
     def put(self, key: tuple[Any, ...], prepared: Any) -> None:
         """Store an extraction, dropping the least recently used if full.
@@ -236,18 +242,21 @@ class PreparedOntologyCache:
             key: The revision identity to store it under.
             prepared: The prepared ontology.
         """
-        self._entries[key] = prepared
-        self._entries.move_to_end(key)
-        while len(self._entries) > self._capacity:
-            self._entries.popitem(last=False)
+        with self._guard:
+            self._entries[key] = prepared
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._capacity:
+                self._entries.popitem(last=False)
 
     def clear(self) -> None:
         """Drop every held extraction."""
-        self._entries.clear()
+        with self._guard:
+            self._entries.clear()
 
     def __len__(self) -> int:
         """How many extractions are held."""
-        return len(self._entries)
+        with self._guard:
+            return len(self._entries)
 
 
 class ConnectionRuntime:

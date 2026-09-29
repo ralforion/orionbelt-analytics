@@ -1192,6 +1192,79 @@ def remember_prepared_ontology(
         logger.debug(f"Could not prepare OBQC semantics: {e}")
 
 
+def _parse_and_prepare(
+    key: tuple[Any, ...], loaded_text: str | None, base_uri: str
+) -> PreparedOntology:
+    """Parse an ontology and extract OBQC's view of it, from explicit inputs.
+
+    Everything it needs is passed in, and it touches no session and no cache,
+    so it can run in a worker while the session it came from moves on.
+
+    Args:
+        key: The revision identity, which for a file carries its path.
+        loaded_text: The ontology source, for an ontology held as text.
+        base_uri: The base URI to read it under.
+
+    Returns:
+        The extraction.
+    """
+    generator = OntologyGenerator(base_uri)
+    if key[0] == "file":
+        generator.load_from_file(key[1])
+    else:
+        generator.load_from_string(loaded_text or "")
+    return prepare_ontology(generator.graph, base_uri)
+
+
+async def aget_session_obqc_validator(ctx: Context) -> OBQCValidator | None:
+    """:func:`get_session_obqc_validator`, with any parsing off the event loop.
+
+    A validator is built on the first query after an ontology changes, and
+    after every restart, because the prepared extractions live in memory. On a
+    miss that meant parsing the Turtle on the loop -- 709 ms at 300 tables,
+    every other session frozen for it.
+
+    This only warms the connection's cache, in a worker, and then hands over to
+    the synchronous getter, which now finds the extraction there and builds the
+    validator in one block with nothing awaited half-way. If the session moved
+    to another database meanwhile, that getter works out the revision for
+    where the session is *now*: the extraction just made lands in the cache of
+    the connection it came from, where it belongs, and cannot be used for the
+    other one.
+
+    Args:
+        ctx: FastMCP request context.
+
+    Returns:
+        What :func:`get_session_obqc_validator` returns.
+    """
+    session = get_session_data(ctx)
+    if session.obqc_validator is None and (
+        session.ontology_file is not None or session.loaded_ontology is not None
+    ):
+        base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
+        key = _ontology_revision_key(session, base_uri)
+        cache = getattr(getattr(session, "runtime", None), "obqc_prepared", None)
+        if key is not None and (cache is None or cache.get(key) is None):
+            loaded_text = session.loaded_ontology if key[0] == "text" else None
+            prepared = await asyncio.to_thread(
+                _parse_and_prepare, key, loaded_text, base_uri
+            )
+            if cache is not None:
+                cache.put(key, prepared)
+            elif (
+                session.obqc_validator is None
+                and _ontology_revision_key(session, base_uri) == key
+            ):
+                # No shared cache to warm (an unbound session): build from
+                # what was just parsed rather than parsing again on the loop --
+                # provided the session still names the ontology it parsed.
+                validator = OBQCValidator()
+                validator.load_prepared(prepared)
+                session.obqc_validator = validator
+    return get_session_obqc_validator(ctx)
+
+
 def get_session_obqc_validator(ctx: Context) -> OBQCValidator | None:
     """Get or create OBQC validator for the current session."""
     session = get_session_data(ctx)
