@@ -51,6 +51,12 @@ class _Pinned:
         # A test double has no GraphRAGState; its own attributes stand in.
         self.graphrag: Any = state if isinstance(state, GraphRAGState) else session
         self.connection_id: str | None = session.connection_id
+        # The dialect the database speaks, for the chained ontology's view
+        # lineage. Read now for the same reason as the rest: later, the
+        # session's manager may be another database's.
+        manager = getattr(session, "db_manager", None)
+        info = getattr(manager, "connection_info", None)
+        self.db_type: str | None = info.get("type") if isinstance(info, dict) else None
 
 
 def _index_lock(state: Any) -> Any:
@@ -167,6 +173,8 @@ async def _auto_generate_ontology_background(
     ctx: Context,
     version: int | None = None,
     connection_id: Any = _FROM_SESSION,
+    views: list[Any] | None = None,
+    db_type: str | None = None,
 ) -> None:
     """Background task: Auto-generate ontology after GraphRAG completes.
 
@@ -200,7 +208,9 @@ async def _auto_generate_ontology_background(
             partial(
                 ontology_generator.generate_from_schema,
                 tables_info,
-                views_info=_views_for_ontology(session, schema_name),
+                views_info=_views_for_ontology(
+                    session, schema_name, views=views, db_type=db_type
+                ),
             )
         )
 
@@ -319,6 +329,7 @@ async def _auto_initialize_graphrag_background(
     ctx: Context,
     version: int | None = None,
     views_info: list[Any] | None = None,
+    pinned: _Pinned | None = None,
 ) -> None:
     """Background task: Auto-initialize or accumulate GraphRAG after schema analysis.
 
@@ -329,7 +340,12 @@ async def _auto_initialize_graphrag_background(
     task. It is threaded through rather than resolved on completion so a
     rediscovery of the same schema mid-run cannot capture this run's output.
     """
-    pinned = _Pinned(session)
+    # Pinned by whoever created this task, while it still held the session's
+    # binding lock. The body of a task runs only when the loop first schedules
+    # it -- after the creating tool has returned and released that lock -- so a
+    # pin taken here could already be the database a `connect_database` queued
+    # behind the tool had moved the session to.
+    pinned = pinned or _Pinned(session)
     graphrag = pinned.graphrag
     try:
         start_time = time.time()
@@ -403,6 +419,10 @@ async def _auto_initialize_graphrag_background(
                 ctx=ctx,
                 version=version,
                 connection_id=pinned.connection_id,
+                # Not re-read from the session: by now it may hold another
+                # database's views, and speak another dialect.
+                views=views_info,
+                db_type=pinned.db_type,
             )
 
     except Exception as e:

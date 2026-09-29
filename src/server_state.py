@@ -42,6 +42,10 @@ from .workspace import workspace_identity
 
 logger = logging.getLogger(__name__)
 
+# Disconnects waiting for a worker to leave the database. Held here because the
+# event loop keeps only weak references to tasks it runs.
+_deferred_disconnects: set["asyncio.Task[None]"] = set()
+
 
 # A connection handle looks like ``ob_k2m9qa``. The alphabet leaves out the
 # characters a model or a person confuses when copying one (l/1, o/0).
@@ -533,6 +537,25 @@ class ServerState:
             runtime.db_manager = None
         logger.info(f"Closed connection runtime {runtime.connection_id[:8]}...")
 
+    def binding_lock(self, session: Any) -> AbstractAsyncContextManager[Any]:
+        """The lock that keeps a session on one database for a whole tool call.
+
+        Taken before :meth:`writer_lock`, always, so the runtime that lock
+        resolves to cannot change underneath the tool.
+
+        Args:
+            session: The calling session.
+
+        Returns:
+            The session's binding lock, or a no-op context for a test double
+            that has none.
+        """
+        lock = getattr(session, "binding_lock", None)
+        # isinstance, not a None check: a test double's attribute is a Mock.
+        if isinstance(lock, asyncio.Lock):
+            return lock
+        return nullcontext()
+
     def writer_lock(self, session: Any) -> AbstractAsyncContextManager[Any]:
         """The lock a tool must hold while it rewrites shared connection state.
 
@@ -562,6 +585,48 @@ class ServerState:
 
     @staticmethod
     def _disconnect_manager(db_manager: Any, why: str) -> None:
+        """Close a manager, or schedule it to close once its worker is done.
+
+        A call running in a worker holds the manager's query lock until the
+        thread exits. Disposing the engine under it breaks that query -- on an
+        in-memory DuckDB, whose StaticPool shares one connection, it closes the
+        connection the query is running on. Readers take no session lock, so a
+        reconnect can drop a runtime's last holder while one is in flight.
+
+        Args:
+            db_manager: The manager to close.
+            why: Why, for the log.
+        """
+        lock = getattr(db_manager, "query_lock", None)
+        if isinstance(lock, asyncio.Lock) and lock.locked():
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                task = loop.create_task(
+                    ServerState._disconnect_when_idle(db_manager, why)
+                )
+                # The loop keeps only a weak reference to a task.
+                _deferred_disconnects.add(task)
+                task.add_done_callback(_deferred_disconnects.discard)
+                logger.debug(f"Deferred closing {why} manager until its query ends")
+                return
+        ServerState._disconnect_now(db_manager, why)
+
+    @staticmethod
+    async def _disconnect_when_idle(db_manager: Any, why: str) -> None:
+        """Wait for the worker holding the manager, then close it.
+
+        Args:
+            db_manager: The manager to close.
+            why: Why, for the log.
+        """
+        async with db_manager.query_lock:
+            ServerState._disconnect_now(db_manager, why)
+
+    @staticmethod
+    def _disconnect_now(db_manager: Any, why: str) -> None:
         try:
             db_manager.disconnect()
         except Exception as e:
@@ -739,10 +804,7 @@ class ServerState:
             # still land in the state the remaining sessions share.
             self.unbind_session(session, detach=False)
         elif session.db_manager:
-            try:
-                session.db_manager.disconnect()
-            except Exception as e:
-                logger.warning(f"Error disconnecting db for session {session_id}: {e}")
+            self._disconnect_manager(session.db_manager, f"session {session_id}")
         if session.rdf_store.oxigraph_store:
             try:
                 self.release_oxigraph_store(session.rdf_store.oxigraph_store)

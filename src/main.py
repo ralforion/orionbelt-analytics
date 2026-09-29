@@ -15,8 +15,8 @@ import inspect
 import logging
 import os
 import warnings
-from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
 
 from dotenv import load_dotenv
@@ -306,14 +306,25 @@ def _echo_handle(ctx: Any, result: Any, explicit: bool, announce: bool) -> Any:
     return result
 
 
-def _writer_lock(ctx: Context) -> AbstractAsyncContextManager[Any]:
-    """Lock held by the tools that rewrite shared per-connection state.
+@asynccontextmanager
+async def _writer_lock(ctx: Context) -> AsyncIterator[None]:
+    """Locks held by the tools that rewrite shared per-connection state.
 
-    Sessions on the same database share schema, ontology and GraphRAG state, so
-    two clients running ``discover_schema`` or ``cleanup_workspace`` at once
-    would interleave. Readers take no lock.
+    Two, always in this order. The session's binding lock first: while it is
+    held the session cannot be rebound, so the database this tool publishes
+    into is the one it read. Then the runtime's writer lock, resolved only once
+    the binding is fixed -- resolved earlier, it could name a runtime the
+    session was about to leave. Sessions on the same database share schema,
+    ontology and GraphRAG state, so two clients running ``discover_schema`` or
+    ``cleanup_workspace`` at once would interleave; that is what the second
+    lock is for. Readers take neither.
     """
-    return _server_state.writer_lock(get_session_data(ctx))
+    session = get_session_data(ctx)
+    async with (
+        _server_state.binding_lock(session),
+        _server_state.writer_lock(session),
+    ):
+        yield
 
 
 def _services() -> HandlerContext:
@@ -367,11 +378,16 @@ async def connect_database(
     Returns:
         Connection status with auto-restored workspace summary if available
     """
-    return await _h_connection.connect_database(
-        ctx,
-        db_type,
-        services=_services(),
-    )
+    # Rebinding is exactly what a publishing tool must not see happen halfway
+    # through, so it waits for this session's own writers and they wait for
+    # it. The handler takes the new runtime's writer lock itself, for the
+    # restore, which keeps the order every tool uses: binding, then writer.
+    async with _server_state.binding_lock(get_session_data(ctx)):
+        return await _h_connection.connect_database(
+            ctx,
+            db_type,
+            services=_services(),
+        )
 
 
 @mcp.tool()
@@ -1171,12 +1187,15 @@ async def store_ontology_in_rdf(
     Returns:
         Status message with triple count
     """
-    return await _h_rdf.store_ontology_in_rdf(
-        ctx,
-        schema_name,
-        graph_uri,
-        services=_services(),
-    )
+    # It writes the connection's RDF store and workspace metadata, so it takes
+    # the same locks as every other tool that does.
+    async with _writer_lock(ctx):
+        return await _h_rdf.store_ontology_in_rdf(
+            ctx,
+            schema_name,
+            graph_uri,
+            services=_services(),
+        )
 
 
 @mcp.tool()

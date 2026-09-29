@@ -316,6 +316,16 @@ class SessionData:
         self.schema_cache = SchemaCache()
         self.rdf_store = RDFStoreState()
 
+        # Held while this session is rebound to a database, and while any of its
+        # tools publishes into the database it is bound to. Without it a
+        # `connect_database` could land between a tool's await and its write,
+        # and the write would reach whichever database the session had moved
+        # to -- another database's cache, workspace, RDF store and GraphRAG,
+        # shared with every session on it. The runtime's writer lock cannot
+        # prevent that: it belongs to the runtime being written, and a rebind
+        # makes it a different runtime. Not reentrant: take it once per call.
+        self.binding_lock = asyncio.Lock()
+
         # Shared per-connection state, once ServerState has bound this session
         # to it. Unbound (tests, no registry) the session owns private copies.
         self.runtime: ConnectionRuntime | None = None

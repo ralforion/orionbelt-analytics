@@ -229,6 +229,7 @@ DATABRICKS_SCHEMA=default
 | `MCP_SERVER_PORT` | `9000` | Port the server listens on |
 | `SESSION_IDLE_TIMEOUT_SECONDS` | `1800` | Idle timeout before session eviction (0 to disable) |
 | `METADATA_CACHE_TTL_SECONDS` | `300` | How long table lists, view lists and prefetched constraints may be reused before being read from the database again; `0` never reuses them. Independent of the session idle timeout, and `reset_cache` clears them immediately whatever it says |
+| `DB_MAX_QUEUED_CALLS` | `32` | How many calls may wait for one database connection. Calls on a connection run one at a time; past this many waiting, a call is refused at once with `connection_busy` rather than queued without limit. `0` removes the bound |
 | `SESSION_SCAN_INTERVAL_SECONDS` | `60` | How often to scan for idle sessions |
 | `MCP_MASTER_PASSWORD` | *(unset)* | Master password for encrypting credentials in memory |
 

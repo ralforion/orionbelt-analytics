@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 
-from .config import resolve_metadata_cache_ttl
+from .config import resolve_db_max_queued_calls, resolve_metadata_cache_ttl
 from .constants import DB_SQLGLOT_DIALECTS, DEFAULT_SAMPLE_LIMIT, IDENTIFIER_PATTERN
 from .result_limits import apply_row_limit, effective_row_limit
 from .security import (
@@ -196,6 +196,10 @@ class DatabaseManager:
         # database at once. It also keeps what a blocked event loop used to
         # guarantee: the calls on one connection stay in order.
         self.query_lock = asyncio.Lock()
+        # How many callers are waiting for that lock, and how many may. Counted
+        # on the event loop only, so it needs no lock of its own.
+        self.query_waiters = 0
+        self.max_queued_calls = resolve_db_max_queued_calls()
 
     # ------------------------------------------------------------------
     # Cache helpers
