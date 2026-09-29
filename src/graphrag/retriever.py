@@ -81,6 +81,12 @@ class GraphRetriever:
         added_nodes = 0
         added_edges = 0
 
+        # Read before the loop below overwrites it: which schema each name was
+        # last discovered under decides whether this discovery owns its edges.
+        schema_before = {
+            name: (info or {}).get("schema") for name, info in self._tables_info.items()
+        }
+
         for table in tables_info:
             table_name = table["name"]
             self._tables_info[table_name] = table
@@ -102,10 +108,23 @@ class GraphRetriever:
         # is responsible for are removed: foreign keys leaving the tables in
         # this batch. Edges from tables in other schemas, and anything not
         # recorded as a foreign key, are left alone.
-        rediscovered = {table["name"] for table in tables_info}
+        # Nodes are keyed by bare table name, so two schemas holding a table of
+        # the same name share one node. Replacing edges there would delete the
+        # other schema's relationships, which is worse than the stale edge this
+        # replacement exists to remove. Until identity is qualified, a name last
+        # discovered under a different schema keeps what it has.
         removed_edges = 0
-        for table_name in rediscovered:
+        for table in tables_info:
+            table_name = table["name"]
             if table_name not in self.graph:
+                continue
+            previous_schema = schema_before.get(table_name)
+            if previous_schema is not None and previous_schema != table.get("schema"):
+                logger.debug(
+                    f"Keeping relationships of '{table_name}': last discovered "
+                    f"under schema '{previous_schema}', now seen under "
+                    f"'{table.get('schema')}'"
+                )
                 continue
             stale = [
                 (table_name, referenced)

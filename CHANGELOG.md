@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database kept offering a join path forever. Batch writes now replace, and a
   rediscovered table's foreign keys are replaced rather than merged. Tables
   outside the discovery, and anything not recorded as a foreign key, are left
-  alone; the single-element `add`/`upsert` pair is unchanged.
+  alone; the single-element `add`/`upsert` pair is unchanged. Two schemas
+  holding a table of the same name still share one graph node, so a name
+  last discovered under a different schema keeps its relationships rather
+  than having another schema's discovery delete them.
 - **A requested row limit now bounds the result.** The limit was applied by
   looking for the word `LIMIT` in the query text, so a string literal, a
   comment, or an explicit larger limit suppressed it: `limit=10` returned 6000

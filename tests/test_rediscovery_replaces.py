@@ -17,10 +17,14 @@ from src.graphrag.retriever import GraphRetriever
 from src.graphrag.vector_store_chromadb import ChromaDBVectorStore
 
 
-def _table(name: str, foreign_keys: tuple[tuple[str, str], ...] = ()) -> dict:
+def _table(
+    name: str,
+    foreign_keys: tuple[tuple[str, str], ...] = (),
+    schema: str = "public",
+) -> dict:
     return {
         "name": name,
-        "schema": "public",
+        "schema": schema,
         "columns": [],
         "foreign_keys": [
             {"column": column, "referenced_table": target, "referenced_column": "id"}
@@ -135,3 +139,40 @@ def test_other_elements_survive_a_rediscovery(store):
 
     assert store.get_by_id("customers").description == "c"
     assert store.collection.count() == 2
+
+
+def test_discovering_another_schema_does_not_delete_this_ones_relationships():
+    """Nodes are keyed by bare table name, so two schemas holding an `orders`
+    share one node. Replacing its edges on the second discovery would delete
+    the first schema's relationships -- worse than the stale edge replacement
+    exists to remove. Until identity is qualified, the edges stay."""
+    retriever = GraphRetriever()
+    retriever.add_to_graph(
+        [
+            _table("orders", (("customer_id", "customers"),), schema="sales"),
+            _table("customers", schema="sales"),
+        ]
+    )
+
+    retriever.add_to_graph(
+        [_table("orders", schema="archive"), _table("invoices", schema="archive")]
+    )
+
+    assert ("orders", "customers") in retriever.graph.edges()
+
+
+def test_rediscovering_the_same_schema_still_replaces():
+    """The guard above must not disable the replacement in the normal case."""
+    retriever = GraphRetriever()
+    retriever.add_to_graph(
+        [
+            _table("orders", (("customer_id", "customers"),), schema="sales"),
+            _table("customers", schema="sales"),
+        ]
+    )
+
+    retriever.add_to_graph(
+        [_table("orders", schema="sales"), _table("customers", schema="sales")]
+    )
+
+    assert sorted(retriever.graph.edges()) == []
