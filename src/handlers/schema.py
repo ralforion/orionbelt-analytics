@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from fastmcp import Context
 
@@ -19,67 +19,13 @@ from ..lifecycle.metadata import (
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..r2rml_generator import R2RMLGenerator
 from ..utils import notify_client, utc_now, write_json_file, write_text_file
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _pin_connection(session: Any) -> tuple[Any, Any]:
-    """What this discovery belongs to, fixed before it starts.
-
-    Args:
-        session: The session discovering.
-
-    Returns:
-        Its connection id and the runtime object, to compare against later.
-    """
-    return session.connection_id, getattr(session, "runtime", None)
-
-
-def _still_connected(session: Any, pinned: tuple[Any, Any]) -> bool:
-    """Whether the session is still on the database this discovery read.
-
-    Reflection happens in a worker, and a ``connect_database`` in between binds
-    the session to another runtime. Publishing then writes one database's
-    tables into another's shared cache -- for every session on it, not just
-    this one. The runtime object is compared as well as the id, because
-    reconnecting to the same database replaces it too.
-
-    Args:
-        session: The session discovering.
-        pinned: What :func:`_pin_connection` returned.
-
-    Returns:
-        True when the results still describe the database the caller is on.
-    """
-    connection_id, runtime = pinned
-    return (
-        session.connection_id == connection_id
-        and getattr(session, "runtime", None) is runtime
-    )
-
-
-def _reconnected_response(
-    services: "HandlerContext", schema_name: str | None
-) -> dict[str, Any]:
-    """The answer when the connection changed while a discovery was running.
-
-    Args:
-        services: Request-scoped services.
-        schema_name: The schema that was being analyzed.
-
-    Returns:
-        An error response telling the caller to ask again.
-    """
-    return cast(
-        dict[str, Any],
-        services.create_error_response(
-            f"The connection changed while schema '{schema_name or 'default'}' "
-            f"was being analyzed, so the results were discarded rather than "
-            f"written into the database now connected. Call discover_schema() "
-            f"again.",
-            "connection_changed",
-        ),
-    )
 
 
 async def _open_schema_version(
@@ -335,7 +281,7 @@ async def discover_schema(
     db_manager = services.get_session_db_manager(ctx)
     # Everything below runs in workers, and a reconnect in between would make
     # these results describe a database the session has left.
-    pinned = _pin_connection(session)
+    pinned = pin_connection(session)
     tables = await run_db(db_manager.get_tables, schema_name)
 
     # Views are discovered alongside tables but kept apart from them: they are
@@ -349,8 +295,12 @@ async def discover_schema(
         # A backend that cannot enumerate views must not fail discovery.
         logger.warning(f"Could not discover views for schema {schema_name}: {e}")
         views = []
-    if not _still_connected(session, pinned):
-        return _reconnected_response(services, schema_name)
+    if not still_connected(session, pinned):
+        return connection_changed_response(
+            services,
+            f"schema '{schema_name or 'default'}' was being analyzed",
+            "discover_schema()",
+        )
     session.cache_views(schema_name or "", views)
 
     # Prefetch PKs and FKs at schema level (Snowflake optimization)
@@ -392,8 +342,12 @@ async def discover_schema(
                         }
                     )
 
-        if not _still_connected(session, pinned):
-            return _reconnected_response(services, schema_name)
+        if not still_connected(session, pinned):
+            return connection_changed_response(
+                services,
+                f"schema '{schema_name or 'default'}' was being analyzed",
+                "discover_schema()",
+            )
         session.cache_schema_analysis(schema_name or "", table_info_objects)
         logger.info(
             f"Cached {len(table_info_objects)} tables for generate_ontology() reuse"
@@ -494,8 +448,12 @@ async def discover_schema(
     }
 
     session = services.get_session_data(ctx)
-    if not _still_connected(session, pinned):
-        return _reconnected_response(services, schema_name)
+    if not still_connected(session, pinned):
+        return connection_changed_response(
+            services,
+            f"schema '{schema_name or 'default'}' was being analyzed",
+            "discover_schema()",
+        )
     session.cache_schema_analysis(schema_name or "", table_info_objects)
 
     # Open the version before GraphRAG is kicked off further down: the

@@ -233,3 +233,235 @@ class TestTheCapNeverWidensAResult:
 
         assert result["success"] is True, result.get("error")
         assert result["row_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# The second review: the same hazard in the other tools that reflect or write.
+# ---------------------------------------------------------------------------
+
+
+def _bound_session(connection_id: str) -> SessionData:
+    session = SessionData()
+    session.bind_runtime(ConnectionRuntime(connection_id))
+    session.connection_id = connection_id
+    return session
+
+
+def _reconnect(session: SessionData, connection_id: str = "new-database") -> None:
+    """What connect_database does to a session, in the middle of a tool."""
+    session.unbind_runtime()
+    session.bind_runtime(ConnectionRuntime(connection_id))
+    session.connection_id = connection_id
+
+
+def _error_services(session: SessionData, db: Any, **extra: Any) -> HandlerContext:
+    return HandlerContext(
+        get_session_data=lambda _ctx: session,
+        get_session_db_manager=lambda _ctx: db,
+        get_session_safe_filename=lambda _ctx, kind, schema: f"{kind}_{schema}",
+        create_error_response=lambda message, code=None, *rest: {
+            "success": False,
+            "error": message,
+            "error_type": code,
+        },
+        **extra,
+    )
+
+
+def _reflecting_db(on_analyze: Any) -> Mock:
+    db = Mock()
+    db.has_engine.return_value = True
+    db.get_tables.return_value = ["old_only"]
+    db.get_views.return_value = []
+    db.prefetch_schema_constraints.return_value = None
+
+    def analyze(names, schema=None):
+        on_analyze()
+        return {name: _table(name) for name in names}
+
+    db.analyze_tables.side_effect = analyze
+    return db
+
+
+class TestOntologyGenerationStaysWithItsDatabase:
+    """generate_ontology reflects, then writes a file and the session."""
+
+    async def test_a_reconnect_during_reflection_writes_nothing(
+        self, monkeypatch, tmp_path
+    ):
+        from src.handlers import ontology_generation
+
+        monkeypatch.setattr(ontology_generation, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(
+            ontology_generation, "get_connection_dir", lambda cid: tmp_path / cid
+        )
+        monkeypatch.setenv("OBA_SHACL_VALIDATE", "false")
+        session = _bound_session("old-database")
+        db = _reflecting_db(lambda: _reconnect(session))
+        server_state = Mock()
+        server_state.get_ontology_generator.return_value.generate_from_schema.return_value = (
+            "@prefix ex: <http://example.com/> .\n"
+        )
+
+        result = await ontology_generation.generate_ontology(
+            Mock(),
+            None,  # schema_info: reflect from the database
+            "public",
+            "http://example.com/ontology/",
+            False,  # auto_persist
+            None,  # graph_uri
+            _error_services(session, db, server_state=server_state),
+        )
+
+        assert result["error_type"] == "connection_changed"
+        assert session.get_cached_schema("public") is None
+        assert session.ontology_file is None
+        assert not (tmp_path / "new-database").exists()
+
+    async def test_a_reconnect_during_generation_leaves_the_session_alone(
+        self, monkeypatch, tmp_path
+    ):
+        from src.handlers import ontology_generation
+
+        monkeypatch.setattr(ontology_generation, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(
+            ontology_generation, "get_connection_dir", lambda cid: tmp_path / cid
+        )
+        monkeypatch.setenv("OBA_SHACL_VALIDATE", "false")
+        session = _bound_session("old-database")
+        session.cache_schema_analysis("public", [_table("orders")])
+
+        def generate(*_args: Any, **_kwargs: Any) -> str:
+            _reconnect(session)
+            return "@prefix ex: <http://example.com/> .\n"
+
+        server_state = Mock()
+        server_state.get_ontology_generator.return_value.generate_from_schema.side_effect = (
+            generate
+        )
+
+        result = await ontology_generation.generate_ontology(
+            Mock(),
+            None,  # schema_info: reflect from the database
+            "public",
+            "http://example.com/ontology/",
+            False,  # auto_persist
+            None,  # graph_uri
+            _error_services(session, Mock(), server_state=server_state),
+        )
+
+        assert result["error_type"] == "connection_changed"
+        assert session.ontology_file is None
+        # Nothing landed in the workspace of the database now connected.
+        assert not (tmp_path / "new-database").exists()
+
+
+class TestGraphRAGInitializationStaysWithItsDatabase:
+    """initialize_graphrag reflects, reads views, then indexes."""
+
+    async def test_a_reconnect_during_reflection_writes_nothing(self, monkeypatch):
+        from src.handlers import graphrag as graphrag_handler
+
+        built: list[Any] = []
+        monkeypatch.setattr(
+            graphrag_handler, "GraphRAGManager", lambda **kw: built.append(kw)
+        )
+        session = _bound_session("old-database")
+        db = _reflecting_db(lambda: _reconnect(session))
+
+        result = await graphrag_handler.initialize_graphrag(
+            Mock(), "public", "tfidf", _error_services(session, db)
+        )
+
+        assert result["error_type"] == "connection_changed"
+        assert session.get_cached_schema("public") is None
+        assert session.graphrag_manager is None
+        assert built == []
+
+
+class TestPercentagesAreNotRowCounts:
+    """20 PERCENT is not 20 rows, and never 10 either."""
+
+    @pytest.mark.parametrize(
+        ("sql", "dialect"),
+        [
+            ("SELECT i FROM t LIMIT 20 PERCENT", "duckdb"),
+            ("SELECT i FROM t FETCH FIRST 20 PERCENT ROWS ONLY", "postgresql"),
+            ("SELECT TOP 20 PERCENT i FROM t", "snowflake"),
+        ],
+    )
+    def test_a_percentage_is_left_alone(self, sql, dialect):
+        rewritten, applied = apply_row_limit(sql, 10, dialect)
+
+        assert applied is False
+        assert rewritten == sql
+
+    def test_duckdb_returns_the_percentage(self):
+        manager = DatabaseManager()
+        assert manager.connect_duckdb(":memory:")
+
+        result = manager.execute_sql_query(
+            "SELECT i FROM range(10) AS t(i) LIMIT 20 PERCENT", limit=10
+        )
+
+        assert result["success"] is True, result.get("error")
+        assert result["row_count"] == 2
+
+
+class TestLoadingAnOntologyStaysWithItsDatabase:
+    """A custom ontology is a user's choice for the database they are on."""
+
+    TTL = (
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "@prefix oba: <https://w3id.org/oba#> .\n"
+        '<http://x/Orders> a owl:Class ; oba:tableName "orders" .\n'
+    )
+
+    async def test_a_reconnect_while_loading_adopts_nothing(
+        self, monkeypatch, tmp_path
+    ):
+        from src.handlers import ontology_io
+
+        session = _bound_session("old-database")
+        # Without a current schema the getter reads nothing whatever was set,
+        # and "adopted nothing" would pass for the wrong reason.
+        session.set_current_schema("public")
+        real_write = ontology_io.write_text_file
+
+        async def write_then_reconnect(path: Any, content: str) -> None:
+            await real_write(path, content)
+            _reconnect(session)
+
+        monkeypatch.setattr(ontology_io, "write_text_file", write_then_reconnect)
+
+        result = await ontology_io.load_my_ontology(
+            Mock(),
+            str(tmp_path),
+            False,  # auto_persist
+            None,
+            _error_services(session, Mock()),
+            ontology_content=self.TTL,
+            file_name="mine.ttl",
+        )
+
+        assert result["error_type"] == "connection_changed"
+        assert session.loaded_ontology is None
+
+    async def test_an_unchanged_connection_adopts_it(self, tmp_path):
+        from src.handlers import ontology_io
+
+        session = _bound_session("stable")
+        session.set_current_schema("public")
+
+        result = await ontology_io.load_my_ontology(
+            Mock(),
+            str(tmp_path),
+            False,
+            None,
+            HandlerContext(get_session_data=lambda _ctx: session),
+            ontology_content=self.TTL,
+            file_name="mine.ttl",
+        )
+
+        assert result.get("success") is not False, result
+        assert session.loaded_ontology == self.TTL

@@ -51,7 +51,7 @@ def _existing_limit(statement: exp.Query) -> tuple[bool, int | None]:
     * no limit of its own -- one can be imposed;
     * a limit of *n* -- narrowing to a smaller cap is fine, widening never is;
     * a limit that exists but cannot be read here -- ``LIMIT (SELECT 3)``, a
-      parameter, an expression. Rewriting that would *replace* the caller's
+      parameter, an expression, or a percentage. Rewriting that would *replace* the caller's
       limit with the tool's, which can only make the result bigger. The fetch
       bound is what protects those.
 
@@ -70,6 +70,14 @@ def _existing_limit(statement: exp.Query) -> tuple[bool, int | None]:
     limit = statement.args.get("limit")
     if limit is None:
         return False, None
+
+    # `LIMIT 20 PERCENT`, `FETCH FIRST 20 PERCENT ROWS ONLY` and `TOP 20
+    # PERCENT` all carry 20 as their count, and 20 is not a row count: over ten
+    # rows the query wants two. Read as rows, a cap of 10 became `LIMIT 10` and
+    # returned all ten. A percentage is a limit this cannot evaluate.
+    options = limit.args.get("limit_options")
+    if options is not None and options.args.get("percent"):
+        return True, None
 
     count = (
         limit.args.get("count")
