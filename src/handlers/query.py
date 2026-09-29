@@ -7,7 +7,12 @@ import mcp.types as mcp_types
 from fastmcp import Context
 
 from ..async_utils import run_db
-from ..exceptions import ConnectionError, ParameterError, ValidationError
+from ..exceptions import (
+    ConnectionBusyError,
+    ConnectionError,
+    ParameterError,
+    ValidationError,
+)
 from ..handler_context import HandlerContext
 from ..utils import notify_client
 from .confirmation import Confirmation, ask_to_confirm
@@ -132,6 +137,10 @@ async def validate_sql_syntax(
             )
 
         return validation_result
+
+    except ConnectionBusyError as e:
+        logger.info(f"Refused a validation on a busy connection: {e}")
+        return {"is_valid": False, **e.to_response()}
 
     except Exception as e:
         logger.error(f"SQL validation error: {e}")
@@ -394,6 +403,19 @@ async def execute_sql_query(
             )
 
         return result
+
+    except ConnectionBusyError as e:
+        # Not a system failure: the connection is working, and busy. Say so,
+        # with what to do, rather than as an internal error.
+        logger.info(f"Refused a query on a busy connection: {e}")
+        busy: dict[str, Any] = e.to_response()
+        busy["obqc_fan_trap"] = {
+            "evaluated": False,
+            "detected": False,
+            "blocking": False,
+            "findings": [],
+        }
+        return busy
 
     except Exception as e:
         logger.error(f"Critical error in SQL execution: {e}")

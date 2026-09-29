@@ -35,7 +35,12 @@ from .connection_scope import (
 logger = logging.getLogger(__name__)
 
 
-def _views_for_ontology(session: Any, schema_name: str | None) -> list[Any]:
+def _views_for_ontology(
+    session: Any,
+    schema_name: str | None,
+    views: list[Any] | None = None,
+    db_type: str | None = None,
+) -> list[Any]:
     """Discovered views for *schema_name*, with their lineage resolved.
 
     Lineage is filled in here rather than at discovery because it is only the
@@ -50,20 +55,24 @@ def _views_for_ontology(session: Any, schema_name: str | None) -> list[Any]:
     Args:
         session: The session holding the discovery cache.
         schema_name: Schema being generated, or None for the default.
+        views: Views captured earlier, used instead of the session's cache.
+            Background work passes what it was started with, because by the
+            time it runs the session may be on another database.
+        db_type: The database type those views came from, likewise.
 
     Returns:
         ViewInfo objects, empty when nothing was discovered or resolution
         failed.
     """
     try:
-        views = session.get_cached_views(schema_name or "")
+        if views is None:
+            views = session.get_cached_views(schema_name or "")
         if not views:
             return []
 
-        dialect = None
-        if getattr(session, "db_manager", None) is not None:
+        if db_type is None and getattr(session, "db_manager", None) is not None:
             db_type = session.db_manager.connection_info.get("type")
-            dialect = DB_SQLGLOT_DIALECTS.get(db_type) if db_type else None
+        dialect = DB_SQLGLOT_DIALECTS.get(db_type) if db_type else None
 
         annotated = _annotate_view_sources(
             [{"name": v.name, "definition": v.definition} for v in views],

@@ -12,6 +12,7 @@ from functools import partial
 from typing import Any, cast
 
 from .constants import CONNECTION_TIMEOUT
+from .exceptions import ConnectionBusyError
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +76,32 @@ async def run_db[T](call: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
         # A double, or a manager built before this existed: nothing to protect.
         return await asyncio.to_thread(work)
 
+    # A bounded line. Only a contended lock has one; an idle connection admits
+    # every call. The count is kept on the loop, so check-then-increment is
+    # atomic with respect to every other caller.
+    owner: Any = getattr(call, "__self__", None)
+    bound = int(getattr(owner, "max_queued_calls", 0) or 0)
+    waiting = int(getattr(owner, "query_waiters", 0) or 0)
+    if lock.locked() and bound and waiting >= bound:
+        raise ConnectionBusyError(
+            f"{waiting} calls are already waiting on this database connection, "
+            f"the most allowed at once. The query ahead of them is still running.",
+            suggestions=[
+                "Wait for the running query to finish, then try again.",
+                "A long-running query can be narrowed with a tighter filter or LIMIT.",
+            ],
+        )
+    owner.query_waiters = waiting + 1
+    try:
+        await lock.acquire()
+    finally:
+        owner.query_waiters -= 1
+
     # The lock is released when the *worker* finishes, not when this await
     # returns. Cancelling an await does not stop a thread already inside the
     # database: `async with lock` would hand the lock to the next caller while
     # the previous query was still running, which is exactly the overlap the
     # lock exists to prevent on a shared in-memory DuckDB connection.
-    await lock.acquire()
     worker = asyncio.ensure_future(asyncio.to_thread(work))
     worker.add_done_callback(lambda _finished: lock.release())
     # Shielded, so a cancelled caller does not leave the callback waiting on a

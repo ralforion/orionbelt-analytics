@@ -24,6 +24,7 @@ from .connection_scope import (
     pin_connection,
     still_connected,
 )
+from .graphrag import _Pinned
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +235,7 @@ async def discover_schema(
                     ctx=ctx,
                     version=cached_version,
                     views_info=session.get_cached_views(effective_schema or ""),
+                    pinned=_Pinned(session),
                 )
             )
             session.graphrag.track_init_task(task)
@@ -397,6 +399,7 @@ async def discover_schema(
                     ctx=ctx,
                     version=schema_version,
                     views_info=views,
+                    pinned=_Pinned(session),
                 )
             )
             session.graphrag.track_init_task(task)
@@ -644,6 +647,7 @@ async def discover_schema(
                     ctx=ctx,
                     version=schema_version,
                     views_info=views,
+                    pinned=_Pinned(session),
                 )
             )
             session = services.get_session_data(ctx)
