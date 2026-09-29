@@ -37,7 +37,11 @@ def pin_connection(session: Any) -> PinnedConnection:
     Returns:
         Its connection id and the runtime object, to check against later.
     """
-    return PinnedConnection(session.connection_id, getattr(session, "runtime", None))
+    # getattr throughout: tools are also handed stand-in sessions that carry
+    # neither attribute, and for those there is no connection to change.
+    return PinnedConnection(
+        getattr(session, "connection_id", None), getattr(session, "runtime", None)
+    )
 
 
 def still_connected(session: Any, pinned: PinnedConnection) -> bool:
@@ -55,7 +59,7 @@ def still_connected(session: Any, pinned: PinnedConnection) -> bool:
         True when the results still describe the database the caller is on.
     """
     return (
-        session.connection_id == pinned.connection_id
+        getattr(session, "connection_id", None) == pinned.connection_id
         and getattr(session, "runtime", None) is pinned.runtime
     )
 

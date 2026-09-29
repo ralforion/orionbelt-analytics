@@ -465,3 +465,114 @@ class TestLoadingAnOntologyStaysWithItsDatabase:
 
         assert result.get("success") is not False, result
         assert session.loaded_ontology == self.TTL
+
+
+class TestOBQCAndTheDatabaseStayPaired:
+    """The third review: a reconnect while the validator is built.
+
+    `execute_sql_query` captured the database manager, then awaited the
+    validator. A reconnect in between paired the old database with the new
+    session's ontology -- or with none, which skips OBQC: a fan-trap query
+    that should have been blocked ran, and returned inflated totals.
+    """
+
+    def _services(self, session: SessionData, db: Any, on_validator: Any) -> Any:
+        async def validator(_ctx: Any) -> Any:
+            return on_validator()
+
+        return HandlerContext(
+            get_session_data=lambda _ctx: session,
+            get_session_db_manager=lambda _ctx: db,
+            aget_session_obqc_validator=validator,
+            get_session_obqc_validator=lambda _ctx: None,
+            create_error_response=lambda message, code=None, *rest: {
+                "success": False,
+                "error": message,
+                "error_type": code,
+            },
+        )
+
+    def _db(self) -> Mock:
+        db = Mock()
+        db.has_engine.return_value = True
+        db.connection_info = {"type": "duckdb"}
+        return db
+
+    async def test_a_reconnect_during_the_validator_build_refuses_the_query(
+        self, monkeypatch
+    ):
+        from src.handlers import query as query_handler
+
+        executed: list[str] = []
+
+        async def run(call: Any, *args: Any, **kwargs: Any) -> Any:
+            executed.append(getattr(call, "__name__", str(call)))
+            return {"success": True, "data": [], "row_count": 0}
+
+        monkeypatch.setattr(query_handler, "run_db", run)
+        session = _bound_session("old-database")
+
+        def reconnect_then_no_ontology() -> None:
+            # The new session has no ontology yet: OBQC would be skipped.
+            _reconnect(session)
+            return None
+
+        result = await query_handler.execute_sql_query(
+            Mock(),
+            "SELECT o.id, sum(i.amount) FROM orders o JOIN items i ON i.o = o.id "
+            "GROUP BY o.id",
+            10,
+            True,
+            None,
+            self._services(session, self._db(), reconnect_then_no_ontology),
+        )
+
+        assert result["error_type"] == "connection_changed"
+        assert executed == []  # nothing reached the database
+        assert result["obqc_fan_trap"]["evaluated"] is False
+
+    async def test_without_a_reconnect_the_query_still_runs(self, monkeypatch):
+        from src.handlers import query as query_handler
+
+        executed: list[str] = []
+
+        async def run(call: Any, *args: Any, **kwargs: Any) -> Any:
+            executed.append("ran")
+            return {"success": True, "data": [], "row_count": 0}
+
+        monkeypatch.setattr(query_handler, "run_db", run)
+        session = _bound_session("stable")
+
+        result = await query_handler.execute_sql_query(
+            Mock(),
+            "SELECT 1 FROM t",
+            10,
+            True,
+            None,
+            self._services(session, self._db(), lambda: None),
+        )
+
+        assert executed == ["ran"]
+        assert result.get("error_type") != "connection_changed"
+
+    async def test_validate_sql_syntax_refuses_a_mixed_answer(self, monkeypatch):
+        from src.handlers import query as query_handler
+
+        async def run(call: Any, *args: Any, **kwargs: Any) -> Any:
+            return {"is_valid": True, "warnings": [], "suggestions": []}
+
+        monkeypatch.setattr(query_handler, "run_db", run)
+        session = _bound_session("old-database")
+
+        def reconnect_then_no_ontology() -> None:
+            _reconnect(session)
+            return None
+
+        result = await query_handler.validate_sql_syntax(
+            Mock(),
+            "SELECT 1 FROM t",
+            self._services(session, self._db(), reconnect_then_no_ontology),
+        )
+
+        assert result["is_valid"] is False
+        assert result["error_type"] == "connection_changed"

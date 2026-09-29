@@ -16,6 +16,11 @@ from ..exceptions import (
 from ..handler_context import HandlerContext
 from ..utils import notify_client
 from .confirmation import Confirmation, ask_to_confirm
+from .connection_scope import (
+    connection_changed_response,
+    pin_connection,
+    still_connected,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +58,9 @@ async def validate_sql_syntax(
         get_session_obqc_validator: Function to get OBQC validator
     """
     try:
+        # The database checks the syntax and the ontology judges the meaning;
+        # both must be the same connection's. Pinned before either is read.
+        pinned = pin_connection(services.get_session_data(ctx))
         db_manager = services.get_session_db_manager(ctx)
 
         if not db_manager.has_engine():
@@ -92,6 +100,13 @@ async def validate_sql_syntax(
 
         # OBQC validation
         obqc_validator = await _obqc_validator(ctx, services)
+        if not still_connected(services.get_session_data(ctx), pinned):
+            return {
+                "is_valid": False,
+                **connection_changed_response(
+                    services, "the query was being validated", "validate_sql_syntax()"
+                ),
+            }
         if obqc_validator:
             db_type = db_manager.connection_info.get("type", "postgresql")
             obqc_result = obqc_validator.validate(sql_query.strip(), dialect=db_type)
@@ -240,6 +255,13 @@ async def execute_sql_query(
             response["obqc_fan_trap"] = fan_trap_report
             return response
 
+        # The query runs on this manager and is judged by the session's
+        # ontology, and those two must belong to the same connection. Building
+        # the validator can await; a reconnect meanwhile would pair the old
+        # database with the new session's ontology -- or with none, which skips
+        # OBQC and lets a fan trap that should block run. Pinned before either
+        # is read, and checked once the validator is in hand.
+        pinned = pin_connection(services.get_session_data(ctx))
         db_manager = services.get_session_db_manager(ctx)
 
         if not db_manager.has_engine():
@@ -278,6 +300,15 @@ async def execute_sql_query(
         obqc_warnings = []
         session = services.get_session_data(ctx)
         obqc_validator = await _obqc_validator(ctx, services)
+        if not still_connected(session, pinned):
+            # Refused, not run: neither pairing is safe. The old manager with
+            # the new ontology checks the wrong schema, and with no ontology it
+            # checks nothing at all.
+            return _with_verdict(
+                connection_changed_response(
+                    services, "the query was being checked", "execute_sql_query()"
+                )
+            )
         if obqc_validator:
             db_type = db_manager.connection_info.get("type", "postgresql")
             obqc_result = obqc_validator.validate(
