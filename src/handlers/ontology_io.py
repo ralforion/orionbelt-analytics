@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -219,6 +220,20 @@ async def load_my_ontology(
         session.loaded_ontology = ontology_content
         session.loaded_ontology_path = str(newest_file)
         session.obqc_validator = None
+
+        # The file has just been parsed into `graph`; extract OBQC's view from
+        # it now instead of parsing the same content again on the first query.
+        if services.provides("remember_prepared_ontology"):
+            base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
+            await asyncio.to_thread(
+                partial(
+                    services.remember_prepared_ontology,
+                    session,
+                    graph,
+                    base_uri,
+                    text=ontology_content,
+                )
+            )
 
         logger.info(f"Loaded ontology from: {newest_file}")
         logger.info(

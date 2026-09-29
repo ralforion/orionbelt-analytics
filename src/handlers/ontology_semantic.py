@@ -777,6 +777,19 @@ async def apply_semantic_names(
                     session.ontology_enriched = True
                     session.obqc_validator = None
 
+                    # Prepare OBQC's view from the enriched graph in hand, so
+                    # the next query does not parse the file back.
+                    if services.provides("remember_prepared_ontology"):
+                        await asyncio.to_thread(
+                            partial(
+                                services.remember_prepared_ontology,
+                                session,
+                                generator.graph,
+                                str(generator.base_uri),
+                                path=ontology_file_path,
+                            )
+                        )
+
                     # Update workspace: mark ontology as enriched
                     if session.connection_id:
                         try:

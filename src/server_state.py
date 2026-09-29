@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from .database_manager import DatabaseManager
 from .exceptions import SessionRequiredError, UnknownConnectionError
-from .obqc_validator import OBQCValidator
+from .obqc_validator import OBQCValidator, PreparedOntology, prepare_ontology
 from .ontology_generator import OntologyGenerator
 from .oxigraph_store import OXIGRAPH_AVAILABLE, OxigraphStoreManager
 from .paths import (
@@ -978,6 +978,158 @@ def get_session_db_manager(ctx: Context) -> DatabaseManager:
     return cast(DatabaseManager, session.db_manager)
 
 
+def _file_revision_key(path: Path, base_uri: str) -> tuple[Any, ...] | None:
+    """Identity of an ontology file: its path, mtime and size, plus the URI.
+
+    Args:
+        path: The ontology file.
+        base_uri: The base URI it would be read under.
+
+    Returns:
+        The identity, or None if the file cannot be stat'ed.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return ("file", str(path), stat.st_mtime_ns, stat.st_size, base_uri)
+
+
+def _text_revision_key(text: str, base_uri: str) -> tuple[Any, ...]:
+    """Identity of an ontology held as text: its digest, plus the URI.
+
+    Args:
+        text: The ontology source.
+        base_uri: The base URI it would be read under.
+
+    Returns:
+        The identity.
+    """
+    return ("text", hashlib.sha256(text.encode("utf-8")).hexdigest(), base_uri)
+
+
+def _ontology_revision_key(
+    session: SessionData, base_uri: str
+) -> tuple[Any, ...] | None:
+    """What identifies the ontology this session would validate against.
+
+    Two sessions share an extraction only when they would have read the same
+    bytes under the same base URI. A file is identified by its path, mtime and
+    size, as the review cache identifies one; an ontology loaded as text by the
+    digest of that text.
+
+    Args:
+        session: The session whose ontology to identify.
+        base_uri: The base URI the extraction would use.
+
+    Returns:
+        The identity, or None if there is no ontology to read.
+    """
+    if session.ontology_file is not None:
+        conn_dir = (
+            get_connection_dir(session.connection_id)
+            if session.connection_id
+            else ensure_output_dir()
+        )
+        return _file_revision_key(conn_dir / session.ontology_file, base_uri)
+
+    if session.loaded_ontology is not None:
+        return _text_revision_key(session.loaded_ontology, base_uri)
+
+    return None
+
+
+def _prepared_ontology_for(
+    session: SessionData, base_uri: str
+) -> PreparedOntology | None:
+    """The extraction for this session's ontology, parsing it at most once.
+
+    Parsing Turtle and extracting from it is what the first query after an
+    ontology is generated or loaded pays for: 930ms at 300 tables. It depends
+    on the ontology and the base URI and on nothing else, so the result is kept
+    on the connection and shared. The validator built from it stays per
+    session.
+
+    Args:
+        session: The session whose ontology to prepare.
+        base_uri: The base URI to read it under.
+
+    Returns:
+        The extraction, or None if the session has no readable ontology.
+    """
+    key = _ontology_revision_key(session, base_uri)
+    if key is None:
+        return None
+
+    cache = getattr(getattr(session, "runtime", None), "obqc_prepared", None)
+    if cache is not None:
+        held = cache.get(key)
+        if held is not None:
+            logger.debug("OBQC reusing the prepared ontology held for this connection")
+            return cast(PreparedOntology, held)
+
+    generator = OntologyGenerator(base_uri)
+    if key[0] == "file":
+        generator.load_from_file(key[1])
+        logger.debug(f"OBQC loaded ontology from session file: {session.ontology_file}")
+    else:
+        assert session.loaded_ontology is not None
+        generator.load_from_string(session.loaded_ontology)
+        logger.debug(
+            f"OBQC loaded ontology from session's loaded ontology: "
+            f"{session.loaded_ontology_path}"
+        )
+
+    prepared = prepare_ontology(generator.graph, base_uri)
+    if cache is not None:
+        cache.put(key, prepared)
+    return prepared
+
+
+def remember_prepared_ontology(
+    session: SessionData,
+    graph: Any,
+    base_uri: str,
+    *,
+    path: Path | None = None,
+    text: str | None = None,
+) -> None:
+    """Keep the extraction for an ontology just produced, so no query reparses it.
+
+    The graph is already in memory when an ontology is generated, enriched or
+    loaded. Writing the Turtle and parsing it back on the first query was the
+    whole 930ms at 300 tables; extracting from the graph in hand costs 89ms,
+    and happens here while the writer lock is still held.
+
+    Keyed exactly as a query would look it up, so a base URI that does not
+    match the one the validator reads (``ONTOLOGY_BASE_URI``) simply misses and
+    the query prepares the ontology itself. Failure is never an error for the
+    same reason.
+
+    Args:
+        session: The session whose connection should hold the extraction.
+        graph: The rdflib graph the ontology was written from.
+        base_uri: The base URI it was produced under.
+        path: Where it was written, for an ontology the session names by file.
+        text: Its source, for an ontology the session holds as text.
+    """
+    cache = getattr(getattr(session, "runtime", None), "obqc_prepared", None)
+    if cache is None:
+        return
+    try:
+        key = (
+            _file_revision_key(path, base_uri)
+            if path is not None
+            else _text_revision_key(text or "", base_uri)
+        )
+        if key is None:
+            return
+        cache.put(key, prepare_ontology(graph, base_uri))
+        logger.debug("Prepared OBQC semantics for the ontology just written")
+    except Exception as e:
+        logger.debug(f"Could not prepare OBQC semantics: {e}")
+
+
 def get_session_obqc_validator(ctx: Context) -> OBQCValidator | None:
     """Get or create OBQC validator for the current session."""
     session = get_session_data(ctx)
@@ -992,27 +1144,9 @@ def get_session_obqc_validator(ctx: Context) -> OBQCValidator | None:
         session.obqc_validator = OBQCValidator()
 
         base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
-        ontology_generator = OntologyGenerator(base_uri)
-
-        if session.ontology_file is not None:
-            conn_dir = (
-                get_connection_dir(session.connection_id)
-                if session.connection_id
-                else ensure_output_dir()
-            )
-            ontology_path = conn_dir / session.ontology_file
-            if ontology_path.exists():
-                ontology_generator.load_from_file(str(ontology_path))
-                logger.debug(
-                    f"OBQC loaded ontology from session file: {session.ontology_file}"
-                )
-        elif session.loaded_ontology is not None:
-            ontology_generator.load_from_string(session.loaded_ontology)
-            logger.debug(
-                f"OBQC loaded ontology from session's loaded ontology: {session.loaded_ontology_path}"
-            )
-
-        session.obqc_validator.load_ontology(ontology_generator.graph, base_uri)
+        prepared = _prepared_ontology_for(session, base_uri)
+        if prepared is not None:
+            session.obqc_validator.load_prepared(prepared)
         logger.debug(f"Initialized OBQC validator for session: {session.handle}")
 
     # Registered outside the creation branch, and on every call: views may be

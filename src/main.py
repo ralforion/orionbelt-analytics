@@ -177,6 +177,7 @@ from .server_state import (  # noqa: E402, F401
     get_session_safe_filename,
     load_ontology_from_session,
     peek_current_session,
+    remember_prepared_ontology,
     resolve_ontology_path,
 )
 
@@ -326,6 +327,7 @@ def _services() -> HandlerContext:
         get_session_db_manager=get_session_db_manager,
         get_session_safe_filename=get_session_safe_filename,
         get_session_obqc_validator=get_session_obqc_validator,
+        remember_prepared_ontology=remember_prepared_ontology,
         get_oxigraph_store=get_oxigraph_store,
         load_ontology_from_session=load_ontology_from_session,
         resolve_ontology_path=resolve_ontology_path,

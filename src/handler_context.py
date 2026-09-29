@@ -43,6 +43,7 @@ class HandlerContext:
     get_session_db_manager: Callable[..., Any] = _unset_service
     get_session_safe_filename: Callable[..., Any] = _unset_service
     get_session_obqc_validator: Callable[..., Any] = _unset_service
+    remember_prepared_ontology: Callable[..., Any] = _unset_service
     get_oxigraph_store: Callable[..., Any] = _unset_service
     load_ontology_from_session: Callable[..., Any] = _unset_service
     resolve_ontology_path: Callable[..., Any] = _unset_service

@@ -383,6 +383,20 @@ async def generate_ontology(
             session.ontology_file = ontology_filename
             session.obqc_validator = None
 
+            # The graph that produced this file is still in memory. Extract
+            # OBQC's view of it now, under the writer lock, rather than having
+            # the first query parse the Turtle back (930ms at 300 tables).
+            if services.provides("remember_prepared_ontology"):
+                await asyncio.to_thread(
+                    partial(
+                        services.remember_prepared_ontology,
+                        session,
+                        generator.graph,
+                        base_uri,
+                        path=ontology_file_path,
+                    )
+                )
+
             # Write workspace metadata for ontology section
             if session.connection_id:
                 try:

@@ -386,6 +386,46 @@ class OntologySchema:
     relationships: dict[str, RelationshipInfo] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class PreparedOntology:
+    """Everything OBQC reads out of an ontology graph, ready to be reused.
+
+    Parsing Turtle and extracting from it dominates the first query after an
+    ontology is generated or loaded: at 300 tables, 930 ms to parse and extract
+    against 89 ms to extract from a graph already in memory. None of it depends
+    on the query, the session or the database, so it is worth deriving once per
+    ontology revision and handing to every validator that needs it.
+
+    Treat the contents as read-only. Validation only reads them, and a test
+    asserts that; a caller that wants to change a table or a view must copy
+    first, or two sessions sharing one revision would edit each other's
+    semantics.
+    """
+
+    schema: OntologySchema
+    disjoint_pairs: frozenset[frozenset[str]]
+    views: dict[str, set[str]]
+    is_compatible: bool
+    base_uri: str
+    table_count: int
+    column_count: int
+
+
+def prepare_ontology(ontology_graph: Graph, base_uri: str) -> PreparedOntology:
+    """Extract what OBQC needs from an ontology graph, for reuse.
+
+    Args:
+        ontology_graph: The rdflib Graph containing the ontology.
+        base_uri: The base URI namespace.
+
+    Returns:
+        The extraction, which :meth:`OBQCValidator.load_prepared` accepts.
+    """
+    validator = OBQCValidator()
+    validator.load_ontology(ontology_graph, base_uri)
+    return validator.prepared_ontology()
+
+
 # The GROUP BY constructs whose members are grouping keys in their own right.
 # From sqlglot 30.19 these appear inside ``Group.expressions``; before that they
 # hung off separate args of the same names.
@@ -555,6 +595,11 @@ class OBQCValidator:
         # Check if ontology has required oba: annotations for OBQC
         self._is_compatible = self._check_ontology_compatibility()
 
+        # The graph is only read during extraction. Dropped so a prepared
+        # artifact and a freshly loaded validator hold the same thing, and so
+        # nothing keeps a multi-megabyte parse alive for the session's life.
+        self._graph = None
+
         if self._is_compatible:
             logger.info(
                 f"OBQC loaded ontology with {len(self._schema_cache.tables)} tables, "
@@ -564,6 +609,64 @@ class OBQCValidator:
             logger.warning(
                 "OBQC: Ontology lacks oba: namespace annotations - semantic validation disabled. "
                 "Use generate_ontology to create a compatible ontology."
+            )
+
+    def prepared_ontology(self) -> PreparedOntology:
+        """The extraction from the loaded ontology, for another validator.
+
+        Returns:
+            A :class:`PreparedOntology` holding what was read out of the graph.
+
+        Raises:
+            ValueError: If no ontology has been loaded.
+        """
+        if self._schema_cache is None or self._base_uri is None:
+            raise ValueError("No ontology loaded")
+
+        return PreparedOntology(
+            schema=self._schema_cache,
+            disjoint_pairs=frozenset(self._disjoint_pairs),
+            views=self._known_views,
+            is_compatible=self._is_compatible,
+            base_uri=str(self._base_uri),
+            table_count=len(self._schema_cache.tables),
+            column_count=sum(
+                len(table.columns) for table in self._schema_cache.tables.values()
+            ),
+        )
+
+    def load_prepared(self, prepared: PreparedOntology) -> None:
+        """Load an extraction produced earlier, instead of reading a graph.
+
+        The ontology's own views are registered as
+        :meth:`load_ontology` would, including the reset of the view signature
+        that lets a later definitions-based registration replace them.
+
+        Args:
+            prepared: An extraction from :func:`prepare_ontology` or
+                :meth:`prepared_ontology`.
+        """
+        self._graph = None
+        self._base_uri = Namespace(prepared.base_uri)
+        self._oba_ns = Namespace(OBA_NAMESPACE)
+        self._schema_cache = prepared.schema
+        self._disjoint_pairs = set(prepared.disjoint_pairs)
+        self._is_compatible = prepared.is_compatible
+
+        if prepared.views:
+            self._known_views = prepared.views
+            self._view_signature = None
+
+        if self._is_compatible:
+            logger.info(
+                f"OBQC reused a prepared ontology with {prepared.table_count} "
+                f"tables, {prepared.column_count} columns"
+            )
+        else:
+            logger.warning(
+                "OBQC: Ontology lacks oba: namespace annotations - semantic "
+                "validation disabled. Use generate_ontology to create a "
+                "compatible ontology."
             )
 
     def _check_ontology_compatibility(self) -> bool:

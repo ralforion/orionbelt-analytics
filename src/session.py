@@ -10,6 +10,7 @@ Each MCP session gets its own SessionData instance containing:
 
 import asyncio
 import logging
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Optional
 
@@ -178,6 +179,53 @@ class SchemaState:
         self.ontology = OntologyState()
 
 
+class PreparedOntologyCache:
+    """A few ontology extractions, keyed by revision, newest kept.
+
+    Bounded because an extraction of a large ontology is not small and two
+    sessions on one database may hold different ones: a single slot would have
+    them evict each other on every query.
+    """
+
+    def __init__(self, capacity: int = 4) -> None:
+        self._capacity = capacity
+        self._entries: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+
+    def get(self, key: tuple[Any, ...]) -> Any | None:
+        """The extraction stored under *key*, or None.
+
+        Args:
+            key: The revision identity the extraction was stored under.
+
+        Returns:
+            The prepared ontology, or None if it is not held.
+        """
+        entry = self._entries.get(key)
+        if entry is not None:
+            self._entries.move_to_end(key)
+        return entry
+
+    def put(self, key: tuple[Any, ...], prepared: Any) -> None:
+        """Store an extraction, dropping the least recently used if full.
+
+        Args:
+            key: The revision identity to store it under.
+            prepared: The prepared ontology.
+        """
+        self._entries[key] = prepared
+        self._entries.move_to_end(key)
+        while len(self._entries) > self._capacity:
+            self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        """Drop every held extraction."""
+        self._entries.clear()
+
+    def __len__(self) -> int:
+        """How many extractions are held."""
+        return len(self._entries)
+
+
 class ConnectionRuntime:
     """Facts about one database, shared by every session connected to it.
 
@@ -213,6 +261,13 @@ class ConnectionRuntime:
         # parsed ontology is large and the next call almost always wants the
         # same one.
         self.ontology_review: tuple[tuple[str, int, int], Any] | None = None
+        # What OBQC extracts from an ontology, keyed by which ontology it was
+        # and the base URI it was read under. The extraction is the same for
+        # every session and every query -- 930ms of parsing and extracting at
+        # 300 tables, against 89ms when the graph is already in memory -- while
+        # the validator built from it stays per session, because its views and
+        # its per-query state are a user's.
+        self.obqc_prepared: PreparedOntologyCache = PreparedOntologyCache()
 
         # Serializes the tools that rewrite this state or the connection's
         # workspace on disk, which every session on the database shares
