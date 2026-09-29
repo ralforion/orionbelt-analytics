@@ -348,6 +348,52 @@ class ChromaDBVectorStore:
             return DEFAULT_MAX_WRITE_BATCH
         return max(1, min(reported, DEFAULT_MAX_WRITE_BATCH))
 
+    def delete_tables(self, table_names: list[str]) -> int:
+        """Remove everything indexed for the given tables.
+
+        A table dropped from the database kept its vectors forever: nothing
+        here could delete, only add and replace. It stayed in every search
+        result, describing an object a query can no longer name.
+
+        Found by identity and by metadata rather than by guessing ids: the
+        table element is its own name, columns record the table they belong to,
+        and relationships record both ends. Semantic context is deliberately
+        left alone -- a person wrote it, and rediscovery is not the moment to
+        delete what they wrote.
+
+        Args:
+            table_names: Tables whose elements should go.
+
+        Returns:
+            How many elements were deleted.
+        """
+        if not table_names:
+            return 0
+
+        before = self.collection.count()
+        try:
+            for start in range(0, len(table_names), self._max_write_batch()):
+                batch = table_names[start : start + self._max_write_batch()]
+                # The tables themselves, by id.
+                self.collection.delete(ids=batch)
+                # Their columns, and the relationships at either end.
+                for clause in (
+                    {"table": {"$in": batch}},
+                    {"from_table": {"$in": batch}},
+                    {"to_table": {"$in": batch}},
+                ):
+                    self.collection.delete(where=clause)  # type: ignore[arg-type]
+        except Exception as e:
+            logger.error(f"Failed to delete elements for dropped tables: {e}")
+            raise
+
+        deleted = before - self.collection.count()
+        if deleted:
+            logger.info(
+                f"Deleted {deleted} elements for {len(table_names)} dropped table(s)"
+            )
+        return deleted
+
     def build_index(self) -> None:
         """Build the search index - no-op for ChromaDB (auto-indexed)."""
         self._index_built = True

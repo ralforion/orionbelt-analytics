@@ -24,10 +24,76 @@ class GraphRetriever:
         """Initialize the graph retriever."""
         self.graph = nx.DiGraph()
         self._tables_info: dict[str, dict[str, Any]] = {}
+        # Which tables each schema reported, kept apart from _tables_info.
+        # Nodes are keyed by bare name, so a table of the same name in a second
+        # schema overwrites the first one's record and the fact that the first
+        # schema also holds it would be lost -- which is how a rediscovery of
+        # one schema came to delete another's table. Membership is recorded per
+        # schema so that question can still be answered.
+        self._schema_tables: dict[str | None, set[str]] = {}
         # Bumped by every method that changes the graph, so the undirected
         # snapshot below can tell whether it is still current.
         self._generation = 0
         self._undirected: tuple[int, nx.Graph] | None = None
+
+    def tables_of_schema(self, schema_name: str | None) -> set[str]:
+        """Which tables *schema_name* reported the last time it was discovered.
+
+        Args:
+            schema_name: The schema to ask about.
+
+        Returns:
+            The table names it reported.
+        """
+        return set(self._schema_tables.get(schema_name, set()))
+
+    def tables_claimed_elsewhere(
+        self, schema_name: str | None, table_names: set[str]
+    ) -> set[str]:
+        """Which of *table_names* another schema also reported.
+
+        A node is one bare name shared by every schema that has a table of that
+        name, so removing it on one schema's behalf would take the others' with
+        it.
+
+        Args:
+            schema_name: The schema asking.
+            table_names: Names it no longer reports.
+
+        Returns:
+            The subset another schema still claims.
+        """
+        claimed: set[str] = set()
+        for other, tables in self._schema_tables.items():
+            if other == schema_name:
+                continue
+            claimed |= table_names & tables
+        return claimed
+
+    def remove_tables(self, table_names: set[str] | list[str]) -> int:
+        """Remove tables, and every relationship that touched them.
+
+        A table dropped from the database kept its node and its edges, so join
+        paths were still offered through a table SQL can no longer name.
+
+        Args:
+            table_names: Tables to remove.
+
+        Returns:
+            How many nodes were removed.
+        """
+        removed = 0
+        for name in table_names:
+            self._tables_info.pop(name, None)
+            for tables in self._schema_tables.values():
+                tables.discard(name)
+            if name in self.graph:
+                self.graph.remove_node(name)  # takes its edges with it
+                removed += 1
+        if removed:
+            self._graph_changed()
+            logger.info(f"Removed {removed} dropped table(s) from the graph")
+        return removed
 
     def _graph_changed(self) -> None:
         """Record that the graph is no longer what the snapshot was taken from."""
@@ -69,11 +135,14 @@ class GraphRetriever:
         self._graph_changed()
         self.graph.clear()
         self._tables_info = {}
+        # A rebuild replaces everything, membership included.
+        self._schema_tables = {}
 
         # Add nodes (tables)
         for table in tables_info:
             table_name = table["name"]
             self._tables_info[table_name] = table
+            self._schema_tables.setdefault(table.get("schema"), set()).add(table_name)
 
             self.graph.add_node(
                 table_name,
@@ -124,9 +193,16 @@ class GraphRetriever:
             name: (info or {}).get("schema") for name, info in self._tables_info.items()
         }
 
+        # A schema in this batch reports its whole table set, so its membership
+        # is replaced rather than added to: that is what makes a table missing
+        # from a rediscovery a dropped table rather than an unmentioned one.
+        for schema in {table.get("schema") for table in tables_info}:
+            self._schema_tables[schema] = set()
+
         for table in tables_info:
             table_name = table["name"]
             self._tables_info[table_name] = table
+            self._schema_tables.setdefault(table.get("schema"), set()).add(table_name)
 
             if table_name not in self.graph:
                 added_nodes += 1

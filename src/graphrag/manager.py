@@ -278,6 +278,31 @@ class GraphRAGManager:
             schema_name: The schema being indexed.
             accumulate: Add to the existing graph rather than replacing it.
         """
+        # What this schema used to hold and no longer does. Rediscovery is how
+        # a dropped table is noticed, and until now nothing acted on it: the
+        # node kept offering join paths and the vectors kept turning up in
+        # search, for a table SQL can no longer name.
+        #
+        # Only tables this schema owns are candidates. Nodes are keyed by bare
+        # name, so two schemas holding a table of the same name share one node,
+        # and a name last seen under another schema is left alone -- the same
+        # rule the edge replacement follows, for the same reason.
+        present = {table["name"] for table in tables_info}
+        dropped = self.graph_retriever.tables_of_schema(schema_name) - present
+        dropped -= self.graph_retriever.tables_claimed_elsewhere(schema_name, dropped)
+        if dropped:
+            logger.info(
+                f"Schema '{schema_name}' no longer reports {len(dropped)} "
+                f"table(s): {sorted(dropped)}"
+            )
+            self.graph_retriever.remove_tables(dropped)
+            try:
+                self.vector_store.delete_tables(sorted(dropped))
+            except Exception as e:
+                # The graph is already consistent; a stale vector is a search
+                # nuisance, not a wrong join, so do not fail the discovery.
+                logger.warning(f"Could not delete vectors for dropped tables: {e}")
+
         logger.info("Building vector store...")
         self.vector_store.add_elements_batch(embeddings["tables"])
         self.vector_store.add_elements_batch(embeddings["columns"])
