@@ -18,6 +18,27 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
+def quote_part(part: str) -> str:
+    """One component of an identity, quoted if it could be misread.
+
+    A dot inside a name is legal SQL -- ``"sales.eu".orders`` and
+    ``sales."eu.orders"`` are two different tables -- and joined with a bare
+    dot both became ``sales.eu.orders``, one silently overwriting the other.
+    Such a component is written the way SQL writes it, in double quotes with
+    inner quotes doubled. Every other name is left exactly as it was, so
+    ordinary identities do not change.
+
+    Args:
+        part: A schema, table or column name.
+
+    Returns:
+        The name, quoted only when it contains a dot or a double quote.
+    """
+    if "." in part or '"' in part:
+        return '"' + part.replace('"', '""') + '"'
+    return part
+
+
 def qualified(schema: str | None, table: str) -> str:
     """The identity of a table within this index.
 
@@ -26,25 +47,67 @@ def qualified(schema: str | None, table: str) -> str:
         table: The table's own name.
 
     Returns:
-        ``schema.table``, or just the table when there is no schema.
+        ``schema.table``, or just the table when there is no schema, each
+        component quoted when it would otherwise be ambiguous.
     """
-    return f"{schema}.{table}" if schema else table
+    if not schema:
+        return quote_part(table)
+    return f"{quote_part(schema)}.{quote_part(table)}"
 
 
-def split(identity: str) -> tuple[str | None, str]:
-    """Take an identity apart again.
-
-    Splits on the *first* dot, because a schema cannot contain one here while
-    a table name conceivably can.
+def _components(identity: str) -> list[str]:
+    """Split an identity on the dots that are not inside quotes, unquoting.
 
     Args:
         identity: What :func:`qualified` produced.
 
     Returns:
-        The schema (or None) and the table name.
+        Its components, with quoting removed.
     """
-    schema, dot, table = identity.partition(".")
-    return (schema, table) if dot else (None, identity)
+    components: list[str] = []
+    current: list[str] = []
+    quoted = False
+    position = 0
+    while position < len(identity):
+        char = identity[position]
+        if quoted:
+            if char == '"':
+                if identity[position + 1 : position + 2] == '"':
+                    current.append('"')
+                    position += 2
+                    continue
+                quoted = False
+            else:
+                current.append(char)
+        elif char == '"':
+            quoted = True
+        elif char == ".":
+            components.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+        position += 1
+    components.append("".join(current))
+    return components
+
+
+def split(identity: str) -> tuple[str | None, str]:
+    """Take an identity apart again.
+
+    Splits on the first dot outside quotes. More than two unquoted components
+    can only come from a name written before quoting existed; the first is the
+    schema and the rest the table, as before.
+
+    Args:
+        identity: What :func:`qualified` produced.
+
+    Returns:
+        The schema (or None) and the table name, both unquoted.
+    """
+    components = _components(identity)
+    if len(components) == 1:
+        return None, components[0]
+    return components[0], ".".join(components[1:])
 
 
 def display_name(identity: str) -> str:

@@ -242,3 +242,196 @@ class TestNothingChangesWithoutSchemas:
 
         assert "orders" in ids
         assert "orders.amount" in ids
+
+
+# ---------------------------------------------------------------------------
+# Review of #147: three places where identity was not carried all the way.
+# ---------------------------------------------------------------------------
+
+
+def _cross_schema_fk(name: str, schema: str, target: str, target_schema: str) -> dict:
+    table = _table(name, schema)
+    table["foreign_keys"] = [
+        {
+            "column": "ref_id",
+            "referenced_table": target,
+            "referenced_schema": target_schema,
+            "referenced_column": "id",
+        }
+    ]
+    return table
+
+
+class TestRediscoveryKeepsCrossSchemaJoins:
+    """The drop detector compared qualified identities with bare names.
+
+    Every table therefore looked dropped: removed and re-added on each
+    rediscovery. A schema's own edges came back with the re-add; edges other
+    schemas had *into* it did not.
+    """
+
+    @pytest.fixture
+    def manager(self, tmp_path, monkeypatch) -> GraphRAGManager:
+        monkeypatch.setattr(
+            "src.graphrag.vector_store_chromadb.OUTPUT_DIR", tmp_path / "chroma"
+        )
+        instance = GraphRAGManager(
+            embedding_model="tfidf", connection_id="xschema", schema_name="shared"
+        )
+        instance.initialize_from_schema(
+            [_table("customers", "shared")], schema_name="shared"
+        )
+        instance.accumulate_schema(
+            [_cross_schema_fk("orders", "sales", "customers", "shared")],
+            schema_name="sales",
+        )
+        return instance
+
+    def test_the_cross_schema_edge_exists(self, manager):
+        assert (
+            "sales.orders",
+            "shared.customers",
+        ) in manager.graph_retriever.graph.edges()
+
+    def test_refreshing_the_target_schema_keeps_it(self, manager):
+        manager.accumulate_schema([_table("customers", "shared")], schema_name="shared")
+
+        assert (
+            "sales.orders",
+            "shared.customers",
+        ) in manager.graph_retriever.graph.edges()
+        assert manager.graph_retriever.find_join_path(
+            "sales.orders", "shared.customers"
+        )
+
+    def test_refreshing_it_keeps_the_relationship_vector(self, manager):
+        def relationship_ids() -> set[str]:
+            got = manager.vector_store.collection.get()
+            return {i for i in got["ids"] if "__to__" in i}
+
+        before = relationship_ids()
+        assert before
+
+        manager.accumulate_schema([_table("customers", "shared")], schema_name="shared")
+
+        assert relationship_ids() == before
+
+    def test_an_unchanged_rediscovery_removes_nothing(self, manager, monkeypatch):
+        removed: list[Any] = []
+        real = manager.graph_retriever.remove_tables
+
+        def recording(names: Any) -> int:
+            removed.extend(names)
+            return real(names)
+
+        monkeypatch.setattr(manager.graph_retriever, "remove_tables", recording)
+
+        manager.accumulate_schema([_table("customers", "shared")], schema_name="shared")
+
+        assert removed == []
+
+
+class TestDottedNamesDoNotCollide:
+    """`"sales.eu".orders` and `sales."eu.orders"` are two tables."""
+
+    def test_they_get_different_identities(self):
+        assert qualified("sales.eu", "orders") != qualified("sales", "eu.orders")
+
+    def test_each_identity_comes_apart_correctly(self):
+        assert split(qualified("sales.eu", "orders")) == ("sales.eu", "orders")
+        assert split(qualified("sales", "eu.orders")) == ("sales", "eu.orders")
+        assert display_name(qualified("sales", "eu.orders")) == "eu.orders"
+
+    def test_quotes_inside_a_name_round_trip(self):
+        identity = qualified('we"ird', "x.y")
+
+        assert split(identity) == ('we"ird', "x.y")
+
+    def test_ordinary_names_are_unchanged(self):
+        """No quoting unless it is needed, so existing indexes stay valid."""
+        assert qualified("sales", "orders") == "sales.orders"
+        assert qualified(None, "orders") == "orders"
+
+    def test_the_graph_keeps_both_tables(self):
+        retriever = GraphRetriever()
+        retriever.add_to_graph([_table("orders", "sales.eu", comment="eu schema")])
+        retriever.add_to_graph([_table("eu.orders", "sales", comment="dotted table")])
+
+        assert retriever.graph.number_of_nodes() == 2
+        comments = {
+            retriever.graph.nodes[node]["comment"] for node in retriever.graph.nodes
+        }
+        assert comments == {"eu schema", "dotted table"}
+
+
+class TestCapabilityToolsUseTheCurrentSchema:
+    """reachable_from and measurable_from said "not found" for an ambiguous name."""
+
+    def _session(self, current_schema: str | None) -> Any:
+        from types import SimpleNamespace
+
+        manager = SimpleNamespace(graph_retriever=GraphRetriever())
+        manager.graph_retriever.add_to_graph(
+            [
+                _cross_schema_fk("orders", "sales", "customers", "sales"),
+                _table("customers", "sales"),
+            ]
+        )
+        manager.graph_retriever.add_to_graph([_table("orders", "archive")])
+        return SimpleNamespace(
+            graphrag_initialized=True,
+            graphrag_manager=manager,
+            current_schema=current_schema,
+        )
+
+    def _services(self, session: Any) -> Any:
+        from src.handler_context import HandlerContext
+
+        return HandlerContext(
+            get_session_data=lambda _ctx: session,
+            create_error_response=lambda message, code=None, *rest: {
+                "success": False,
+                "error": message,
+                "error_type": code,
+            },
+        )
+
+    async def test_reachable_from_uses_the_current_schema(self):
+        from unittest.mock import Mock
+
+        from src.handlers import graphrag as handler
+
+        session = self._session("sales")
+        result = await handler.reachable_from(
+            Mock(), "orders", None, self._services(session)
+        )
+
+        assert result["success"] is True
+        assert result["resolved_table"] == "sales.orders"
+        assert result["reachable_tables"] == ["sales.customers"]
+
+    async def test_measurable_from_uses_the_current_schema(self):
+        from unittest.mock import Mock
+
+        from src.handlers import graphrag as handler
+
+        session = self._session("sales")
+        result = await handler.measurable_from(
+            Mock(), "customers", None, self._services(session)
+        )
+
+        assert result["success"] is True
+        assert result["resolved_table"] == "sales.customers"
+
+    async def test_without_a_current_schema_it_is_ambiguous_not_missing(self):
+        from unittest.mock import Mock
+
+        from src.handlers import graphrag as handler
+
+        session = self._session(None)
+        result = await handler.reachable_from(
+            Mock(), "orders", None, self._services(session)
+        )
+
+        assert result["error_type"] == "ambiguous_table"
+        assert result["candidates"] == ["archive.orders", "sales.orders"]

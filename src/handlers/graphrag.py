@@ -881,6 +881,39 @@ async def graphrag_find_join_path(
         return err
 
 
+def _resolve_table_for_session(
+    retriever: Any, name: str, session: Any, services: "HandlerContext"
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Which table a tool's argument means, with the session's schema in mind.
+
+    The same rules join-path discovery uses: an exact identity, a unique bare
+    name, then the schema the session is working in. With `sales.orders` and
+    `archive.orders` both indexed and the session in `sales`, `orders` is the
+    sales one; with no current schema it is reported as ambiguous, candidates
+    listed, rather than as "not found" -- which is what it used to say.
+
+    Args:
+        retriever: The graph retriever.
+        name: The table as the caller wrote it.
+        session: The calling session.
+        services: Request-scoped services.
+
+    Returns:
+        The identity to use and no error, or no identity and the error to
+        return.
+    """
+    found = retriever.resolve_name(name, getattr(session, "current_schema", None))
+    if found.ambiguous:
+        err: dict[str, Any] = services.create_error_response(
+            f"'{name}' names a table in more than one schema: "
+            f"{', '.join(found.candidates)}. Ask again with the one you mean.",
+            "ambiguous_table",
+        )
+        err["candidates"] = found.candidates
+        return None, err
+    return found.identity or name, None
+
+
 async def reachable_from(
     ctx: Context,
     table: str,
@@ -898,9 +931,13 @@ async def reachable_from(
         return err
 
     try:
-        result = session.graphrag_manager.graph_retriever.reachable_from(
-            table, max_hops=max_hops
+        retriever = session.graphrag_manager.graph_retriever
+        resolved, problem = _resolve_table_for_session(
+            retriever, table, session, services
         )
+        if problem is not None:
+            return problem
+        result = retriever.reachable_from(resolved, max_hops=max_hops)
         if not result["exists"]:
             err = services.create_error_response(
                 f"Table '{table}' not found in the schema graph.", "data_error"
@@ -914,6 +951,7 @@ async def reachable_from(
         return {
             "success": True,
             "table": table,
+            "resolved_table": resolved,
             "direction": "many_to_one",
             "capability": "dimension",
             "reachable_tables": result["tables"],
@@ -950,9 +988,13 @@ async def measurable_from(
         return err
 
     try:
-        result = session.graphrag_manager.graph_retriever.measurable_from(
-            table, max_hops=max_hops
+        retriever = session.graphrag_manager.graph_retriever
+        resolved, problem = _resolve_table_for_session(
+            retriever, table, session, services
         )
+        if problem is not None:
+            return problem
+        result = retriever.measurable_from(resolved, max_hops=max_hops)
         if not result["exists"]:
             err = services.create_error_response(
                 f"Table '{table}' not found in the schema graph.", "data_error"
@@ -965,6 +1007,7 @@ async def measurable_from(
         return {
             "success": True,
             "table": table,
+            "resolved_table": resolved,
             "direction": "one_to_many",
             "capability": "measure",
             "measurable_tables": result["tables"],

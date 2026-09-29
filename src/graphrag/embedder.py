@@ -30,7 +30,7 @@ from typing import Any
 
 import numpy as np
 
-from .identity import qualified
+from .identity import qualified, quote_part
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +351,7 @@ class SchemaEmbedder:
 
         return SchemaElement(
             element_type="column",
-            element_id=f"{qualified(schema, table_name)}.{column_name}",
+            element_id=f"{qualified(schema, table_name)}.{quote_part(column_name)}",
             name=column_name,
             description=description,
             metadata={
