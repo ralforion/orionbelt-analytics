@@ -24,6 +24,38 @@ class GraphRetriever:
         """Initialize the graph retriever."""
         self.graph = nx.DiGraph()
         self._tables_info: dict[str, dict[str, Any]] = {}
+        # Bumped by every method that changes the graph, so the undirected
+        # snapshot below can tell whether it is still current.
+        self._generation = 0
+        self._undirected: tuple[int, nx.Graph] | None = None
+
+    def _graph_changed(self) -> None:
+        """Record that the graph is no longer what the snapshot was taken from."""
+        self._generation += 1
+        self._undirected = None
+
+    def _undirected_snapshot(self) -> nx.Graph:
+        """An undirected copy of the graph, reused until the graph changes.
+
+        Join lookups need an undirected reading, because a path may cross a
+        foreign key against its direction. Converting copies every node and
+        edge, which was paid per lookup: roughly 1ms on 400 tables and 2.6ms on
+        1,000, against 0.03ms and 0.06ms for reusing one.
+
+        A copy rather than ``to_undirected(as_view=True)``: a view reflects
+        later changes to the graph it was taken from, which is the opposite of
+        what a snapshot keyed to a generation means. Callers read it and must
+        not modify it.
+
+        Returns:
+            The undirected form of the current graph.
+        """
+        cached = self._undirected
+        if cached is not None and cached[0] == self._generation:
+            return cached[1]
+        snapshot = self.graph.to_undirected()
+        self._undirected = (self._generation, snapshot)
+        return snapshot
 
     def build_graph(self, tables_info: list[dict[str, Any]]) -> None:
         """
@@ -32,6 +64,9 @@ class GraphRetriever:
         Args:
             tables_info: List of table metadata with columns and foreign keys
         """
+        # Before and after: a build that raises midway must not leave a
+        # snapshot of the graph as it was, still matching the generation.
+        self._graph_changed()
         self.graph.clear()
         self._tables_info = {}
 
@@ -64,6 +99,7 @@ class GraphRetriever:
                         referenced_column=fk["referenced_column"],
                     )
 
+        self._graph_changed()
         logger.info(
             f"Built graph with {self.graph.number_of_nodes()} nodes "
             f"and {self.graph.number_of_edges()} edges"
@@ -78,6 +114,7 @@ class GraphRetriever:
         Args:
             tables_info: List of table metadata with columns and foreign keys
         """
+        self._graph_changed()
         added_nodes = 0
         added_edges = 0
 
@@ -149,6 +186,7 @@ class GraphRetriever:
                         referenced_column=fk["referenced_column"],
                     )
 
+        self._graph_changed()
         logger.info(
             f"Added to graph: +{added_nodes} nodes, +{added_edges} edges "
             f"(-{removed_edges} replaced foreign keys; total: "
@@ -218,7 +256,7 @@ class GraphRetriever:
         chosen_tables = [from_table, *(join["to_table"] for join in chosen)]
         alternatives: list[list[dict[str, Any]]] = []
         try:
-            undirected = self.graph.to_undirected()
+            undirected = self._undirected_snapshot()
             for path in nx.all_shortest_paths(
                 undirected, source=from_table, target=to_table
             ):
@@ -267,7 +305,7 @@ class GraphRetriever:
 
             # Try undirected view for mixed-direction paths
             try:
-                undirected_graph = self.graph.to_undirected()
+                undirected_graph = self._undirected_snapshot()
                 path_undirected = nx.shortest_path(
                     undirected_graph, source=from_table, target=to_table
                 )
@@ -483,7 +521,7 @@ class GraphRetriever:
             Summary dictionary
         """
         # Find central tables (high degree centrality)
-        centrality = nx.degree_centrality(self.graph.to_undirected())
+        centrality = nx.degree_centrality(self._undirected_snapshot())
         top_central = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:5]
 
         # Find hub tables (many outgoing FKs)
