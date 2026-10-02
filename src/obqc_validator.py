@@ -364,6 +364,8 @@ class TableSchema:
     schema_name: str
     columns: dict[str, ColumnSchema] = field(default_factory=dict)
     primary_keys: list[str] = field(default_factory=list)
+    # False when the ontology gave no oba:schemaName and "public" was assumed.
+    schema_declared: bool = True
 
 
 @dataclass
@@ -702,10 +704,12 @@ class OBQCValidator:
                 continue
             table_name = self._get_literal(subject, self._oba_ns.tableName)
             if table_name:
-                schema_name = (
-                    self._get_literal(subject, self._oba_ns.schemaName) or "public"
+                declared_schema = self._get_literal(subject, self._oba_ns.schemaName)
+                table_schema = TableSchema(
+                    name=table_name,
+                    schema_name=declared_schema or "public",
+                    schema_declared=bool(declared_schema),
                 )
-                table_schema = TableSchema(name=table_name, schema_name=schema_name)
 
                 # Get primary keys
                 for pk in self._graph.objects(subject, self._oba_ns.primaryKey):

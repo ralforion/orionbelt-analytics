@@ -251,7 +251,11 @@ class GraphRAGManager:
             return None
 
     async def aget_query_context(
-        self, query: str, max_tables: int = 5, max_columns: int = 20
+        self,
+        query: str,
+        max_tables: int = 5,
+        max_columns: int = 20,
+        retriever: GraphRetriever | None = None,
     ) -> dict[str, Any]:
         """:meth:`get_query_context`, with the embedding off the event loop.
 
@@ -266,13 +270,18 @@ class GraphRAGManager:
             query: Natural language query or SQL requirement.
             max_tables: Maximum tables to include.
             max_columns: Maximum columns to include.
+            retriever: The join graph to read instead of the shared one.
 
         Returns:
             What :meth:`get_query_context` returns.
         """
         embedding = await asyncio.to_thread(self._try_embed, query)
         return self.get_query_context(
-            query, max_tables, max_columns, query_embedding=embedding
+            query,
+            max_tables,
+            max_columns,
+            query_embedding=embedding,
+            retriever=retriever,
         )
 
     async def asearch_schema(
@@ -605,6 +614,7 @@ class GraphRAGManager:
         include_related: bool = True,
         max_related_distance: int = 1,
         query_embedding: Any | None = None,
+        retriever: GraphRetriever | None = None,
     ) -> dict[str, Any]:
         """
         Find tables relevant to a natural language query.
@@ -616,12 +626,15 @@ class GraphRAGManager:
             top_k: Number of primary tables to find
             include_related: Whether to include related tables
             max_related_distance: Maximum graph distance for related tables
+            retriever: The join graph to read instead of the shared one -- a
+                session's copy extended with its own ontology's relationships.
 
         Returns:
             Dictionary with primary tables, related tables, and context
         """
         if not self._initialized:
             raise RuntimeError("GraphRAG not initialized")
+        graph = retriever or self.graph_retriever
 
         # Step 1: Vector search for relevant tables
         table_results = self.search_schema(
@@ -647,7 +660,7 @@ class GraphRAGManager:
         if include_related:
             all_related = {}
             for table in primary_tables:
-                related = self.graph_retriever.get_related_tables(
+                related = graph.get_related_tables(
                     table, max_distance=max_related_distance
                 )
                 all_related[table] = related
@@ -670,7 +683,7 @@ class GraphRAGManager:
         if len(primary_tables) > 1:
             for i, table_a in enumerate(primary_tables[:-1]):
                 for table_b in primary_tables[i + 1 :]:
-                    join_path = self.graph_retriever.find_join_path(table_a, table_b)
+                    join_path = graph.find_join_path(table_a, table_b)
                     if join_path:
                         result["suggested_joins"].append(
                             {"from": table_a, "to": table_b, "path": join_path}
@@ -689,7 +702,7 @@ class GraphRAGManager:
             )
         )
 
-        fan_trap_warnings = self.graph_retriever.detect_fan_traps(all_tables)
+        fan_trap_warnings = graph.detect_fan_traps(all_tables)
         if fan_trap_warnings:
             result["fan_trap_warnings"] = fan_trap_warnings
 
@@ -701,6 +714,7 @@ class GraphRAGManager:
         max_tables: int = 5,
         max_columns: int = 20,
         query_embedding: Any | None = None,
+        retriever: GraphRetriever | None = None,
     ) -> dict[str, Any]:
         """
         Get optimized context for SQL query generation.
@@ -713,6 +727,7 @@ class GraphRAGManager:
             max_columns: Maximum columns to include
             query_embedding: The query already embedded, e.g. by
                 :meth:`aget_query_context` in a worker. Embedded here if absent.
+            retriever: The join graph to read instead of the shared one.
 
         Returns:
             Optimized context dictionary
@@ -734,6 +749,7 @@ class GraphRAGManager:
             include_related=True,
             max_related_distance=1,
             query_embedding=query_embedding,
+            retriever=retriever,
         )
 
         # Find relevant columns

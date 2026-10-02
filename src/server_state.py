@@ -1095,6 +1095,11 @@ def _ontology_revision_key(
     Returns:
         The identity, or None if there is no ontology to read.
     """
+    # An ontology the user loaded wins over the generated one: it was loaded
+    # after the ontology was generated, or generating would have dropped it.
+    if session.loaded_ontology is not None:
+        return _text_revision_key(session.loaded_ontology, base_uri)
+
     if session.ontology_file is not None:
         conn_dir = (
             get_connection_dir(session.connection_id)
@@ -1102,9 +1107,6 @@ def _ontology_revision_key(
             else ensure_output_dir()
         )
         return _file_revision_key(conn_dir / session.ontology_file, base_uri)
-
-    if session.loaded_ontology is not None:
-        return _text_revision_key(session.loaded_ontology, base_uri)
 
     return None
 
@@ -1163,6 +1165,7 @@ def remember_prepared_ontology(
     *,
     path: Path | None = None,
     text: str | None = None,
+    prepared: PreparedOntology | None = None,
 ) -> None:
     """Keep the extraction for an ontology just produced, so no query reparses it.
 
@@ -1182,6 +1185,7 @@ def remember_prepared_ontology(
         base_uri: The base URI it was produced under.
         path: Where it was written, for an ontology the session names by file.
         text: Its source, for an ontology the session holds as text.
+        prepared: The extraction, when the caller already made it from *graph*.
     """
     cache = getattr(getattr(session, "runtime", None), "obqc_prepared", None)
     if cache is None:
@@ -1194,7 +1198,7 @@ def remember_prepared_ontology(
         )
         if key is None:
             return
-        cache.put(key, prepare_ontology(graph, base_uri))
+        cache.put(key, prepared or prepare_ontology(graph, base_uri))
         logger.debug("Prepared OBQC semantics for the ontology just written")
     except Exception as e:
         logger.debug(f"Could not prepare OBQC semantics: {e}")

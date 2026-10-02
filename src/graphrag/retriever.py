@@ -19,6 +19,24 @@ from .identity import Resolution, choose, display_name, qualified
 logger = logging.getLogger(__name__)
 
 
+def _provenance(edge_data: dict[str, Any]) -> dict[str, Any]:
+    """What a join rests on, for an edge that is not a declared foreign key.
+
+    Declared keys add nothing, so existing join specifications read as before.
+
+    Args:
+        edge_data: The edge's attributes.
+
+    Returns:
+        ``source`` and ``confidence`` for an inferred or ontology edge, else {}.
+    """
+    if edge_data.get("from_ontology"):
+        return {"source": "ontology"}
+    if edge_data.get("inferred"):
+        return {"source": "inferred", "confidence": edge_data.get("confidence")}
+    return {}
+
+
 class GraphRetriever:
     """Graph-based retrieval for schema navigation."""
 
@@ -123,6 +141,26 @@ class GraphRetriever:
             current_schema,
         )
 
+    @property
+    def generation(self) -> int:
+        """Changes whenever the graph does; a copy taken at one is stale after."""
+        return self._generation
+
+    def indexed_name(self, name: str) -> str | None:
+        """The table name as indexed, for a name that differs only in case.
+
+        Args:
+            name: A bare table name, as an ontology or a person wrote it.
+
+        Returns:
+            The indexed spelling if exactly one matches, else None.
+        """
+        if name in self._by_name:
+            return name
+        folded = name.casefold()
+        matches = [n for n in self._by_name if n.casefold() == folded]
+        return matches[0] if len(matches) == 1 else None
+
     def identity_for(self, name: str, current_schema: str | None = None) -> str:
         """The node *name* refers to, or *name* itself when nothing matches.
 
@@ -213,7 +251,13 @@ class GraphRetriever:
             target = self._fk_target(fk, schema)
             if target is None:
                 continue
-            if not self.graph.has_edge(source, target):
+            inferred = bool(fk.get("inferred"))
+            if self.graph.has_edge(source, target):
+                # One edge per pair of tables. A key the database declares
+                # outranks one guessed from a column name, whichever came first.
+                if inferred and not self.graph[source][target].get("inferred"):
+                    continue
+            else:
                 added += 1
             self.graph.add_edge(
                 source,
@@ -221,8 +265,80 @@ class GraphRetriever:
                 edge_type="foreign_key",
                 column=fk["column"],
                 referenced_column=fk["referenced_column"],
+                inferred=inferred,
+                confidence=fk.get("confidence") if inferred else None,
             )
         return added
+
+    def with_relationships(
+        self, relationships: list[tuple[str, str, str, str]]
+    ) -> "GraphRetriever":
+        """A copy of this graph with further relationships, for one reader.
+
+        The graph is shared by every session on a connection; an ontology a
+        user loaded belongs to that user alone. Its relationships extend join
+        discovery through a copy, so they never reach anyone else's.
+
+        The copy is read-only in intent and does not follow later changes to
+        this graph: hold it only for as long as this graph's generation is
+        unchanged. A pair of tables with a declared key keeps it -- what the
+        database declares outranks what an ontology asserts about it. An edge
+        only inferred from column names is replaced: a mapping someone wrote
+        down is better evidence than a guess, and is usually there to correct
+        one.
+
+        Args:
+            relationships: ``(from_table, from_column, to_table, to_column)``
+                with both tables as graph identities, the first holding the key.
+
+        Returns:
+            The extended copy, or this graph itself if nothing was added.
+        """
+
+        def declared(source: str, target: str) -> bool:
+            return self.graph.has_edge(source, target) and not self.graph[source][
+                target
+            ].get("inferred")
+
+        new = [
+            rel
+            for rel in relationships
+            if rel[0] in self.graph
+            and rel[2] in self.graph
+            and rel[0] != rel[2]
+            and not declared(rel[0], rel[2])
+        ]
+        if not new:
+            return self
+
+        overlay = GraphRetriever()
+        overlay.graph = self.graph.copy()
+        overlay._tables_info = dict(self._tables_info)
+        overlay._by_name = {name: set(ids) for name, ids in self._by_name.items()}
+        overlay._schema_tables = {
+            schema: set(ids) for schema, ids in self._schema_tables.items()
+        }
+        placed: set[tuple[str, str]] = set()
+        for source, column, target, referenced_column in new:
+            if (source, target) in placed:
+                continue  # Two relationships between one pair: the first wins.
+            placed.add((source, target))
+            # Replaces an inferred edge outright: attributes left over from the
+            # guess must not survive into a join built on the mapping.
+            if overlay.graph.has_edge(source, target):
+                overlay.graph.remove_edge(source, target)
+            overlay.graph.add_edge(
+                source,
+                target,
+                edge_type="foreign_key",
+                column=column,
+                referenced_column=referenced_column,
+                inferred=False,
+                confidence=None,
+                from_ontology=True,
+            )
+        overlay._graph_changed()
+        return overlay
 
     def _graph_changed(self) -> None:
         """Record that the graph is no longer what the snapshot was taken from."""
@@ -359,6 +475,7 @@ class GraphRetriever:
                         "from_column": edge_data["column"],
                         "to_column": edge_data["referenced_column"],
                         "join_type": "INNER",
+                        **_provenance(edge_data),
                     }
                 )
             elif self.graph.has_edge(right_table, left_table):
@@ -370,6 +487,7 @@ class GraphRetriever:
                         "from_column": edge_data["referenced_column"],
                         "to_column": edge_data["column"],
                         "join_type": "INNER",
+                        **_provenance(edge_data),
                     }
                 )
         return joins
