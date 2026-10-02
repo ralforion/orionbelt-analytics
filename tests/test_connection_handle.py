@@ -220,10 +220,10 @@ async def test_concurrent_calls_do_not_see_each_others_handle(state):
 # --- the published tool surface ---
 
 
-async def test_every_tool_takes_an_optional_connection_and_there_are_still_28():
+async def test_every_tool_takes_an_optional_connection_and_there_are_now_29():
     tools = await mcp.list_tools()
 
-    assert len(tools) == 28
+    assert len(tools) == 29
     for tool in tools:
         properties = tool.parameters["properties"]
         assert "connection" in properties, tool.name

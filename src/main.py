@@ -113,7 +113,7 @@ PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks.
 
 ## Recommended Workflow
 
-`connect_database()` -> `list_schemas()` -> `discover_schema()` ->
+`list_databases()` -> `connect_database(database=...)` -> `list_schemas()` -> `discover_schema()` ->
 `generate_ontology()` -> `execute_sql_query()` -> `generate_chart()`
 
 ## Critical Guides (Claude Skills)
@@ -128,6 +128,7 @@ PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks.
 - Review `foreign_keys` from `discover_schema()` before complex JOINs
 - `execute_sql_query()` runs built-in syntax, security, and OBQC validation
 - For multi-fact aggregation, use the UNION ALL pattern (see `/fan-trap-prevention`)
+- Databases are configured on the server by name; `list_databases()` shows them with descriptions. Match the user's wording ("the finance database") to one, and ask if more than one fits
 - `connect_database()` returns a connection handle (e.g. `ob_k2m9qa`). Every tool accepts it as the optional `connection` argument. If a call fails asking for a connection, pass the handle on every call from then on
 """,
 )
@@ -398,16 +399,25 @@ _DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
 @mcp.tool(annotations=_WRITES)
 @_connection_aware(mint=True)
 async def connect_database(
-    ctx: Context, db_type: _DbType  # type: ignore[valid-type]
+    ctx: Context,
+    database: _Identifier | None = None,
+    db_type: _DbType | None = None,  # type: ignore[valid-type]
 ) -> str | dict[str, Any]:
-    """Connect to a database using credentials from environment variables.
+    """Connect to one of the databases this server is configured for.
+
+    Name the database the user means -- call list_databases to see the names
+    and what each holds. With only one configured, no argument is needed.
+    Credentials stay on the server; they are never passed here.
 
     If a previous workspace exists for this connection, it is automatically
     restored (schema cache, ontology, GraphRAG, RDF store). The response
     indicates what was restored and which tools are ready to use.
 
     Args:
-        db_type: Database type - 'postgresql', 'snowflake', 'dremio', 'clickhouse', 'bigquery', 'duckdb', 'databricks', or 'mysql'
+        database: Name of a configured database, e.g. 'finance-2025'
+        db_type: Alternatively, a database type configured without a name -
+            'postgresql', 'snowflake', 'dremio', 'clickhouse', 'bigquery',
+            'duckdb', 'databricks', or 'mysql'
 
     Returns:
         Connection status with auto-restored workspace summary if available
@@ -421,10 +431,24 @@ async def connect_database(
             ctx,
             db_type,
             services=_services(),
+            database=database,
         )
 
 
 @mcp.tool(annotations=_READ_ONLY)
+@_connection_aware()
+async def list_databases(ctx: Context) -> dict[str, Any]:
+    """List the databases this server can connect to, by name.
+
+    Call this first when the user names a database ("my finance-2025
+    database") or does not say which one, then connect_database(database=...).
+    Shows each one's name, type, description and target catalog/schema; never
+    credentials. No connection needed.
+    """
+    return await _h_connection.list_databases(services=_services())
+
+
+@mcp.tool()
 @_connection_aware()
 async def list_schemas(ctx: Context) -> list[str]:
     """Get a list of available schemas from the connected database.
