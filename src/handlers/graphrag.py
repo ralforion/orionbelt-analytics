@@ -170,6 +170,28 @@ def _table_info_to_dict(table_info: Any) -> dict[str, Any]:
 _INFERRED_EDGE_CONFIDENCE = frozenset({"high", "medium"})
 
 
+def _existing_column(
+    table: dict[str, Any], proposed: str, source_column: str
+) -> str | None:
+    """The column an inferred key can actually join to, if there is one.
+
+    Inference names the target's primary key, or ``id`` when the table
+    declares none -- a column that may not exist. A join path through it would
+    be SQL that fails. Without the proposed column, a column of the same name
+    as the key (``customer_id`` on both sides) is the usual convention.
+
+    Args:
+        table: The referenced table.
+        proposed: The column inference proposed.
+        source_column: The referencing column.
+
+    Returns:
+        The column's name as the table spells it, or None.
+    """
+    columns = {c["name"].casefold(): c["name"] for c in table.get("columns", [])}
+    return columns.get(proposed.casefold()) or columns.get(source_column.casefold())
+
+
 def _tables_to_dicts(tables_info: list[Any]) -> list[dict[str, Any]]:
     """Tables as GraphRAG indexes them, with inferred foreign keys added.
 
@@ -201,13 +223,17 @@ def _tables_to_dicts(tables_info: list[Any]) -> list[dict[str, Any]]:
         if rel.confidence not in _INFERRED_EDGE_CONFIDENCE:
             continue
         table = by_name.get(rel.source_table)
-        if table is None:
+        target = by_name.get(rel.target_table)
+        if table is None or target is None:
+            continue
+        target_column = _existing_column(target, rel.target_column, rel.column)
+        if target_column is None:
             continue
         table["foreign_keys"].append(
             {
                 "column": rel.column,
                 "referenced_table": rel.target_table,
-                "referenced_column": rel.target_column,
+                "referenced_column": target_column,
                 "inferred": True,
                 "confidence": rel.confidence,
             }
@@ -958,16 +984,19 @@ def _ontology_table(
         current_schema: The session's schema, to break a tie.
 
     Returns:
-        The node's identity, or None if it is not indexed or is ambiguous.
+        The node's identity, or None if it is not indexed, is ambiguous, or
+        the ontology places it in a schema that is not indexed.
     """
     indexed = retriever.indexed_name(name)
     if indexed is None:
         return None
     table = ontology_schema.tables.get(name.lower())
-    if table is not None:
+    if table is not None and getattr(table, "schema_declared", True):
+        # The ontology says where the table is. A table of the same name in
+        # another schema is a different table, and a relationship asserted
+        # about one says nothing about the other.
         identity = qualified(table.schema_name, indexed)
-        if identity in retriever.graph:
-            return identity
+        return identity if identity in retriever.graph else None
     found = retriever.resolve_name(indexed, current_schema)
     return None if found.ambiguous else found.identity
 
@@ -990,14 +1019,23 @@ async def _join_graph(ctx: Context, session: Any, services: "HandlerContext") ->
     Returns:
         A graph retriever, the shared one unless the loaded ontology adds to it.
     """
-    base = session.graphrag_manager.graph_retriever
+    manager = session.graphrag_manager
+    base = manager.graph_retriever
     if getattr(session, "loaded_ontology", None) is None or not services.provides(
         "aget_session_obqc_validator"
     ):
         return base
+    pinned = pin_connection(session)
     try:
         validator = await services.aget_session_obqc_validator(ctx)
-        if validator is None:
+        # The validator was awaited for. A reconnect in between would pair
+        # this graph with the next database's ontology: leave it unextended.
+        if (
+            validator is None
+            or not still_connected(session, pinned)
+            or session.graphrag_manager is not manager
+            or manager.graph_retriever is not base
+        ):
             return base
         held = session.ontology_join_graph
         if (
@@ -1015,6 +1053,14 @@ async def _join_graph(ctx: Context, session: Any, services: "HandlerContext") ->
     current = getattr(session, "current_schema", None)
     relationships = []
     for rel in ontology_schema.relationships.values():
+        # An edge runs from the table holding the key to the one it references,
+        # and reachability reads its direction as many-to-one. Only a
+        # many_to_one relationship states that. Its one_to_many inverse names
+        # the tables the other way round and does not say which one holds the
+        # key column, so it is left out rather than guessed at -- an ontology
+        # with both directions loses nothing.
+        if rel.relationship_type != "many_to_one":
+            continue
         source = _ontology_table(rel.from_table, ontology_schema, base, current)
         target = _ontology_table(rel.to_table, ontology_schema, base, current)
         if source is not None and target is not None:

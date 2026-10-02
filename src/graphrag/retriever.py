@@ -281,8 +281,11 @@ class GraphRetriever:
 
         The copy is read-only in intent and does not follow later changes to
         this graph: hold it only for as long as this graph's generation is
-        unchanged. A pair of tables that already has an edge keeps it -- what
-        the database declares outranks what an ontology asserts about it.
+        unchanged. A pair of tables with a declared key keeps it -- what the
+        database declares outranks what an ontology asserts about it. An edge
+        only inferred from column names is replaced: a mapping someone wrote
+        down is better evidence than a guess, and is usually there to correct
+        one.
 
         Args:
             relationships: ``(from_table, from_column, to_table, to_column)``
@@ -291,13 +294,19 @@ class GraphRetriever:
         Returns:
             The extended copy, or this graph itself if nothing was added.
         """
+
+        def declared(source: str, target: str) -> bool:
+            return self.graph.has_edge(source, target) and not self.graph[source][
+                target
+            ].get("inferred")
+
         new = [
             rel
             for rel in relationships
             if rel[0] in self.graph
             and rel[2] in self.graph
             and rel[0] != rel[2]
-            and not self.graph.has_edge(rel[0], rel[2])
+            and not declared(rel[0], rel[2])
         ]
         if not new:
             return self
@@ -309,9 +318,15 @@ class GraphRetriever:
         overlay._schema_tables = {
             schema: set(ids) for schema, ids in self._schema_tables.items()
         }
+        placed: set[tuple[str, str]] = set()
         for source, column, target, referenced_column in new:
-            if overlay.graph.has_edge(source, target):
+            if (source, target) in placed:
                 continue  # Two relationships between one pair: the first wins.
+            placed.add((source, target))
+            # Replaces an inferred edge outright: attributes left over from the
+            # guess must not survive into a join built on the mapping.
+            if overlay.graph.has_edge(source, target):
+                overlay.graph.remove_edge(source, target)
             overlay.graph.add_edge(
                 source,
                 target,

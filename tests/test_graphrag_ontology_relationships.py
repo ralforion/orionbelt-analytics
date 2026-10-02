@@ -326,9 +326,13 @@ class TestWithRelationships:
             is retriever
         )
 
-    def test_an_existing_edge_is_kept(self):
-        retriever = GraphRetriever()
-        retriever.build_graph(handler._tables_to_dicts(_keyless_schema()))
+    def test_a_declared_key_is_kept(self):
+        declared = {
+            "column": "customer_id",
+            "referenced_table": "customers",
+            "referenced_column": "id",
+        }
+        retriever = _graph([_bare("orders", fks=[declared]), _bare("customers")])
 
         extended = retriever.with_relationships(
             [("gold.orders", "other_col", "gold.customers", "id")]
@@ -440,3 +444,179 @@ class TestAnUploadMustMapToTheDatabase:
         assert result["oba_requirements"]["mapped_tables"] == 2
         assert result["oba_requirements"]["mapped_joins"] == 1
         assert session.loaded_ontology == ttl
+
+
+def _rel(
+    from_table: str,
+    from_column: str,
+    to_table: str,
+    to_column: str,
+    relationship_type: str = "many_to_one",
+) -> Any:
+    from src.obqc_validator import RelationshipInfo
+
+    return RelationshipInfo(
+        from_table=from_table,
+        from_column=from_column,
+        to_table=to_table,
+        to_column=to_column,
+        relationship_type=relationship_type,
+        join_condition="",
+    )
+
+
+def _ontology_schema(tables: dict[str, Any], relationships: list[Any]) -> Any:
+    from src.obqc_validator import OntologySchema
+
+    schema = OntologySchema()
+    schema.tables.update(tables)
+    for i, rel in enumerate(relationships):
+        schema.relationships[str(i)] = rel
+    return schema
+
+
+def _validator_with(schema: Any) -> Any:
+    return SimpleNamespace(prepared_ontology=lambda: SimpleNamespace(schema=schema))
+
+
+def _graph(tables: list[dict[str, Any]]) -> GraphRetriever:
+    retriever = GraphRetriever()
+    retriever.build_graph(tables)
+    return retriever
+
+
+def _bare(name: str, schema: str = "gold", fks: list | None = None) -> dict:
+    return {"name": name, "schema": schema, "columns": [], "foreign_keys": fks or []}
+
+
+class TestReviewFindings:
+    """Regressions from the review of #153."""
+
+    def _services(self, session: Any, validator: Any) -> Any:
+        async def aget_validator(_ctx: Any) -> Any:
+            return validator
+
+        return _services(session, aget_session_obqc_validator=aget_validator)
+
+    async def test_a_one_to_many_relationship_is_not_read_as_many_to_one(self):
+        from src.obqc_validator import TableSchema
+
+        base = _graph([_bare("customers"), _bare("orders")])
+        schema = _ontology_schema(
+            {
+                "customers": TableSchema("customers", "gold"),
+                "orders": TableSchema("orders", "gold"),
+            },
+            [_rel("customers", "customer_id", "orders", "id", "one_to_many")],
+        )
+        session = _session(base, loaded_ontology="ttl")
+
+        result = await handler.reachable_from(
+            Mock(), "customers", None, self._services(session, _validator_with(schema))
+        )
+
+        # Orders repeat a customer; they are not a dimension of one.
+        assert result["reachable_tables"] == []
+
+    async def test_a_reconnect_while_the_validator_is_awaited_adds_nothing(self):
+        from src.obqc_validator import TableSchema
+
+        base = _graph([_bare("fact_sales"), _bare("dim_client")])
+        schema = _ontology_schema(
+            {
+                "fact_sales": TableSchema("fact_sales", "gold"),
+                "dim_client": TableSchema("dim_client", "gold"),
+            },
+            [_rel("fact_sales", "cust_key", "dim_client", "id")],
+        )
+        session = _session(base, loaded_ontology="ttl", connection_id="old")
+
+        async def reconnecting_validator(_ctx: Any) -> Any:
+            session.connection_id = "new"  # another database's ontology now
+            return _validator_with(schema)
+
+        services = _services(
+            session, aget_session_obqc_validator=reconnecting_validator
+        )
+        chosen = await handler._join_graph(Mock(), session, services)
+
+        assert chosen is base
+        assert session.ontology_join_graph is None
+
+    def test_an_ontology_mapping_replaces_an_inferred_guess(self):
+        guess = {
+            "column": "customer_id",
+            "referenced_table": "customers",
+            "referenced_column": "id",
+            "inferred": True,
+            "confidence": "medium",
+        }
+        base = _graph([_bare("orders", fks=[guess]), _bare("customers")])
+
+        extended = base.with_relationships(
+            [("gold.orders", "buyer_code", "gold.customers", "code")]
+        )
+
+        edge = extended.graph["gold.orders"]["gold.customers"]
+        assert (edge["column"], edge["referenced_column"]) == ("buyer_code", "code")
+        assert edge["from_ontology"] is True and not edge.get("inferred")
+        # The shared graph keeps its guess.
+        assert base.graph["gold.orders"]["gold.customers"]["column"] == "customer_id"
+
+    async def test_a_table_placed_in_a_schema_does_not_resolve_to_another(self):
+        from src.obqc_validator import TableSchema
+
+        # Gold is not indexed; archive has tables of the same names.
+        base = _graph([_bare("orders", "archive"), _bare("customers", "archive")])
+        schema = _ontology_schema(
+            {
+                "orders": TableSchema("orders", "gold"),
+                "customers": TableSchema("customers", "gold"),
+            },
+            [_rel("orders", "customer_id", "customers", "id")],
+        )
+        session = _session(base, loaded_ontology="ttl", current_schema="archive")
+
+        chosen = await handler._join_graph(
+            Mock(), session, self._services(session, _validator_with(schema))
+        )
+
+        assert chosen is base
+
+    async def test_an_ontology_without_schemas_still_resolves_by_name(self):
+        from src.obqc_validator import TableSchema
+
+        base = _graph([_bare("orders"), _bare("customers")])
+        schema = _ontology_schema(
+            {
+                "orders": TableSchema("orders", "public", schema_declared=False),
+                "customers": TableSchema("customers", "public", schema_declared=False),
+            },
+            [_rel("orders", "customer_id", "customers", "id")],
+        )
+        session = _session(base, loaded_ontology="ttl")
+
+        chosen = await handler._join_graph(
+            Mock(), session, self._services(session, _validator_with(schema))
+        )
+
+        assert chosen.graph.has_edge("gold.orders", "gold.customers")
+
+    def test_an_inferred_join_never_names_a_missing_column(self):
+        schema = [
+            # No declared key, and no "id": the inferred target must not be one.
+            _info("customers", [_col("customer_id"), _col("name", "VARCHAR")]),
+            _info("orders", [_col("order_id"), _col("customer_id")]),
+            _info("regions", [_col("label", "VARCHAR")]),
+            _info("stores", [_col("store_id"), _col("region_id")]),
+        ]
+
+        tables = {t["name"]: t for t in handler._tables_to_dicts(schema)}
+
+        (fk,) = tables["orders"]["foreign_keys"]
+        assert (fk["referenced_table"], fk["referenced_column"]) == (
+            "customers",
+            "customer_id",
+        )
+        # regions has neither "id" nor "region_id": no edge at all.
+        assert tables["stores"]["foreign_keys"] == []
