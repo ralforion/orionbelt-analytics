@@ -1,7 +1,6 @@
 """Database connection and diagnostic handler implementations."""
 
 import logging
-import os
 from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import Any
 
@@ -10,6 +9,12 @@ from fastmcp import Context
 from ..async_utils import run_db
 from ..constants import SUPPORTED_DB_TYPES
 from ..database_manager import DatabaseManager
+from ..database_registry import (
+    DatabaseConfigError,
+    configured_databases,
+    find_database,
+    unnamed_entry,
+)
 from ..exceptions import ConnectionError, ValidationError
 from ..handler_context import HandlerContext
 from ..lifecycle.metadata import mutate_workspace_metadata
@@ -34,33 +39,64 @@ def _restore_lock(
 
 async def connect_database(
     ctx: Context,
-    db_type: str,
+    db_type: str | None,
     services: "HandlerContext",
+    database: str | None = None,
 ) -> str | dict[str, Any]:
-    """Connect to a database using credentials from environment variables.
+    """Connect to a configured database, by name or by type.
 
     If a previous workspace exists for this connection, it is automatically
     restored (schema cache, ontology, GraphRAG, RDF store).
 
     Args:
         ctx: FastMCP context
-        db_type: Database type - 'postgresql', 'snowflake', 'dremio', or 'clickhouse'
-        get_session_db_manager: Function to get session db manager
-        get_session_data: Function to get session data
-        create_error_response: Error response helper
-        _get_connection_fingerprint: Connection fingerprint function
-        _clear_session_state: State clearing function
-        get_oxigraph_store: Function to get/init Oxigraph store (for auto-restore)
+        db_type: Database type, for a server configured by type; or None.
+        services: Request-scoped services.
+        database: A named connection from ``OBA_DATABASES`` (or a type's name).
+            Without it or a type, the only configured database is used.
 
     Returns:
         Connection status message or error JSON
     """
-    # Validate input parameters
-    if not db_type or db_type not in SUPPORTED_DB_TYPES:
+    try:
+        configured = configured_databases()
+    except DatabaseConfigError as e:
+        return ValidationError(str(e)).to_response()
+
+    if database:
+        found = find_database(database, configured)
+        if found is None:
+            names = ", ".join(e.name for e in configured) or "none"
+            return ValidationError(
+                f"No database named '{database}' is configured. "
+                f"Configured: {names}. Call list_databases to see what each holds."
+            ).to_response()
+        entry = found
+    elif db_type:
+        if db_type not in SUPPORTED_DB_TYPES:
+            return ValidationError(
+                f"Invalid database type '{db_type}'. "
+                f"Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
+            ).to_response()
+        entry = unnamed_entry(db_type)
+    elif len(configured) == 1:
+        entry = configured[0]
+    else:
+        names = ", ".join(e.name for e in configured) or "none"
         return ValidationError(
-            f"Invalid database type '{db_type}'. "
-            f"Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
+            "Say which database to connect to: pass database=<name>. "
+            f"Configured: {names}. Call list_databases to see what each holds."
         ).to_response()
+
+    db_type = entry.db_type
+    env = entry.getenv
+    label = f"{entry.name} ({db_type})" if entry.named else db_type
+    # Named connections read prefixed variables; say so when one is missing.
+    where = (
+        f" (for '{entry.name}': {entry.prefix}<VARIABLE>, or the unprefixed one)"
+        if entry.named
+        else ""
+    )
 
     # A session sharing a connection runtime connects with a fresh manager:
     # reconnecting the shared one in place would swap the engine out from under
@@ -76,11 +112,11 @@ async def connect_database(
     db_name = ""
 
     if db_type == "postgresql":
-        host = os.getenv("POSTGRES_HOST")
-        port = os.getenv("POSTGRES_PORT")
-        database = os.getenv("POSTGRES_DATABASE")
-        username = os.getenv("POSTGRES_USERNAME")
-        password = os.getenv("POSTGRES_PASSWORD")
+        host = env("POSTGRES_HOST")
+        port = env("POSTGRES_PORT")
+        database = env("POSTGRES_DATABASE")
+        username = env("POSTGRES_USERNAME")
+        password = env("POSTGRES_PASSWORD")
 
         required_params = {
             "POSTGRES_HOST": host,
@@ -93,7 +129,7 @@ async def connect_database(
         if missing_params:
             return ValidationError(
                 "Missing required environment variables for PostgreSQL: "
-                f"{', '.join(missing_params)}. Please check your .env file."
+                f"{', '.join(missing_params)}. Please check your .env file{where}."
             ).to_response()
 
         success = await run_db(
@@ -107,12 +143,12 @@ async def connect_database(
         db_name = str(database)
 
     elif db_type == "snowflake":
-        account = os.getenv("SNOWFLAKE_ACCOUNT")
-        username = os.getenv("SNOWFLAKE_USERNAME")
-        password = os.getenv("SNOWFLAKE_PASSWORD")
-        warehouse = os.getenv("SNOWFLAKE_WAREHOUSE")
-        database = os.getenv("SNOWFLAKE_DATABASE")
-        schema = os.getenv("SNOWFLAKE_SCHEMA", "PUBLIC")
+        account = env("SNOWFLAKE_ACCOUNT")
+        username = env("SNOWFLAKE_USERNAME")
+        password = env("SNOWFLAKE_PASSWORD")
+        warehouse = env("SNOWFLAKE_WAREHOUSE")
+        database = env("SNOWFLAKE_DATABASE")
+        schema = env("SNOWFLAKE_SCHEMA", "PUBLIC")
 
         required_params = {
             "SNOWFLAKE_ACCOUNT": account,
@@ -125,7 +161,7 @@ async def connect_database(
         if missing_params:
             return ValidationError(
                 "Missing required environment variables for Snowflake: "
-                f"{', '.join(missing_params)}. Please check your .env file."
+                f"{', '.join(missing_params)}. Please check your .env file{where}."
             ).to_response()
 
         success = await run_db(
@@ -141,8 +177,8 @@ async def connect_database(
 
     elif db_type == "dremio":
         # Prefer PAT-based authentication (DREMIO_URI + DREMIO_PAT)
-        dremio_uri = os.getenv("DREMIO_URI")
-        dremio_pat = os.getenv("DREMIO_PAT")
+        dremio_uri = env("DREMIO_URI")
+        dremio_pat = env("DREMIO_PAT")
 
         if dremio_uri and dremio_pat:
             success = await run_db(
@@ -151,10 +187,10 @@ async def connect_database(
             db_name = "DREMIO"
         else:
             # Fall back to legacy username/password authentication
-            host = os.getenv("DREMIO_HOST")
-            port = os.getenv("DREMIO_PORT")
-            username = os.getenv("DREMIO_USERNAME")
-            password = os.getenv("DREMIO_PASSWORD")
+            host = env("DREMIO_HOST")
+            port = env("DREMIO_PORT")
+            username = env("DREMIO_USERNAME")
+            password = env("DREMIO_PASSWORD")
 
             required_params = {
                 "DREMIO_HOST": host,
@@ -167,7 +203,7 @@ async def connect_database(
                 return ValidationError(
                     "Missing required environment variables for Dremio: "
                     f"{', '.join(missing_params)}. "
-                    "Please check your .env file. "
+                    f"Please check your .env file{where}. "
                     "For PAT-based auth, set DREMIO_URI and DREMIO_PAT instead."
                 ).to_response()
 
@@ -181,13 +217,13 @@ async def connect_database(
             db_name = "DREMIO"
 
     elif db_type == "clickhouse":
-        host = os.getenv("CLICKHOUSE_HOST")
-        port = os.getenv("CLICKHOUSE_PORT", "8123")
-        database = os.getenv("CLICKHOUSE_DATABASE")
-        username = os.getenv("CLICKHOUSE_USERNAME", "default")
-        password = os.getenv("CLICKHOUSE_PASSWORD", "")
-        protocol = os.getenv("CLICKHOUSE_PROTOCOL", "http")
-        secure = os.getenv("CLICKHOUSE_SECURE", "false").lower() == "true"
+        host = env("CLICKHOUSE_HOST")
+        port = env("CLICKHOUSE_PORT", "8123")
+        database = env("CLICKHOUSE_DATABASE")
+        username = env("CLICKHOUSE_USERNAME", "default")
+        password = env("CLICKHOUSE_PASSWORD", "")
+        protocol = env("CLICKHOUSE_PROTOCOL", "http")
+        secure = env("CLICKHOUSE_SECURE", "false").lower() == "true"
 
         required_params = {
             "CLICKHOUSE_HOST": host,
@@ -197,7 +233,7 @@ async def connect_database(
         if missing_params:
             return ValidationError(
                 "Missing required environment variables for ClickHouse: "
-                f"{', '.join(missing_params)}. Please check your .env file."
+                f"{', '.join(missing_params)}. Please check your .env file{where}."
             ).to_response()
 
         success = await run_db(
@@ -213,17 +249,17 @@ async def connect_database(
         db_name = str(database)
 
     elif db_type == "bigquery":
-        project_id = os.getenv("BIGQUERY_PROJECT_ID")
-        dataset = os.getenv("BIGQUERY_DATASET", "")
-        credentials_path = os.getenv("BIGQUERY_CREDENTIALS_PATH")
-        credentials_json = os.getenv("BIGQUERY_CREDENTIALS_JSON")
+        project_id = env("BIGQUERY_PROJECT_ID")
+        dataset = env("BIGQUERY_DATASET", "")
+        credentials_path = env("BIGQUERY_CREDENTIALS_PATH")
+        credentials_json = env("BIGQUERY_CREDENTIALS_JSON")
 
         required_params = {"BIGQUERY_PROJECT_ID": project_id}
         missing_params = [k for k, v in required_params.items() if not v]
         if missing_params:
             return ValidationError(
                 "Missing required environment variables for BigQuery: "
-                f"{', '.join(missing_params)}. Please check your .env file."
+                f"{', '.join(missing_params)}. Please check your .env file{where}."
             ).to_response()
 
         success = await run_db(
@@ -236,9 +272,9 @@ async def connect_database(
         db_name = f"{project_id}/{dataset}" if dataset else str(project_id)
 
     elif db_type == "duckdb":
-        database_path = os.getenv("DUCKDB_DATABASE_PATH", ":memory:")
-        motherduck_token = os.getenv("MOTHERDUCK_TOKEN")
-        read_only = os.getenv("DUCKDB_READ_ONLY", "false").lower() == "true"
+        database_path = env("DUCKDB_DATABASE_PATH", ":memory:")
+        motherduck_token = env("MOTHERDUCK_TOKEN")
+        read_only = env("DUCKDB_READ_ONLY", "false").lower() == "true"
 
         success = await run_db(
             db_manager.connect_duckdb,
@@ -249,11 +285,11 @@ async def connect_database(
         db_name = database_path
 
     elif db_type == "databricks":
-        server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
-        http_path = os.getenv("DATABRICKS_HTTP_PATH")
-        access_token = os.getenv("DATABRICKS_ACCESS_TOKEN")
-        catalog = os.getenv("DATABRICKS_CATALOG", "hive_metastore")
-        schema = os.getenv("DATABRICKS_SCHEMA", "default")
+        server_hostname = env("DATABRICKS_SERVER_HOSTNAME")
+        http_path = env("DATABRICKS_HTTP_PATH")
+        access_token = env("DATABRICKS_ACCESS_TOKEN")
+        catalog = env("DATABRICKS_CATALOG", "hive_metastore")
+        schema = env("DATABRICKS_SCHEMA", "default")
 
         required_params = {
             "DATABRICKS_SERVER_HOSTNAME": server_hostname,
@@ -264,7 +300,7 @@ async def connect_database(
         if missing_params:
             return ValidationError(
                 "Missing required environment variables for Databricks: "
-                f"{', '.join(missing_params)}. Please check your .env file."
+                f"{', '.join(missing_params)}. Please check your .env file{where}."
             ).to_response()
 
         success = await run_db(
@@ -278,12 +314,12 @@ async def connect_database(
         db_name = f"{catalog}.{schema}"
 
     elif db_type == "mysql":
-        host = os.getenv("MYSQL_HOST")
-        port = os.getenv("MYSQL_PORT", "3306")
-        database = os.getenv("MYSQL_DATABASE")
-        username = os.getenv("MYSQL_USERNAME")
-        password = os.getenv("MYSQL_PASSWORD")
-        charset = os.getenv("MYSQL_CHARSET", "utf8mb4")
+        host = env("MYSQL_HOST")
+        port = env("MYSQL_PORT", "3306")
+        database = env("MYSQL_DATABASE")
+        username = env("MYSQL_USERNAME")
+        password = env("MYSQL_PASSWORD")
+        charset = env("MYSQL_CHARSET", "utf8mb4")
 
         required_params = {
             "MYSQL_HOST": host,
@@ -295,7 +331,7 @@ async def connect_database(
         if missing_params:
             return ValidationError(
                 "Missing required environment variables for MySQL: "
-                f"{', '.join(missing_params)}. Please check your .env file."
+                f"{', '.join(missing_params)}. Please check your .env file{where}."
             ).to_response()
 
         success = await run_db(
@@ -359,7 +395,7 @@ async def connect_database(
         if not shared_with_others:
             session.clear_schema_cache()
 
-        await notify_client(ctx, f"Connected to {db_type}: {db_name}")
+        await notify_client(ctx, f"Connected to {label}: {db_name}")
 
         # Write workspace connection info
         try:
@@ -374,7 +410,7 @@ async def connect_database(
             logger.warning(f"Failed to write workspace connection info: {e}")
 
         # Detect and auto-restore existing workspace
-        response = f"Successfully connected to {db_type} database: {db_name}"
+        response = f"Successfully connected to {label} database: {db_name}"
         workspace = detect_workspace(new_conn_id)
         if workspace and services.provides("get_oxigraph_store"):
             try:
@@ -407,8 +443,42 @@ async def connect_database(
             ctx, "Database connection failed; check credentials and try again"
         )
         return ConnectionError(
-            f"Failed to connect to {db_type} database: {db_name}"
+            f"Failed to connect to {label} database: {db_name}"
         ).to_response()
+
+
+async def list_databases(services: "HandlerContext") -> dict[str, Any]:
+    """The databases this server is configured for, without credentials.
+
+    Args:
+        services: Request-scoped services.
+
+    Returns:
+        Each database's name, type, description and target (catalog, schema
+        or database name where the type has one), or the configuration error.
+    """
+    try:
+        configured = configured_databases()
+    except DatabaseConfigError as e:
+        return ValidationError(str(e)).to_response()
+    databases = [entry.describe() for entry in configured]
+    result: dict[str, Any] = {"success": True, "databases": databases}
+    if not databases:
+        result["message"] = (
+            "No database is configured. Set OBA_DATABASES and DB_<NAME>_* "
+            "variables, or a type's own variables, in the server's .env."
+        )
+    elif len(databases) == 1:
+        result["message"] = (
+            f"One database is configured: connect_database() connects to "
+            f"'{databases[0]['name']}' without arguments."
+        )
+    else:
+        result["message"] = (
+            "Pick the one the user means by name or description and call "
+            "connect_database(database=<name>). If it is unclear, ask."
+        )
+    return result
 
 
 async def list_schemas(ctx: Context, services: "HandlerContext") -> list[str]:
