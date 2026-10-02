@@ -306,3 +306,87 @@ class TestCredentialsAreNotShared:
         assert _bigquery_principal(str(path), None) == _bigquery_principal(None, key)
         # Application default credentials: one identity per process.
         assert _bigquery_principal(None, None) is None
+
+    def test_the_key_file_wins_over_an_inline_key_as_the_driver_does(self, tmp_path):
+        import json
+
+        from src.database_manager import _bigquery_principal
+
+        admin = tmp_path / "admin.json"
+        admin.write_text(json.dumps({"client_email": "admin@p.iam"}))
+        reader = tmp_path / "reader.json"
+        reader.write_text(json.dumps({"client_email": "reader@p.iam"}))
+        shared_inline = json.dumps({"client_email": "shared@p.iam"})
+
+        # An inline key shared by every profile must not mask each one's file.
+        assert _bigquery_principal(str(admin), shared_inline) == "user:admin@p.iam"
+        assert _bigquery_principal(str(reader), shared_inline) == "user:reader@p.iam"
+        # Empty inline keys are unset, not an identity.
+        assert _bigquery_principal(str(admin), "") == "user:admin@p.iam"
+        assert _bigquery_principal("", "") is None
+        assert _bigquery_principal(None, shared_inline) == "user:shared@p.iam"
+
+    def test_empty_key_files_still_tell_profiles_apart(self, tmp_path):
+        from src.database_manager import _bigquery_principal
+
+        one, two = tmp_path / "one.json", tmp_path / "two.json"
+        one.write_text("")
+        two.write_text("")
+
+        assert _bigquery_principal(str(one), None) != _bigquery_principal(
+            str(two), None
+        )
+
+    def test_the_principal_is_asked_without_the_user_sql_validator(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from sqlalchemy import create_engine
+
+        from src.database_manager import DatabaseManager
+
+        manager = DatabaseManager()
+        manager._driver = SimpleNamespace(engine=create_engine("sqlite://"))
+
+        def refuse(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("the user-SQL path was used")
+
+        monkeypatch.setattr(manager, "execute_sql_query", refuse)
+        monkeypatch.setattr(manager, "validate_sql_syntax", refuse)
+
+        principal = manager._query_principal("SELECT 'analyst@corp'")
+
+        assert principal == "user:analyst@corp"
+
+    def test_databricks_identity_is_the_user_when_the_warehouse_says(self, monkeypatch):
+        from sqlalchemy import create_engine
+
+        import src.drivers.databricks as databricks_driver
+        from src.database_manager import DatabaseManager
+
+        class SqliteDriver:
+            """Answers current_user() the way a warehouse would."""
+
+            def __init__(self, **_kwargs: Any) -> None:
+                self.engine = create_engine("sqlite://")
+
+            def connect(self, **_kwargs: Any) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+        monkeypatch.setattr(databricks_driver, "DatabricksDriver", SqliteDriver)
+        identities = []
+        for token in ("dapi-old", "dapi-new"):
+            manager = DatabaseManager()
+            monkeypatch.setattr(
+                manager,
+                "_query_principal",
+                lambda sql, m=manager: DatabaseManager._query_principal(
+                    m, sql.replace("current_user()", "'analyst@corp'")
+                ),
+            )
+            assert manager.connect_databricks("h", "/p", token, "c", "s")
+            identities.append(manager.auth_identity)
+
+        assert identities == ["user:analyst@corp", "user:analyst@corp"]

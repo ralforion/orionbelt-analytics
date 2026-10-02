@@ -166,20 +166,29 @@ def _bigquery_principal(
         credentials_path: Path to a key file, if one is configured.
         credentials_json: The key itself, if given inline.
 
+    The key the driver signs in with, in the driver's order: a key file when a
+    path is set, the inline key only otherwise. Reading them in another order
+    let an inline key shared by every profile stand in for each profile's own
+    file, and two different service accounts came out as one.
+
     Returns:
         ``user:<client_email>``, a digest of the key if it names no account,
         or None for application default credentials -- one identity for the
         whole process, so nothing to tell apart.
     """
-    raw = credentials_json
-    if raw is None and credentials_path:
+    if credentials_path:
         try:
             with open(credentials_path, encoding="utf-8") as handle:
                 raw = handle.read()
         except OSError:
             return "credential-file:" + credentials_path
-    if not raw:
+    elif credentials_json:
+        raw = credentials_json
+    else:
         return None
+    if not raw.strip():
+        # An empty key file still distinguishes one profile from another.
+        return "credential-file:" + (credentials_path or "")
     try:
         email = json.loads(raw).get("client_email")
     except (ValueError, AttributeError):
@@ -622,24 +631,27 @@ class DatabaseManager:
     def _query_principal(self, sql: str) -> str | None:
         """The principal a connection runs as, by asking the database.
 
+        Run on the driver's engine directly. It is the server's own fixed
+        statement, not a user's: sent through execute_sql_query, the validator
+        for user SQL rejected it, logged an injection warning, and every
+        Databricks identity fell back to the token -- so a rotated token
+        orphaned the workspace.
+
         Args:
             sql: A one-row, one-column query naming the current user.
 
         Returns:
             The principal, or None if the database would not say.
         """
+        engine = getattr(self._driver, "engine", None)
+        if engine is None:
+            return None
         try:
-            result = self.execute_sql_query(sql, limit=1)
+            with engine.connect() as conn:
+                value = conn.execute(text(sql)).scalar()
         except Exception as e:
             logger.debug(f"Could not read the connection's principal: {e}")
             return None
-        rows = result.get("data") or []
-        if not result.get("success") or not rows:
-            return None
-        first = rows[0]
-        value = next(iter(first.values()), None) if isinstance(first, dict) else None
-        if value is None and isinstance(first, list | tuple) and first:
-            value = first[0]
         return f"user:{value}" if value else None
 
     def connect_postgresql(
