@@ -136,6 +136,10 @@ _SPARQL_CODEPOINT_ESCAPE = re.compile(r"\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})"
 # and space (SPARQL 1.1, production 139).
 _IRIREF_EXCLUDED = set('<>"{}|^`\\')
 _NAME_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
+# What a backslash may escape in a local name (PN_LOCAL_ESC, production 173).
+# Outside strings that is the only place SPARQL allows one, and the escaped
+# character is part of the name: "ex:\#" is a name, not a name and a comment.
+_LOCAL_NAME_ESCAPABLE = set("_~.-!$&'()*+,;=/?#@%")
 
 
 class FederatedQueryError(ValueError):
@@ -151,8 +155,11 @@ def _sparql_code(text: str) -> str:
     long string may contain an escaped quote) and let a real SERVICE pass as
     comment.
 
-    Wherever this scanner and the parser could disagree, it blanks less, never
-    more: an unterminated string, or a short one that reaches a line end, ends
+    A backslash outside a string can only be a local-name escape, so it and
+    the character it escapes are consumed together before anything else -- or
+    an escaped "#" or quote would open a comment or a string the parser never
+    sees. Beyond that, wherever this scanner and the parser could disagree, it
+    blanks less, never more: an unterminated string, or a short one that reaches a line end, ends
     there and the rest is read as code; only the narrowest variable and local
     name characters are blanked, and the prefix of a prefixed name not at all.
     Reading too much as code can only refuse a query, never let one through.
@@ -168,7 +175,13 @@ def _sparql_code(text: str) -> str:
     i, n = 0, len(text)
     while i < n:
         c = text[i]
-        if c == "#":
+        if c == "\\" and i + 1 < n and text[i + 1] in _LOCAL_NAME_ESCAPABLE:
+            # Before any delimiter is considered: an escaped "#" or "'" is name
+            # content, and reading it as a comment or a string hid the rest.
+            # Letters are not escapable, so "\\SERVICE" leaves the keyword.
+            out.append("  ")
+            i += 2
+        elif c == "#":
             j = i
             while j < n and text[j] not in "\r\n":
                 j += 1

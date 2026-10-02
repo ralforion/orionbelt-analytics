@@ -155,3 +155,44 @@ def test_what_is_allowed_really_does_not_federate(endpoint, query):
     reject_federation(query)
     list(pyoxigraph.Store().query(query))
     assert _Endpoint.hits == []
+
+
+# Local-name escapes: "\#" and "\'" are part of a prefixed name, not the start
+# of a comment or a string. Each is a pattern placed in all three query forms.
+ESCAPED_NAME_PATTERNS = [
+    "BIND(ex:\\# AS ?x) SERVICE <{url}> { ?a ?b ?c }",
+    "BIND(ex:\\' AS ?x) SERVICE <{url}> { ?a ?b ?c } BIND(ex:\\' AS ?y)",
+    "BIND(ex:a\\#b AS ?x) SERVICE <{url}> { ?a ?b ?c }",
+    "BIND(:\\# AS ?x) SERVICE <{url}> { ?a ?b ?c }",
+    "BIND(ex:\\#\\' AS ?x) SERVICE <{url}> { ?a ?b ?c }",
+]
+_PREFIXES = "PREFIX ex: <http://example.org/> PREFIX : <http://example.org/d/> "
+
+
+@pytest.mark.parametrize("form", ["select", "ask", "construct"])
+@pytest.mark.parametrize("pattern", ESCAPED_NAME_PATTERNS)
+def test_an_escaped_local_name_does_not_hide_service(endpoint, form, pattern):
+    from src.oxigraph_store import OxigraphStoreManager
+
+    store = OxigraphStoreManager()
+    body = pattern.replace("{url}", endpoint)
+    run = {
+        "select": lambda: store.query_sparql(f"{_PREFIXES}SELECT * WHERE {{ {body} }}"),
+        "ask": lambda: store.query_sparql_ask(f"{_PREFIXES}ASK {{ {body} }}"),
+        "construct": lambda: store.query_sparql_construct(
+            f"{_PREFIXES}CONSTRUCT {{ ?a ?b ?c }} WHERE {{ {body} }}"
+        ),
+    }[form]
+
+    with pytest.raises(FederatedQueryError):
+        run()
+    assert _Endpoint.hits == []
+
+
+def test_an_escaped_local_name_alone_is_allowed(endpoint):
+    import pyoxigraph
+
+    query = f"{_PREFIXES}SELECT * WHERE {{ BIND(ex:\\# AS ?x) BIND(ex:a\\'b AS ?y) }}"
+    reject_federation(query)
+    list(pyoxigraph.Store().query(query))
+    assert _Endpoint.hits == []
