@@ -196,3 +196,61 @@ def test_an_escaped_local_name_alone_is_allowed(endpoint):
     reject_federation(query)
     list(pyoxigraph.Store().query(query))
     assert _Endpoint.hits == []
+
+
+# Oxigraph needs no boundary between SERVICE and the tokens around it.
+ADJACENT_PATTERNS = [
+    # Trailing adjacency.
+    "SERVICESILENT <{url}> { ?a ?b ?c }",
+    "SERVICEex:sparql { ?a ?b ?c }",
+    "SERVICE<{url}>{ ?a ?b ?c }",
+    # Leading adjacency, after a triple's object.
+    "?a ?b 1SERVICE <{url}> { ?a ?b ?c }",
+    "?a ?b trueSERVICE <{url}> { ?a ?b ?c }",
+    "?a ?b 1.5SERVICE <{url}> { ?a ?b ?c }",
+    "?a ?b 'x'SERVICE <{url}> { ?a ?b ?c }",
+    # Both, and mixed case.
+    "?a ?b falsesErViCeSILENT <{url}> { ?a ?b ?c }",
+]
+
+
+def _prefixes_for(endpoint: str) -> str:
+    # ex:sparql must name the endpoint for the trailing prefixed-name case.
+    base = endpoint[: -len("sparql")]
+    return f"PREFIX ex: <{base}> PREFIX : <http://example.org/d/> "
+
+
+@pytest.mark.parametrize("form", ["select", "ask", "construct"])
+@pytest.mark.parametrize("pattern", ADJACENT_PATTERNS)
+def test_adjacent_tokens_do_not_hide_service(endpoint, form, pattern):
+    from src.oxigraph_store import OxigraphStoreManager
+
+    store = OxigraphStoreManager()
+    prefixes = _prefixes_for(endpoint)
+    body = pattern.replace("{url}", endpoint)
+    run = {
+        "select": lambda: store.query_sparql(f"{prefixes}SELECT * WHERE {{ {body} }}"),
+        "ask": lambda: store.query_sparql_ask(f"{prefixes}ASK {{ {body} }}"),
+        "construct": lambda: store.query_sparql_construct(
+            f"{prefixes}CONSTRUCT {{ ?a ?b ?c }} WHERE {{ {body} }}"
+        ),
+    }[form]
+
+    with pytest.raises(FederatedQueryError):
+        run()
+    assert _Endpoint.hits == []
+
+
+def test_names_that_contain_the_word_are_allowed():
+    reject_federation(
+        "PREFIX ex: <http://e/> "
+        "SELECT ?xSERVICE WHERE { ?xSERVICE ex:aSERVICE ex:serviceType }"
+    )
+
+
+def test_a_prefix_named_like_the_keyword_is_refused_by_design():
+    # The prefix stays visible to the scan; renaming it is the remedy.
+    with pytest.raises(FederatedQueryError):
+        reject_federation(
+            "PREFIX myservice: <http://e/> SELECT * WHERE { ?s myservice:p ?o }"
+        )

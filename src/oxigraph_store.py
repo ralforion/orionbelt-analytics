@@ -122,11 +122,13 @@ _SPARQL_FROM_KEYWORD = re.compile(r"\bFROM\b", re.IGNORECASE)
 # internal hosts included. pyoxigraph has no switch to turn federation off, so
 # the keyword is refused before the query reaches it.
 #
-# ASCII boundaries on purpose: with Unicode \b, a letter such as "é" directly
-# before the keyword would count as part of one word and hide it.
-_SPARQL_SERVICE_KEYWORD = re.compile(
-    r"(?<![A-Za-z0-9_])SERVICE(?![A-Za-z0-9_])", re.IGNORECASE
-)
+# No word boundaries. Oxigraph's parser does not need one between a keyword and
+# the next token -- "SERVICESILENT", "SERVICEex:sparql", "1SERVICE" and
+# "trueSERVICE" all parse as SERVICE -- so any occurrence left in the code is
+# one. Names that merely contain the word are blanked before this runs, and
+# only as far as Oxigraph also reads them as one name; the price is that a
+# prefix whose name contains "service" is refused too.
+_SPARQL_SERVICE_KEYWORD = re.compile("SERVICE", re.IGNORECASE)
 
 # SPARQL processes \uXXXX and \UXXXXXXXX escapes over the whole query text
 # before parsing, so a keyword may be spelled with them.
