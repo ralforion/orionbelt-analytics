@@ -165,6 +165,10 @@ def configured_databases(
     env = os.environ if environ is None else environ
     entries: list[DatabaseEntry] = []
     seen: set[str] = set()
+    # Names are told apart two ways -- as a person writes them, and by the
+    # variable prefix they read -- and must differ under both. "sales.eu" and
+    # "sales/eu" are different names that would read the same DB_SALES_EU_*.
+    prefixes: dict[str, str] = {}
 
     for raw in env.get(DATABASES_VARIABLE, "").split(","):
         name = raw.strip()
@@ -176,7 +180,18 @@ def configured_databases(
                 f"Database name '{name}' appears twice in {DATABASES_VARIABLE}"
             )
         seen.add(key)
+        if not env_key(name):
+            raise DatabaseConfigError(
+                f"Database name '{name}' has no letters or digits to build its "
+                "variable prefix from"
+            )
         prefix = f"DB_{env_key(name)}_"
+        if prefix in prefixes:
+            raise DatabaseConfigError(
+                f"Database names '{prefixes[prefix]}' and '{name}' would both "
+                f"read {prefix}* variables; rename one"
+            )
+        prefixes[prefix] = name
         db_type = env.get(f"{prefix}TYPE", "").strip().lower()
         if not db_type:
             raise DatabaseConfigError(

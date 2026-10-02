@@ -49,7 +49,8 @@ DATABRICKS_ACCESS_TOKEN=dapi...
 - Names are matched ignoring case, spaces, dashes and underscores: `Finance 2025` finds `finance-2025`.
 - `list_databases` shows each database's name, type, description and target (catalog and schema, database, or project and dataset). Hosts, users, tokens and passwords are never shown.
 - With exactly one database configured, `connect_database()` needs no argument.
-- Each database keeps its own workspace (schema cache, ontologies, GraphRAG index), identified by where it points, not by its name.
+- Each database keeps its own workspace (schema cache, ontologies, GraphRAG index), identified by where it points and **who it signs in as**, not by its name. Two connections to the same target with different credentials never share a connection, a schema cache or a workspace: each credential sees what it is allowed to. For drivers that sign in with a username, the username identifies it; for token- and key-based ones, the principal behind the credential (Databricks `current_user()`, a BigQuery service account's email), or a one-way digest of the token where there is none to look up (Dremio PAT, MotherDuck). A rotated Databricks token for the same user keeps its workspace.
+- **Upgrading:** connections that sign in with a token or key (Databricks, Dremio with a PAT, BigQuery with a key, MotherDuck) get a new workspace identity, and their workspace is rebuilt on first use. The previous one is left in place, not adopted: nothing in it shows which credential built it.
 
 Without `OBA_DATABASES`, each type configured with its own variables is one database, named after its type, and `connect_database(db_type=...)` works as before.
 

@@ -7,6 +7,7 @@ listed by list_databases with what they hold, and connected to by name.
 """
 
 import re
+from typing import Any
 
 import pytest
 from fastmcp import Client
@@ -100,6 +101,11 @@ class TestTheRegistry:
                 {"OBA_DATABASES": "hr,HR", "DB_HR_TYPE": "duckdb"},
                 "appears twice",
             ),
+            (
+                {"OBA_DATABASES": "sales.eu,sales/eu", "DB_SALES_EU_TYPE": "duckdb"},
+                "would both read DB_SALES_EU_",
+            ),
+            ({"OBA_DATABASES": "--"}, "no letters or digits"),
         ],
     )
     def test_a_broken_declaration_is_reported(self, env, message):
@@ -203,3 +209,100 @@ class TestConnectingByName:
             result = await client.call_tool("connect_database", {})
 
         assert "sales (duckdb)" in result.data
+
+
+class TestCredentialsAreNotShared:
+    """Two tokens for one target are two connections, not one."""
+
+    def _connected(self, monkeypatch: Any, token: str, user: str | None) -> Any:
+        from types import SimpleNamespace
+
+        import src.drivers.databricks as databricks_driver
+        from src.database_manager import DatabaseManager
+
+        class FakeDriver:
+            def __init__(self, **_kwargs: Any) -> None:
+                self.engine = None
+
+            def connect(self, **_kwargs: Any) -> bool:
+                return True
+
+            def disconnect(self) -> None:
+                pass
+
+        monkeypatch.setattr(databricks_driver, "DatabricksDriver", FakeDriver)
+        manager = DatabaseManager()
+        monkeypatch.setattr(
+            manager, "_sync_engine_from_driver", lambda: None, raising=False
+        )
+        monkeypatch.setattr(
+            manager, "_query_principal", lambda _sql: f"user:{user}" if user else None
+        )
+        assert manager.connect_databricks(
+            server_hostname="adb-1.azuredatabricks.net",
+            http_path="/sql/1.0/warehouses/abc",
+            access_token=token,
+            catalog="finance",
+            schema="gold",
+        )
+        return SimpleNamespace(manager=manager)
+
+    def test_two_users_on_one_target_get_two_fingerprints(self, monkeypatch):
+        from src.server_state import _get_connection_fingerprint
+
+        admin = self._connected(monkeypatch, "dapi-admin", "admin@corp").manager
+        restricted = self._connected(monkeypatch, "dapi-ro", "analyst@corp").manager
+
+        assert _get_connection_fingerprint(admin) != _get_connection_fingerprint(
+            restricted
+        )
+
+    def test_a_rotated_token_for_the_same_user_keeps_its_workspace(self, monkeypatch):
+        from src.server_state import _get_connection_fingerprint
+
+        before = self._connected(monkeypatch, "dapi-old", "analyst@corp").manager
+        after = self._connected(monkeypatch, "dapi-new", "analyst@corp").manager
+
+        assert _get_connection_fingerprint(before) == _get_connection_fingerprint(after)
+
+    def test_without_a_principal_the_token_tells_them_apart(self, monkeypatch):
+        from src.server_state import _get_connection_fingerprint
+
+        one = self._connected(monkeypatch, "dapi-one", None).manager
+        two = self._connected(monkeypatch, "dapi-two", None).manager
+
+        assert _get_connection_fingerprint(one) != _get_connection_fingerprint(two)
+        # Never the token itself.
+        assert "dapi-one" not in str(one.connection_info)
+        assert "dapi-one" not in (one.auth_identity or "")
+
+    def test_the_fingerprint_never_contains_the_identity(self, monkeypatch):
+        from src.server_state import _get_connection_fingerprint
+
+        manager = self._connected(monkeypatch, "dapi-x", "analyst@corp").manager
+
+        assert "analyst" not in _get_connection_fingerprint(manager)
+        assert "analyst" not in str(manager.connection_info)
+
+    def test_disconnecting_forgets_the_identity(self, monkeypatch):
+        manager = self._connected(monkeypatch, "dapi-x", "analyst@corp").manager
+
+        manager.disconnect()
+
+        assert manager.auth_identity is None
+
+    def test_a_service_account_is_identified_by_its_email(self, tmp_path):
+        import json
+
+        from src.database_manager import _bigquery_principal
+
+        key = json.dumps({"client_email": "etl@proj.iam.gserviceaccount.com"})
+        path = tmp_path / "key.json"
+        path.write_text(key)
+
+        assert _bigquery_principal(None, key) == (
+            "user:etl@proj.iam.gserviceaccount.com"
+        )
+        assert _bigquery_principal(str(path), None) == _bigquery_principal(None, key)
+        # Application default credentials: one identity per process.
+        assert _bigquery_principal(None, None) is None

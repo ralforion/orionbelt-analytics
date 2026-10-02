@@ -162,6 +162,14 @@ def _get_connection_fingerprint(db_manager: DatabaseManager) -> str:
     identity = {
         key: value for key, value in conn_info.items() if _identifies_the_database(key)
     }
+    # Who the connection acts as, for drivers that sign in with a token or key
+    # and so report no username. Without it two credentials for one target
+    # shared a connection: a restricted token's session ran on an admin's
+    # manager and read the admin's schema cache and workspace. Only a digest:
+    # the identity may be a token, and the fingerprint names a directory.
+    auth_identity = getattr(db_manager, "auth_identity", None)
+    if isinstance(auth_identity, str) and auth_identity:
+        identity["principal"] = hashlib.sha256(auth_identity.encode()).hexdigest()
     # sort_keys, so a driver reordering its dict does not rename a workspace;
     # default=str, so a value the driver stores as an object still hashes.
     fingerprint_data = json.dumps(identity, sort_keys=True, default=str)
