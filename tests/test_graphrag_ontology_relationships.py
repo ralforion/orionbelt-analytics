@@ -620,3 +620,16 @@ class TestReviewFindings:
         )
         # regions has neither "id" nor "region_id": no edge at all.
         assert tables["stores"]["foreign_keys"] == []
+
+    def test_an_exact_column_wins_over_one_differing_in_case(self):
+        customers = {"columns": [{"name": "id"}, {"name": "ID"}]}
+
+        assert handler._existing_column(customers, "id", "customer_id") == "id"
+        assert handler._existing_column(customers, "ID", "customer_id") == "ID"
+        # "Id" fits both: ambiguous, so no join rather than the wrong one.
+        assert handler._existing_column(customers, "Id", "customer_id") is None
+
+    def test_a_case_insensitive_match_is_taken_when_it_is_the_only_one(self):
+        customers = {"columns": [{"name": "ID"}, {"name": "name"}]}
+
+        assert handler._existing_column(customers, "id", "customer_id") == "ID"

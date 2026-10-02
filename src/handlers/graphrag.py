@@ -185,11 +185,22 @@ def _existing_column(
         proposed: The column inference proposed.
         source_column: The referencing column.
 
+    Spelling decides first. Quoted identifiers can differ in case alone --
+    ``"id"`` and ``"ID"`` are two columns -- so a case-insensitive match is
+    accepted only when it is the only one.
+
     Returns:
         The column's name as the table spells it, or None.
     """
-    columns = {c["name"].casefold(): c["name"] for c in table.get("columns", [])}
-    return columns.get(proposed.casefold()) or columns.get(source_column.casefold())
+    names: list[str] = [c["name"] for c in table.get("columns", [])]
+    for wanted in (proposed, source_column):
+        if wanted in names:
+            return wanted
+    for wanted in (proposed, source_column):
+        folded = [n for n in names if n.casefold() == wanted.casefold()]
+        if len(folded) == 1:
+            return folded[0]
+    return None
 
 
 def _tables_to_dicts(tables_info: list[Any]) -> list[dict[str, Any]]:
