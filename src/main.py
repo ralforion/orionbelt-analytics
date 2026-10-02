@@ -448,7 +448,7 @@ async def list_databases(ctx: Context) -> dict[str, Any]:
     return await _h_connection.list_databases(services=_services())
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def list_schemas(ctx: Context) -> list[str]:
     """Get a list of available schemas from the connected database.
