@@ -416,14 +416,17 @@ class TestCredentialsAreNotShared:
         # Not the environment's default credentials: the key that was given.
         assert calls[0]["credentials_info"] == key
 
-    def test_an_unreadable_inline_key_refuses_rather_than_falls_back(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "inline", ["not json", "{}", "[]", '"key"', '{"client_email": "x@p.iam"}']
+    )
+    def test_an_unusable_inline_key_refuses_rather_than_falls_back(
+        self, monkeypatch, inline
+    ):
         from src.drivers.bigquery import BigQueryDriver
 
         calls = self._bigquery_engine_calls(monkeypatch)
 
-        connected = BigQueryDriver().connect(
-            project_id="proj", credentials_json="not json"
-        )
+        connected = BigQueryDriver().connect(project_id="proj", credentials_json=inline)
 
         assert connected is False
         assert calls == []

@@ -99,7 +99,12 @@ class BigQueryDriver(DatabaseDriver):
                     credentials_info = json.loads(credentials_json)
                 except ValueError:
                     credentials_info = None
-                if not isinstance(credentials_info, dict):
+                # Every Google credential file names its "type". An empty
+                # object passes a dict check, and the dialect reads it as no
+                # credentials at all -- the fallback this refuses.
+                if not isinstance(credentials_info, dict) or not credentials_info.get(
+                    "type"
+                ):
                     logger.error(
                         "BIGQUERY_CREDENTIALS_JSON is not a JSON service account "
                         "key; refusing to fall back to default credentials"
