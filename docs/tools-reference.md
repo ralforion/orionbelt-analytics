@@ -645,6 +645,7 @@ Execute a SPARQL query against the RDF ontology store to explore classes, proper
 - Requires an ontology to be loaded (`generate_ontology` or `load_my_ontology`) and `pyoxigraph` installed
 - Common prefixes (`rdf`, `rdfs`, `owl`, `xsd`) are available by default; the `oba:` namespace is `https://ralforion.com/ns/oba#`
 - Query type is auto-detected from the query string -- no separate parameter
+- Federated queries are refused: a `SERVICE` clause would make the server request the endpoint it names, from the server's network
 
 ---
 
@@ -696,6 +697,18 @@ Prune old ontology and GraphRAG versions for one schema according to the retenti
 > tool list via `tools/list` -- so no dedicated `get_server_info` tool is needed.
 
 ---
+
+## Tool Annotations
+
+Every tool carries the standard MCP [tool annotations](https://modelcontextprotocol.io/specification/server/tools#tool-annotations), so a client -- or an approval layer in front of it -- can treat tools by what they do without a rule written for this server:
+
+| Annotation | Tools |
+|------------|-------|
+| `readOnlyHint: true` | `list_databases`, `list_schemas`, `get_table_details`, `sample_table_data`, `execute_sql_query`, `suggest_semantic_names`, `get_semantic_model`, `list_semantic_models`, `graphrag_search`, `graphrag_query_context`, `graphrag_find_join_path`, `reachable_from`, `measurable_from`, `plan_composite_query`, `query_sparql` |
+| `destructiveHint: true` | `reset_cache`, `cleanup_workspace`, `cleanup_old_versions`, `save_semantic_model` and `load_my_ontology` (overwrite a saved model or uploaded file of the same name), `store_ontology_in_rdf` (replaces the ontology's named graph), `add_semantic_context` (replaces a table's context) |
+| writes, not destructive | every other tool: they add files, versions, index entries or triples and keep what was there |
+
+No tool is open-world (`openWorldHint: false`): each acts only on the configured database and this server's workspace. For `query_sparql` this holds because federated queries are refused: a `SERVICE` clause would have the server fetch from whatever endpoint the query names. Annotations are hints; `cleanup_workspace` still asks the user to confirm.
 
 ## Security Model
 
