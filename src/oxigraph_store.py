@@ -116,6 +116,46 @@ _SPARQL_NON_KEYWORD_REGIONS = re.compile(
 _SPARQL_FROM_KEYWORD = re.compile(r"\bFROM\b", re.IGNORECASE)
 
 
+# SERVICE makes the store fetch from another endpoint: any URL the query names,
+# from the server's network. Queries are written by a model or a user, so that
+# is a request the server would make on their behalf to wherever they point it,
+# internal hosts included. pyoxigraph has no switch to turn federation off.
+_SPARQL_SERVICE_KEYWORD = re.compile(r"\bSERVICE\b", re.IGNORECASE)
+
+# SPARQL processes \uXXXX and \UXXXXXXXX escapes over the whole query text
+# before parsing, so a keyword may be spelled with them.
+_SPARQL_CODEPOINT_ESCAPE = re.compile(r"\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})")
+
+
+class FederatedQueryError(ValueError):
+    """A query asked the store to fetch from another SPARQL endpoint."""
+
+
+def reject_federation(sparql_query: str) -> None:
+    """Refuse a query that uses SERVICE to reach another endpoint.
+
+    Lexical, like :func:`_declares_dataset`, but biased the other way: a query
+    wrongly refused can be rewritten, a SERVICE missed is a request to any host
+    the query names. Escapes are decoded first, then literals, IRIs, comments,
+    variables and prefixed names are blanked, and any SERVICE keyword left is
+    refused.
+
+    Args:
+        sparql_query: The query as received.
+
+    Raises:
+        FederatedQueryError: If the query contains a SERVICE clause.
+    """
+    decoded = _SPARQL_CODEPOINT_ESCAPE.sub(
+        lambda m: chr(int(m.group(1) or m.group(2), 16)), sparql_query
+    )
+    if _SPARQL_SERVICE_KEYWORD.search(_SPARQL_NON_KEYWORD_REGIONS.sub(" ", decoded)):
+        raise FederatedQueryError(
+            "SERVICE (federated queries) is not allowed: queries run against "
+            "this server's ontology store only"
+        )
+
+
 def _declares_dataset(sparql_query: str) -> bool:
     """Report whether a query selects its own RDF dataset via FROM / FROM NAMED.
 
@@ -363,6 +403,7 @@ class OxigraphStoreManager:
                 timeout is best-effort: the caller is unblocked, but the orphaned
                 query keeps running in the background until it finishes on its own.
         """
+        reject_federation(sparql_query)
         if timeout_seconds is None:
             return self._execute_select(sparql_query)
 
@@ -458,6 +499,7 @@ class OxigraphStoreManager:
             ''')
             ```
         """
+        reject_federation(sparql_query)
         try:
             # ASK queries yield a QueryBoolean (pyoxigraph >= 0.4) or a plain bool
             # (older versions); both support bool().
@@ -499,6 +541,7 @@ class OxigraphStoreManager:
             ''')
             ```
         """
+        reject_federation(sparql_query)
         try:
             # CONSTRUCT yields QueryTriples; narrow the query() union so serialize()
             # resolves to the RDF (not results) overload.

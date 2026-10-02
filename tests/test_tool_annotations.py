@@ -15,6 +15,9 @@ DESTRUCTIVE = {
     "cleanup_workspace",
     "cleanup_old_versions",
     "save_semantic_model",
+    "load_my_ontology",
+    "store_ontology_in_rdf",
+    "add_semantic_context",
 }
 MUST_BE_READ_ONLY = {
     "execute_sql_query",
@@ -73,3 +76,10 @@ async def test_no_tool_claims_the_open_world():
     assert {
         name for name, a in annotations.items() if a.get("openWorldHint") is not False
     } == set()
+
+
+async def test_connecting_is_not_claimed_idempotent():
+    # A client without a connection handle gets a new session per call.
+    annotations = await _annotations()
+
+    assert not annotations["connect_database"].get("idempotentHint")

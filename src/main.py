@@ -360,7 +360,8 @@ def _services() -> HandlerContext:
 # change state, and those from the ones that delete -- without a rule written
 # for this server. Every tool's domain is the configured database and this
 # server's workspace, so none is open-world. Hints, not guarantees: the
-# confirmation cleanup_workspace asks for stays.
+# confirmation cleanup_workspace asks for stays. query_sparql is closed-world
+# because the store refuses SERVICE (federation).
 _READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 _WRITES = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, open_world_hint=False
@@ -371,8 +372,10 @@ _WRITES_IDEMPOTENT = ToolAnnotations(
     idempotent_hint=True,
     open_world_hint=False,
 )
-# Deletes or overwrites what the user made: workspace files, archived versions,
-# a saved semantic model of the same name.
+# Deletes or overwrites: workspace files, archived versions, a saved semantic
+# model or an uploaded ontology file of the same name, an ontology's named graph
+# (whatever was added to it), a table's semantic context. Under the MCP
+# specification anything short of purely additive is destructive.
 _DESTRUCTIVE = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, open_world_hint=False
 )
@@ -392,7 +395,7 @@ _DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
 # ============================================================
 
 
-@mcp.tool(annotations=_WRITES_IDEMPOTENT)
+@mcp.tool(annotations=_WRITES)
 @_connection_aware(mint=True)
 async def connect_database(
     ctx: Context, db_type: _DbType  # type: ignore[valid-type]
@@ -603,7 +606,7 @@ async def apply_semantic_names(
         )
 
 
-@mcp.tool(annotations=_WRITES)
+@mcp.tool(annotations=_DESTRUCTIVE)
 @_connection_aware()
 async def load_my_ontology(
     ctx: Context,
@@ -1004,7 +1007,7 @@ async def graphrag_search(
     )
 
 
-@mcp.tool(annotations=_WRITES)
+@mcp.tool(annotations=_DESTRUCTIVE)
 @_connection_aware()
 async def add_semantic_context(
     ctx: Context,
@@ -1210,7 +1213,7 @@ async def plan_composite_query(
 # --- Oxigraph RDF Store & SPARQL Tools ---
 
 
-@mcp.tool(annotations=_WRITES_IDEMPOTENT)
+@mcp.tool(annotations=_DESTRUCTIVE_IDEMPOTENT)
 @_connection_aware()
 async def store_ontology_in_rdf(
     ctx: Context,
