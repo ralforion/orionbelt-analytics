@@ -49,7 +49,8 @@ discover_schema()
 3. Build Relationship Graph
     |  - NetworkX directed graph from FK relationships
     |  - Nodes = tables (with column count, comments)
-    |  - Edges = foreign keys (with column mappings)
+    |  - Edges = foreign keys (with column mappings): declared ones, plus
+    |    high/medium-confidence ones inferred from column names
     |  - Supports bidirectional and mixed-direction path finding
     |
     v
@@ -59,6 +60,16 @@ discover_schema()
        - Identifies central tables and suggests domain names
        - Provides schema overview statistics
 ```
+
+### Where Join Edges Come From
+
+| Source | Scope | In join specifications |
+|--------|-------|------------------------|
+| Foreign keys the database declares | Shared by every session on the connection | No extra fields |
+| Relationships inferred from column names (`customer_id` → `customers`), high or medium confidence | Shared; computed at indexing time, the same inference the generated ontology uses | `"source": "inferred"`, `"confidence"` |
+| Relationships in an ontology the user loaded with `load_my_ontology` | That user's session only, as a copy of the shared graph | `"source": "ontology"` |
+
+A declared key always outranks an inferred one or one from a loaded ontology between the same two tables. Without declared keys (a Databricks lakehouse layer, ClickHouse, most of BigQuery) join paths still work, and `graphrag_find_join_path` adds an `inferred_joins_note` when a path rests on an inferred join. A loaded ontology's relationships reach `graphrag_find_join_path`, `graphrag_query_context`, `reachable_from`, `measurable_from` and `plan_composite_query` for the session that loaded it, and never the graph other sessions read.
 
 ### What Gets Embedded
 

@@ -136,10 +136,6 @@ async def _restore_workspace_core(
                         any_ontology_enriched = True
                     enriched_tag = " (enriched)" if is_enriched else ""
                     restored.append(f"Ontology '{sname}'{enriched_tag}")
-
-                    ontology_content = await read_text_file(ontology_path)
-                    session.loaded_ontology = ontology_content
-                    session.loaded_ontology_path = str(ontology_path)
                 except Exception as e:
                     logger.error(f"Failed to restore ontology for '{sname}': {e}")
                     failed.append(f"Ontology '{sname}': {e}")

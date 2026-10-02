@@ -793,6 +793,10 @@ async def apply_semantic_names(
                     session.ontology_file = new_ontology_filename
                     session.ontology_enriched = True
                     session.obqc_validator = None
+                    # This is now the active ontology; one loaded earlier would
+                    # otherwise keep winning over it.
+                    session.loaded_ontology = None
+                    session.loaded_ontology_path = None
 
                     # Prepare OBQC's view from the enriched graph in hand, so
                     # the next query does not parse the file back.

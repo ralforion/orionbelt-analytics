@@ -39,6 +39,10 @@ class OntologyState:
         self.loaded_ontology_path: str | None = None  # File path
         self.obqc_validator: Any | None = None  # OBQCValidator (avoid circular import)
         self.ontology_enriched: bool = False  # True after semantic names applied
+        # The connection's join graph extended with the loaded ontology's
+        # relationships, with what it was built from: (graph, generation,
+        # validator, extended graph). Rebuilt when any of those changes.
+        self.join_graph: tuple[Any, int, Any, Any] | None = None
 
 
 class SchemaCache:
@@ -540,6 +544,16 @@ class SessionData:
     @loaded_ontology.setter
     def loaded_ontology(self, value: str | None) -> None:
         self._ensure_schema_state().ontology.loaded_ontology = value
+
+    @property
+    def ontology_join_graph(self) -> tuple[Any, int, Any, Any] | None:
+        """The join graph extended by this schema's loaded ontology, if built."""
+        ss = self._current_schema_state
+        return ss.ontology.join_graph if ss else None
+
+    @ontology_join_graph.setter
+    def ontology_join_graph(self, value: tuple[Any, int, Any, Any] | None) -> None:
+        self._ensure_schema_state().ontology.join_graph = value
 
     @property
     def loaded_ontology_path(self) -> str | None:

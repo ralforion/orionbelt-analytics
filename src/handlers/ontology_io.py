@@ -14,8 +14,10 @@ from fastmcp import Context
 from ..async_utils import run_db
 from ..constants import OBA_NAMESPACE
 from ..handler_context import HandlerContext
+from ..obqc_validator import PreparedOntology, prepare_ontology
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import PROJECT_ROOT
+from ..shacl_validator import validate_ontology
 from ..utils import notify_client, read_text_file, write_text_file
 from .connection_scope import (
     connection_changed_response,
@@ -128,6 +130,66 @@ async def _check_ontology_db_compatibility(
         return None
 
 
+# What an uploaded ontology needs, beyond parsing, to replace the generated
+# one. OBQC reads tables, columns and joins through these annotations alone.
+OBA_REQUIRED_ANNOTATIONS = {
+    "namespace": f"@prefix oba: <{OBA_NAMESPACE}> .",
+    "tables": "owl:Class with oba:tableName (and oba:schemaName if not 'public')",
+    "columns": "owl:DatatypeProperty with oba:columnName, oba:tableName and "
+    "rdfs:domain pointing at its table class",
+    "joins": "owl:ObjectProperty with oba:foreignKeyColumn, oba:referencedTable "
+    "and oba:referencedColumn (optional, but needed for join checks and paths)",
+}
+
+
+def _oba_requirements(prepared: PreparedOntology) -> dict[str, Any]:
+    """Whether an ontology maps to a database the way OBQC reads it.
+
+    The test is OBQC's own: at least one table, and at least one table with
+    columns. Joins are optional and only counted.
+
+    Args:
+        prepared: What OBQC extracted from the ontology.
+
+    Returns:
+        ``met``, the counts found, and the annotations expected.
+    """
+    tables = prepared.schema.tables
+    return {
+        "met": prepared.is_compatible,
+        "mapped_tables": len(tables),
+        "mapped_columns": sum(len(t.columns) for t in tables.values()),
+        "mapped_joins": len(prepared.schema.relationships),
+        "required": OBA_REQUIRED_ANNOTATIONS,
+    }
+
+
+def _shacl_summary(ontology_ttl: str) -> dict[str, Any] | None:
+    """Conformance to the OBA SHACL shapes, as advice rather than a gate.
+
+    The shapes describe a generated ontology in full -- every class mapped to a
+    table, every column typed and labelled. A hand-written ontology that also
+    has unmapped business classes fails them while OBQC reads it fine, so a
+    violation is reported, not refused.
+
+    Args:
+        ontology_ttl: The ontology in Turtle.
+
+    Returns:
+        ``conforms``, ``violations`` and the start of the report, or None if
+        SHACL validation is not available.
+    """
+    result = validate_ontology(ontology_ttl)
+    if not result.get("available"):
+        return None
+    report = result.get("report", "")
+    return {
+        "conforms": result["conforms"],
+        "violations": result["violations"],
+        "report": report[:1500] + ("\n..." if len(report) > 1500 else ""),
+    }
+
+
 async def load_my_ontology(
     ctx: Context,
     import_folder: str,
@@ -225,27 +287,42 @@ async def load_my_ontology(
             "%Y-%m-%d %H:%M:%S"
         )
 
+        # Only an ontology that maps to the database can stand in for the
+        # generated one: OBQC and join discovery read nothing else. One that
+        # does not is still loaded for SPARQL, and the active ontology stays.
+        base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
+        prepared = await asyncio.to_thread(prepare_ontology, graph, base_uri)
+        requirements = _oba_requirements(prepared)
+        shacl = await asyncio.to_thread(_shacl_summary, ontology_content)
+
         session = services.get_session_data(ctx)
         if not still_connected(session, pinned):
             return connection_changed_response(
                 services, "the ontology was being loaded", "load_my_ontology()"
             )
-        session.loaded_ontology = ontology_content
-        session.loaded_ontology_path = str(newest_file)
-        session.obqc_validator = None
+        activated = requirements["met"]
+        if activated:
+            session.loaded_ontology = ontology_content
+            session.loaded_ontology_path = str(newest_file)
+            session.obqc_validator = None
 
-        # The file has just been parsed into `graph`; extract OBQC's view from
-        # it now instead of parsing the same content again on the first query.
-        if services.provides("remember_prepared_ontology"):
-            base_uri = os.getenv("ONTOLOGY_BASE_URI", "http://example.com/ontology/")
-            await asyncio.to_thread(
-                partial(
-                    services.remember_prepared_ontology,
-                    session,
-                    graph,
-                    base_uri,
-                    text=ontology_content,
+            # Extracted above from the graph in hand; kept so the first query
+            # does not parse the same content again.
+            if services.provides("remember_prepared_ontology"):
+                await asyncio.to_thread(
+                    partial(
+                        services.remember_prepared_ontology,
+                        session,
+                        graph,
+                        base_uri,
+                        text=ontology_content,
+                        prepared=prepared,
+                    )
                 )
+        else:
+            logger.warning(
+                f"Ontology {newest_file.name} has no oba: table and column "
+                "mappings; loaded for SPARQL only, not activated for OBQC"
             )
 
         logger.info(f"Loaded ontology from: {newest_file}")
@@ -329,7 +406,11 @@ async def load_my_ontology(
                 [f.name for f in ttl_files[1:5]] if len(ttl_files) > 1 else []
             ),
             "stored_in_rdf": stored_in_rdf,
+            "activated": activated,
+            "oba_requirements": requirements,
         }
+        if shacl is not None:
+            response["shacl"] = shacl
 
         if stored_in_rdf:
             response["graph_uri"] = used_graph_uri
@@ -364,6 +445,17 @@ async def load_my_ontology(
             response["note"] = (
                 "This ontology is now active and will be used instead of auto-generated ontologies"
             )
+        if not activated:
+            response["note"] = (
+                "Loaded, but NOT activated: it does not map to the database "
+                "with the oba: annotations OBQC and join discovery need. Query "
+                "validation and join paths keep using the previously active "
+                "ontology, if any. See oba_requirements for what to add."
+            )
+            response["next_steps"] = {
+                "recommended": "add oba: annotations and load again",
+                "reason": "Without them the ontology is available to SPARQL only",
+            }
 
         if compatibility:
             response["compatibility"] = compatibility
