@@ -589,6 +589,14 @@ async def load_my_ontology(
     Accepts either inline content (e.g. when the user drops a .ttl file into the
     chat) or reads the newest .ttl file from the import folder.
 
+    It replaces the active ontology for query validation (OBQC) and, for this
+    session, adds its relationships to join discovery -- but only if it maps to
+    the database with oba: annotations (namespace https://ralforion.com/ns/oba#):
+    classes with oba:tableName, data properties with oba:columnName and
+    oba:tableName, and for joins object properties with oba:foreignKeyColumn,
+    oba:referencedTable and oba:referencedColumn. Otherwise it is loaded for
+    SPARQL only; check "activated" and "oba_requirements" in the result.
+
     Args:
         import_folder: Path to the folder containing .ttl files (used when ontology_content is not provided)
         auto_persist: If True (default), store in Oxigraph RDF database

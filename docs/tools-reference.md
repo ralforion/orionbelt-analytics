@@ -313,11 +313,14 @@ Load a custom `.ttl` (Turtle) ontology, either from inline content or from the i
 | `ontology_content` | string | No | None | TTL content passed directly (e.g. a `.ttl` file dropped into the chat) |
 | `file_name` | string | No | None | Original file name to associate with `ontology_content` |
 
-**Returns:** Dictionary with ontology information including class count, property count, and storage status.
+**Returns:** Dictionary with ontology information including class count, property count, storage status, `activated`, `oba_requirements` (counts of mapped tables, columns and joins, and the annotations expected) and, when available, `shacl` (conformance to the OBA shapes, advisory).
+
+**Requirements:** the file must be valid Turtle. To become the active ontology for OBQC and join discovery it must also map tables and columns with `oba:` annotations (namespace `https://ralforion.com/ns/oba#`); see [OBQC requirements](obqc.md#requirements-for-obqc). Otherwise it is loaded for SPARQL only and the active ontology is left in place.
 
 **Key Features:**
 - Accepts inline TTL via `ontology_content`, or reads the newest `.ttl` file in `import_folder` when no content is passed
-- Enables OBQC (Ontology Basic Quality Criteria) validation for subsequent SQL queries
+- Enables OBQC (Ontology-Based Query Check) validation for subsequent SQL queries
+- Its relationships extend GraphRAG join discovery for this session only
 - Useful for loading externally curated or hand-crafted ontologies
 - Supports the same auto-persist workflow as `generate_ontology`
 

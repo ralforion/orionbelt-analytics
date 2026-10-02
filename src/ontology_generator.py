@@ -1086,6 +1086,25 @@ class OntologyGenerator:
 
         return None
 
+    def infer_relationships(
+        self, tables_info: list[TableInfo]
+    ) -> list[InferredRelationship]:
+        """Foreign keys the naming suggests but the database does not declare.
+
+        The same inference :meth:`generate_from_schema` writes into the
+        ontology, for callers that need the relationships without one --
+        GraphRAG's join graph, so join discovery works on a schema without
+        declared keys.
+
+        Args:
+            tables_info: The tables of one schema.
+
+        Returns:
+            The inferred relationships, each with its confidence.
+        """
+        self._build_table_lookup(tables_info)
+        return self._infer_implicit_relationships(tables_info)
+
     def _infer_implicit_relationships(
         self, tables_info: list[TableInfo]
     ) -> list[InferredRelationship]:

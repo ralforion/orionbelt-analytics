@@ -423,6 +423,10 @@ async def generate_ontology(
             previous_ontology_file = session.ontology_file
             session.ontology_file = ontology_filename
             session.obqc_validator = None
+            # This is now the active ontology; one loaded earlier would
+            # otherwise keep winning over it.
+            session.loaded_ontology = None
+            session.loaded_ontology_path = None
 
             # The graph that produced this file is still in memory. Extract
             # OBQC's view of it now, under the writer lock, rather than having

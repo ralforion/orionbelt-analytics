@@ -413,8 +413,11 @@ class TestLoadingAnOntologyStaysWithItsDatabase:
 
     TTL = (
         "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
-        "@prefix oba: <https://w3id.org/oba#> .\n"
+        "@prefix oba: <https://ralforion.com/ns/oba#> .\n"
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
         '<http://x/Orders> a owl:Class ; oba:tableName "orders" .\n'
+        '<http://x/orders_id> a owl:DatatypeProperty ; oba:columnName "id" ;\n'
+        '    oba:tableName "orders" ; rdfs:domain <http://x/Orders> .\n'
     )
 
     async def test_a_reconnect_while_loading_adopts_nothing(

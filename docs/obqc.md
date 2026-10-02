@@ -344,4 +344,8 @@ OBQC relies on `oba:` namespace annotations in the ontology. These are automatic
 | `oba:relationshipType` | `many_to_one` or `one_to_many` |
 | `oba:sqlJoinCondition` | SQL join expression |
 
-If a loaded ontology lacks these annotations, OBQC reports `ontology_compatible: false` and falls back to basic syntax checking only.
+The `oba:` namespace is `https://ralforion.com/ns/oba#`.
+
+`load_my_ontology` only **activates** an ontology that maps at least one table (`oba:tableName`) with at least one column (`oba:columnName` + `oba:tableName`). One that does not is still loaded into the RDF store for SPARQL, but OBQC and join discovery keep using the previously active ontology; the response says `"activated": false` and lists what is missing under `oba_requirements`. The upload is also checked against the OBA SHACL shapes (`ontology/oba-shacl.ttl`) and the result returned as advice: the shapes describe a generated ontology in full, and a hand-written one with unmapped business classes fails them while OBQC reads it fine.
+
+Whichever ontology was activated most recently is the one OBQC uses: an activated upload replaces the generated ontology, and running `generate_ontology` or `apply_semantic_names` afterwards replaces the upload.

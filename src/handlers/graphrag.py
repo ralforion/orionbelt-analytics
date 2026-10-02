@@ -13,6 +13,7 @@ from fastmcp import Context
 from ..async_utils import run_db
 from ..exceptions import ConnectionError
 from ..graphrag import GraphRAGManager
+from ..graphrag.identity import qualified
 from ..handler_context import HandlerContext
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import (
@@ -160,6 +161,61 @@ def _table_info_to_dict(table_info: Any) -> dict[str, Any]:
         "comment": table_info.comment,
         "row_count": getattr(table_info, "row_count", None),
     }
+
+
+# Confidence levels an inferred relationship needs to become a join edge. The
+# ontology keeps low-confidence ones too, where OBQC only uses them to check a
+# join someone wrote; a join path is a suggestion, and one built on a guess the
+# naming barely supports would be followed.
+_INFERRED_EDGE_CONFIDENCE = frozenset({"high", "medium"})
+
+
+def _tables_to_dicts(tables_info: list[Any]) -> list[dict[str, Any]]:
+    """Tables as GraphRAG indexes them, with inferred foreign keys added.
+
+    GraphRAG's join graph is built from foreign keys. A schema that declares
+    none -- a lakehouse layer, ClickHouse, most of BigQuery -- would have no
+    join paths at all, although the generated ontology finds its relationships
+    from the column names. Those are added here, marked as inferred and with
+    their confidence, so a join path says what it rests on. A key the database
+    declares is never replaced by one inferred.
+
+    CPU-bound on a large schema; call it off the event loop.
+
+    Args:
+        tables_info: The tables of one schema, as discovery returned them.
+
+    Returns:
+        One dictionary per table.
+    """
+    tables = [_table_info_to_dict(t) for t in tables_info]
+    try:
+        inferred = OntologyGenerator().infer_relationships(tables_info)
+    except Exception as e:
+        logger.warning(f"Could not infer relationships for GraphRAG: {e}")
+        return tables
+
+    by_name = {t["name"]: t for t in tables}
+    added = 0
+    for rel in inferred:
+        if rel.confidence not in _INFERRED_EDGE_CONFIDENCE:
+            continue
+        table = by_name.get(rel.source_table)
+        if table is None:
+            continue
+        table["foreign_keys"].append(
+            {
+                "column": rel.column,
+                "referenced_table": rel.target_table,
+                "referenced_column": rel.target_column,
+                "inferred": True,
+                "confidence": rel.confidence,
+            }
+        )
+        added += 1
+    if added:
+        logger.info(f"GraphRAG: {added} relationships inferred from column names")
+    return tables
 
 
 # "Take the connection from the session": None is a real value (no connection).
@@ -349,7 +405,7 @@ async def _auto_initialize_graphrag_background(
     graphrag = pinned.graphrag
     try:
         start_time = time.time()
-        tables_dict = [_table_info_to_dict(t) for t in tables_info]
+        tables_dict = await asyncio.to_thread(_tables_to_dicts, tables_info)
         views_dict = [_view_info_to_dict(v) for v in views_info or []]
 
         # Held across the whole step: the decision to create a manager and the
@@ -510,7 +566,7 @@ async def initialize_graphrag(
         )
 
     # Convert TableInfo objects to dictionaries
-    tables_dict = [_table_info_to_dict(t) for t in tables_info]
+    tables_dict = await asyncio.to_thread(_tables_to_dicts, tables_info)
 
     # Views come from the discovery cache, or straight from the database when
     # this tool is the entry point -- which it is whenever AUTO_GRAPHRAG is
@@ -753,7 +809,10 @@ async def graphrag_query_context(
 
     try:
         context = await session.graphrag_manager.aget_query_context(
-            query=query, max_tables=max_tables, max_columns=max_columns
+            query=query,
+            max_tables=max_tables,
+            max_columns=max_columns,
+            retriever=await _join_graph(ctx, session, services),
         )
 
         await notify_client(
@@ -799,7 +858,7 @@ async def graphrag_find_join_path(
         return err
 
     try:
-        retriever = session.graphrag_manager.graph_retriever
+        retriever = await _join_graph(ctx, session, services)
         current = getattr(session, "current_schema", None)
 
         # A name that fits two schemas is reported, not guessed at. The model
@@ -861,6 +920,12 @@ async def graphrag_find_join_path(
             # Always present, so "unambiguous" is an answer and not an absence.
             "ambiguous": bool(alternatives),
         }
+        if any(join.get("source") == "inferred" for join in join_path):
+            response["inferred_joins_note"] = (
+                "Some joins on this path are inferred from column names, not "
+                "declared by the database (each says so, with its confidence). "
+                "Check the columns match before relying on them."
+            )
         if alternatives:
             response["alternatives"] = [
                 {"path": tables_of(joins), "joins": joins} for joins in alternatives
@@ -879,6 +944,84 @@ async def graphrag_find_join_path(
             f"GraphRAG find join path failed: {e!s}", "graphrag_error"
         )
         return err
+
+
+def _ontology_table(
+    name: str, ontology_schema: Any, retriever: Any, current_schema: str | None
+) -> str | None:
+    """The graph node an ontology's table name stands for, if one is certain.
+
+    Args:
+        name: The table as the ontology's ``oba:tableName`` gives it.
+        ontology_schema: What OBQC extracted from the ontology.
+        retriever: The join graph.
+        current_schema: The session's schema, to break a tie.
+
+    Returns:
+        The node's identity, or None if it is not indexed or is ambiguous.
+    """
+    indexed = retriever.indexed_name(name)
+    if indexed is None:
+        return None
+    table = ontology_schema.tables.get(name.lower())
+    if table is not None:
+        identity = qualified(table.schema_name, indexed)
+        if identity in retriever.graph:
+            return identity
+    found = retriever.resolve_name(indexed, current_schema)
+    return None if found.ambiguous else found.identity
+
+
+async def _join_graph(ctx: Context, session: Any, services: "HandlerContext") -> Any:
+    """The join graph this session should read.
+
+    The connection's graph is shared, and holds the keys the database declares
+    plus those inferred from column names. A user who loaded an ontology of
+    their own gets a copy extended with its relationships -- the joins they
+    defined for a schema whose keys are not declared -- without anyone else on
+    the connection seeing them. The copy is kept until the graph, or the
+    ontology, changes.
+
+    Args:
+        ctx: FastMCP request context.
+        session: The calling session.
+        services: Request-scoped services.
+
+    Returns:
+        A graph retriever, the shared one unless the loaded ontology adds to it.
+    """
+    base = session.graphrag_manager.graph_retriever
+    if getattr(session, "loaded_ontology", None) is None or not services.provides(
+        "aget_session_obqc_validator"
+    ):
+        return base
+    try:
+        validator = await services.aget_session_obqc_validator(ctx)
+        if validator is None:
+            return base
+        held = session.ontology_join_graph
+        if (
+            held is not None
+            and held[0] is base
+            and held[1] == base.generation
+            and held[2] is validator
+        ):
+            return held[3]
+        ontology_schema = validator.prepared_ontology().schema
+    except Exception as e:
+        logger.warning(f"Loaded ontology not used for join discovery: {e}")
+        return base
+
+    current = getattr(session, "current_schema", None)
+    relationships = []
+    for rel in ontology_schema.relationships.values():
+        source = _ontology_table(rel.from_table, ontology_schema, base, current)
+        target = _ontology_table(rel.to_table, ontology_schema, base, current)
+        if source is not None and target is not None:
+            relationships.append((source, rel.from_column, target, rel.to_column))
+    extended = base.with_relationships(relationships)
+    session.ontology_join_graph = (base, base.generation, validator, extended)
+    return extended
 
 
 def _resolve_table_for_session(
@@ -931,7 +1074,7 @@ async def reachable_from(
         return err
 
     try:
-        retriever = session.graphrag_manager.graph_retriever
+        retriever = await _join_graph(ctx, session, services)
         resolved, problem = _resolve_table_for_session(
             retriever, table, session, services
         )
@@ -988,7 +1131,7 @@ async def measurable_from(
         return err
 
     try:
-        retriever = session.graphrag_manager.graph_retriever
+        retriever = await _join_graph(ctx, session, services)
         resolved, problem = _resolve_table_for_session(
             retriever, table, session, services
         )
@@ -1056,7 +1199,7 @@ async def plan_composite_query(
         )
         return err
 
-    retriever = session.graphrag_manager.graph_retriever
+    retriever = await _join_graph(ctx, session, services)
     current = getattr(session, "current_schema", None)
 
     # Names arrive as a model wrote them, bare or qualified. Resolving them to
