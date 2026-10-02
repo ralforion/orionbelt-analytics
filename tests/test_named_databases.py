@@ -390,3 +390,54 @@ class TestCredentialsAreNotShared:
             identities.append(manager.auth_identity)
 
         assert identities == ["user:analyst@corp", "user:analyst@corp"]
+
+    def _bigquery_engine_calls(self, monkeypatch: Any) -> list[dict[str, Any]]:
+        import src.drivers.bigquery as bigquery_driver
+
+        calls: list[dict[str, Any]] = []
+
+        def fake_create_engine(url: str, **kwargs: Any) -> Any:
+            calls.append({"url": url, **kwargs})
+            raise bigquery_driver.OperationalError("stop", None, Exception())
+
+        monkeypatch.setattr(bigquery_driver, "create_engine", fake_create_engine)
+        return calls
+
+    def test_an_inline_bigquery_key_is_the_one_signed_in_with(self, monkeypatch):
+        import json
+
+        from src.drivers.bigquery import BigQueryDriver
+
+        calls = self._bigquery_engine_calls(monkeypatch)
+        key = {"type": "service_account", "client_email": "reader@p.iam"}
+
+        BigQueryDriver().connect(project_id="proj", credentials_json=json.dumps(key))
+
+        # Not the environment's default credentials: the key that was given.
+        assert calls[0]["credentials_info"] == key
+
+    def test_an_unreadable_inline_key_refuses_rather_than_falls_back(self, monkeypatch):
+        from src.drivers.bigquery import BigQueryDriver
+
+        calls = self._bigquery_engine_calls(monkeypatch)
+
+        connected = BigQueryDriver().connect(
+            project_id="proj", credentials_json="not json"
+        )
+
+        assert connected is False
+        assert calls == []
+
+    def test_a_key_file_is_still_passed_by_path(self, monkeypatch):
+        from src.drivers.bigquery import BigQueryDriver
+
+        calls = self._bigquery_engine_calls(monkeypatch)
+
+        BigQueryDriver().connect(
+            project_id="proj",
+            credentials_path="/keys/reader.json",
+            credentials_json='{"client_email": "shared@p.iam"}',
+        )
+
+        assert "credentials_path=/keys/reader.json" in calls[0]["url"]
+        assert "credentials_info" not in calls[0]

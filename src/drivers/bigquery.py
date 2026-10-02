@@ -1,5 +1,6 @@
 """Google BigQuery database driver."""
 
+import json
 import logging
 from typing import Any
 
@@ -85,12 +86,27 @@ class BigQueryDriver(DatabaseDriver):
             self._project_id = project_id
             self._dataset = dataset
 
-            # Build connection string
+            # Build connection string. The credentials used are exactly the
+            # ones configured: a key file, else the inline key, else the
+            # environment's default credentials. The inline key used to be
+            # accepted and then ignored, so a connection configured as one
+            # service account ran as whatever the environment signed in as.
+            engine_kwargs: dict[str, Any] = {}
             if credentials_path:
                 connection_string = f"bigquery://{project_id}/{dataset}?credentials_path={credentials_path}"
             elif credentials_json:
-                # For credentials JSON string, use default credentials or set via environment
+                try:
+                    credentials_info = json.loads(credentials_json)
+                except ValueError:
+                    credentials_info = None
+                if not isinstance(credentials_info, dict):
+                    logger.error(
+                        "BIGQUERY_CREDENTIALS_JSON is not a JSON service account "
+                        "key; refusing to fall back to default credentials"
+                    )
+                    return False
                 connection_string = f"bigquery://{project_id}/{dataset}"
+                engine_kwargs["credentials_info"] = credentials_info
             else:
                 # Use default credentials (from environment)
                 connection_string = f"bigquery://{project_id}/{dataset}"
@@ -103,6 +119,7 @@ class BigQueryDriver(DatabaseDriver):
                 connect_args={
                     "timeout": CONNECTION_TIMEOUT,
                 },
+                **engine_kwargs,
             )
             self.metadata = MetaData()
 
