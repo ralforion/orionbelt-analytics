@@ -240,11 +240,58 @@ def _sparql_code(text: str) -> str:
     return "".join(out)
 
 
+# pyparsing's packrat cache, which rdflib's SPARQL grammar uses, is shared
+# module state and not safe to fill from two threads at once; queries arrive
+# from worker threads.
+_SPARQL_PARSE_LOCK = threading.Lock()
+
+
+def _parse_names(node: Any, found: set[str]) -> set[str]:
+    """The names of every grammar rule in an rdflib parse result."""
+    from rdflib.plugins.sparql.parserutils import CompValue
+
+    if isinstance(node, CompValue):
+        found.add(node.name)
+        for value in node.values():
+            _parse_names(value, found)
+    elif isinstance(node, list | tuple) or type(node).__name__ == "ParseResults":
+        for value in node:
+            _parse_names(value, found)
+    return found
+
+
+def _grammar_finds_service(sparql_query: str) -> bool:
+    """Whether a real SPARQL grammar reads a SERVICE clause in the query.
+
+    The second, independent check behind the lexical scan: a query has to get
+    past both. A query rdflib cannot parse counts as one with SERVICE -- the
+    two parsers disagreeing on syntax is exactly where the lexical bypasses
+    came from, so a query whose structure cannot be confirmed is not run.
+
+    Args:
+        sparql_query: The query.
+
+    Returns:
+        True if the parse contains SERVICE or the query does not parse.
+    """
+    from rdflib.plugins.sparql.parser import parseQuery
+
+    try:
+        with _SPARQL_PARSE_LOCK:
+            parsed = parseQuery(sparql_query)
+    except Exception as e:
+        logger.info(f"SPARQL query refused: its structure could not be checked ({e})")
+        return True
+    return "ServiceGraphPattern" in _parse_names(parsed, set())
+
+
 def reject_federation(sparql_query: str) -> None:
     """Refuse a query that uses SERVICE to reach another endpoint.
 
     Biased towards refusing: a query wrongly refused can be rewritten, a
-    SERVICE missed is a request to any host the query names. The query is
+    SERVICE missed is a request to any host the query names. Two independent
+    checks, both of which must pass: a lexical scan, then a parse with
+    rdflib's SPARQL grammar (see :func:`_grammar_finds_service`). The query is
     checked as received and with SPARQL's codepoint escapes decoded, so a
     difference in how escapes are handled cannot hide the keyword either way.
 
@@ -263,6 +310,12 @@ def reject_federation(sparql_query: str) -> None:
                 "SERVICE (federated queries) is not allowed: queries run "
                 "against this server's ontology store only"
             )
+    if _grammar_finds_service(sparql_query):
+        raise FederatedQueryError(
+            "The query was refused: it either uses SERVICE (federated queries "
+            "are not allowed) or is not standard SPARQL 1.1 that the server "
+            "can check. Queries run against this server's ontology store only."
+        )
 
 
 def _declares_dataset(sparql_query: str) -> bool:

@@ -254,3 +254,43 @@ def test_a_prefix_named_like_the_keyword_is_refused_by_design():
         reject_federation(
             "PREFIX myservice: <http://e/> SELECT * WHERE { ?s myservice:p ?o }"
         )
+
+
+class TestTheGrammarGateAlone:
+    """The rdflib parse is a second gate: it holds with the scanner switched off."""
+
+    @pytest.fixture(autouse=True)
+    def _scanner_off(self, monkeypatch):
+        import src.oxigraph_store as store_module
+
+        monkeypatch.setattr(store_module, "_sparql_code", lambda _text: "")
+
+    @pytest.mark.parametrize(
+        "template",
+        EVASIONS
+        + [_PREFIXES + "SELECT * WHERE { " + p + " }" for p in ESCAPED_NAME_PATTERNS]
+        + ["SELECT * WHERE { " + p + " }" for p in ADJACENT_PATTERNS],
+    )
+    def test_every_known_bypass_is_refused(self, template):
+        query = template.replace("{url}", "http://127.0.0.1:9/sparql")
+        query = query.replace("ex:sparql", "<http://127.0.0.1:9/sparql>")
+
+        with pytest.raises(FederatedQueryError):
+            reject_federation(query)
+
+    def test_a_query_the_grammar_cannot_read_is_refused(self):
+        with pytest.raises(FederatedQueryError, match="not standard SPARQL"):
+            reject_federation("SELECT * WHERE { ?s ?p ?o ")
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT * WHERE { ?s ?p ?o } LIMIT 10",
+            "ASK { ?s a <http://www.w3.org/2002/07/owl#Class> }",
+            "CONSTRUCT { ?s ?p ?o } WHERE { GRAPH ?g { ?s ?p ?o } }",
+            "PREFIX oba: <https://ralforion.com/ns/oba#> "
+            "SELECT ?t WHERE { ?c oba:tableName ?t FILTER(CONTAINS(?t, 'service')) }",
+        ],
+    )
+    def test_ordinary_queries_pass(self, query):
+        reject_federation(query)
