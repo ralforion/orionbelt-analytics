@@ -99,12 +99,12 @@ def _escape_sparql_iri(value: str) -> str:
 # Order matters. Literals come first so a '#' inside a string is not read as a
 # comment, and variables/prefixed names come after IRIs so `<...>` wins.
 _SPARQL_NON_KEYWORD_REGIONS = re.compile(
-    r"'''.*?'''"  # long single-quoted literal
-    r'|""".*?"""'  # long double-quoted literal
+    r"'''(?:[^'\\]|\\.|'(?!''))*'''"  # long single-quoted literal
+    r'|"""(?:[^"\\]|\\.|"(?!""))*"""'  # long double-quoted literal
     r"|'(?:[^'\\\n]|\\.)*'"  # short single-quoted literal
     r'|"(?:[^"\\\n]|\\.)*"'  # short double-quoted literal
     r"|<[^<>\"{}|^`\\]*>"  # IRI reference
-    r"|#[^\n]*"  # comment to end of line
+    r"|#[^\r\n]*"  # comment to end of line (CR or LF)
     r"|[?$][A-Za-z0-9_]+"  # variable: ?from, $from
     r"|@[A-Za-z0-9-]+"  # language tag: "x"@from
     r"|[A-Za-z0-9_.\-]*:[A-Za-z0-9_.\-]*",  # prefixed name: oba:from, _:from
@@ -119,26 +119,119 @@ _SPARQL_FROM_KEYWORD = re.compile(r"\bFROM\b", re.IGNORECASE)
 # SERVICE makes the store fetch from another endpoint: any URL the query names,
 # from the server's network. Queries are written by a model or a user, so that
 # is a request the server would make on their behalf to wherever they point it,
-# internal hosts included. pyoxigraph has no switch to turn federation off.
-_SPARQL_SERVICE_KEYWORD = re.compile(r"\bSERVICE\b", re.IGNORECASE)
+# internal hosts included. pyoxigraph has no switch to turn federation off, so
+# the keyword is refused before the query reaches it.
+#
+# ASCII boundaries on purpose: with Unicode \b, a letter such as "é" directly
+# before the keyword would count as part of one word and hide it.
+_SPARQL_SERVICE_KEYWORD = re.compile(
+    r"(?<![A-Za-z0-9_])SERVICE(?![A-Za-z0-9_])", re.IGNORECASE
+)
 
 # SPARQL processes \uXXXX and \UXXXXXXXX escapes over the whole query text
 # before parsing, so a keyword may be spelled with them.
 _SPARQL_CODEPOINT_ESCAPE = re.compile(r"\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})")
+
+# The characters an IRIREF may contain: anything but these and the controls
+# and space (SPARQL 1.1, production 139).
+_IRIREF_EXCLUDED = set('<>"{}|^`\\')
+_NAME_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
 
 
 class FederatedQueryError(ValueError):
     """A query asked the store to fetch from another SPARQL endpoint."""
 
 
+def _sparql_code(text: str) -> str:
+    """The query with everything that cannot be a keyword blanked out.
+
+    A single pass over SPARQL's lexical rules, in the order a parser reads
+    them -- not a set of regular expressions, whose alternatives disagreed
+    with Oxigraph's parser at the edges (a comment ends at CR as well as LF; a
+    long string may contain an escaped quote) and let a real SERVICE pass as
+    comment.
+
+    Wherever this scanner and the parser could disagree, it blanks less, never
+    more: an unterminated string, or a short one that reaches a line end, ends
+    there and the rest is read as code; only the narrowest variable and local
+    name characters are blanked, and the prefix of a prefixed name not at all.
+    Reading too much as code can only refuse a query, never let one through.
+
+    Args:
+        text: The query.
+
+    Returns:
+        The text with literals, IRIs, comments, variable names and local names
+        replaced by spaces, the same length as the input.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "#":
+            j = i
+            while j < n and text[j] not in "\r\n":
+                j += 1
+            out.append(" " * (j - i))
+            i = j
+        elif c in "'\"":
+            quote = c
+            if text.startswith(quote * 3, i):
+                j = i + 3
+                while j < n and not text.startswith(quote * 3, j):
+                    j += 2 if text[j] == "\\" else 1
+                if j >= n:  # unterminated: let the rest be read as code
+                    out.append(" " * 3)
+                    i += 3
+                    continue
+                j += 3
+            else:
+                j = i + 1
+                while j < n and text[j] != quote and text[j] not in "\r\n":
+                    j += 2 if text[j] == "\\" else 1
+                if j >= n or text[j] != quote:  # unterminated on this line
+                    out.append(" ")
+                    i += 1
+                    continue
+                j += 1
+            out.append(" " * (min(j, n) - i))
+            i = min(j, n)
+        elif c == "<":
+            j = i + 1
+            while j < n and text[j] not in _IRIREF_EXCLUDED and ord(text[j]) > 0x20:
+                j += 1
+            if j < n and text[j] == ">":
+                out.append(" " * (j + 1 - i))
+                i = j + 1
+            else:  # a comparison, not an IRI
+                out.append(c)
+                i += 1
+        elif c in "?$":
+            j = i + 1
+            while j < n and text[j] in _NAME_CHARS:
+                j += 1
+            out.append(" " * (j - i))
+            i = j
+        elif c == ":":
+            # The local part of a prefixed name; the prefix stays visible.
+            j = i + 1
+            while j < n and (text[j] in _NAME_CHARS or (j > i + 1 and text[j] == "-")):
+                j += 1
+            out.append(" " * (j - i))
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def reject_federation(sparql_query: str) -> None:
     """Refuse a query that uses SERVICE to reach another endpoint.
 
-    Lexical, like :func:`_declares_dataset`, but biased the other way: a query
-    wrongly refused can be rewritten, a SERVICE missed is a request to any host
-    the query names. Escapes are decoded first, then literals, IRIs, comments,
-    variables and prefixed names are blanked, and any SERVICE keyword left is
-    refused.
+    Biased towards refusing: a query wrongly refused can be rewritten, a
+    SERVICE missed is a request to any host the query names. The query is
+    checked as received and with SPARQL's codepoint escapes decoded, so a
+    difference in how escapes are handled cannot hide the keyword either way.
 
     Args:
         sparql_query: The query as received.
@@ -149,11 +242,12 @@ def reject_federation(sparql_query: str) -> None:
     decoded = _SPARQL_CODEPOINT_ESCAPE.sub(
         lambda m: chr(int(m.group(1) or m.group(2), 16)), sparql_query
     )
-    if _SPARQL_SERVICE_KEYWORD.search(_SPARQL_NON_KEYWORD_REGIONS.sub(" ", decoded)):
-        raise FederatedQueryError(
-            "SERVICE (federated queries) is not allowed: queries run against "
-            "this server's ontology store only"
-        )
+    for text in {sparql_query, decoded}:
+        if _SPARQL_SERVICE_KEYWORD.search(_sparql_code(text)):
+            raise FederatedQueryError(
+                "SERVICE (federated queries) is not allowed: queries run "
+                "against this server's ontology store only"
+            )
 
 
 def _declares_dataset(sparql_query: str) -> bool:

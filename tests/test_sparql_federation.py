@@ -95,3 +95,63 @@ def test_the_store_never_contacts_the_endpoint(endpoint, form):
     with pytest.raises(FederatedQueryError):
         run()
     assert _Endpoint.hits == []
+
+
+# Queries that hide a SERVICE clause from a lexer that disagrees with the
+# parser. {url} is the endpoint; each must be refused before Oxigraph sees it.
+EVASIONS = [
+    # A comment ends at CR as well as LF.
+    "SELECT * WHERE { ?s ?p ?o # note\rSERVICE <{url}> { ?a ?b ?c } }",
+    "SELECT * WHERE { ?s ?p ?o # note\r\nSERVICE <{url}> { ?a ?b ?c } }",
+    # An escaped quote does not close a long string.
+    "SELECT * WHERE { BIND('''x\\''' # decoy''' AS ?x) SERVICE <{url}> { ?a ?b ?c } }",
+    'SELECT * WHERE { BIND("""x\\""" # decoy""" AS ?x) SERVICE <{url}> { ?a ?b ?c } }',
+    # A letter outside ASCII right before the keyword.
+    "SELECT * WHERE { ?s ?p ?o .éSERVICE <{url}> { ?a ?b ?c } }",
+    # Escapes, either way round.
+    "SELECT * WHERE { \\u0053ERVICE <{url}> { ?a ?b ?c } }",
+    "SELECT * WHERE { BIND('\\u0027' AS ?x) SERVICE <{url}> { ?a ?b ?c } }",
+    # An unterminated literal does not swallow what follows.
+    "SELECT * WHERE { SERVICE <{url}> { ?a ?b ?c } } # '''",
+    "SELECT * WHERE { BIND('x\nSERVICE <{url}> { ?a ?b ?c } }",
+]
+
+
+@pytest.mark.parametrize("template", EVASIONS)
+def test_an_evasion_is_refused(template):
+    with pytest.raises(FederatedQueryError):
+        reject_federation(template.replace("{url}", "http://127.0.0.1:9/sparql"))
+
+
+@pytest.mark.parametrize("template", EVASIONS)
+def test_an_evasion_never_reaches_the_endpoint(endpoint, template):
+    from src.oxigraph_store import OxigraphStoreManager
+
+    store = OxigraphStoreManager()
+    query = template.replace("{url}", endpoint)
+
+    with pytest.raises(FederatedQueryError):
+        store.query_sparql(query)
+    assert _Endpoint.hits == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        'SELECT * WHERE { ?s ?p "customer service" }',
+        "SELECT * WHERE { ?s <http://example.com/SERVICE> ?o }",
+        "SELECT ?service WHERE { ?service ?p ?o }",
+        "PREFIX ex: <http://e/> SELECT * WHERE { ?s ex:service ?o }",
+        "SELECT * WHERE { ?s ?p ?o } # SERVICE <{url}> {}",
+        "SELECT * WHERE { ?s ?p '''SERVICE <{url}> { ?a ?b ?c }''' }",
+    ],
+)
+def test_what_is_allowed_really_does_not_federate(endpoint, query):
+    # Run unguarded: if Oxigraph would have contacted the endpoint, allowing
+    # the query would have been wrong.
+    import pyoxigraph
+
+    query = query.replace("{url}", endpoint)
+    reject_federation(query)
+    list(pyoxigraph.Store().query(query))
+    assert _Endpoint.hits == []
