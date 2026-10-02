@@ -683,6 +683,18 @@ Prune old ontology and GraphRAG versions for one schema according to the retenti
 
 ---
 
+## Tool Annotations
+
+Every tool carries the standard MCP [tool annotations](https://modelcontextprotocol.io/specification/server/tools#tool-annotations), so a client -- or an approval layer in front of it -- can treat tools by what they do without a rule written for this server:
+
+| Annotation | Tools |
+|------------|-------|
+| `readOnlyHint: true` | `list_schemas`, `get_table_details`, `sample_table_data`, `execute_sql_query`, `suggest_semantic_names`, `get_semantic_model`, `list_semantic_models`, `graphrag_search`, `graphrag_query_context`, `graphrag_find_join_path`, `reachable_from`, `measurable_from`, `plan_composite_query`, `query_sparql` |
+| `destructiveHint: true` | `reset_cache`, `cleanup_workspace`, `cleanup_old_versions`, `save_semantic_model` (overwrites a model of the same name) |
+| writes, not destructive | every other tool: they add files, versions, index entries or triples and keep what was there |
+
+No tool is open-world (`openWorldHint: false`): each acts only on the configured database and this server's workspace. Annotations are hints; `cleanup_workspace` still asks the user to confirm.
+
 ## Security Model
 
 All tools operate within these security constraints:

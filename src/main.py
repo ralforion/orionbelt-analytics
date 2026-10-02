@@ -24,7 +24,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Image
 from mcp import MCPDeprecationWarning
-from mcp.types import InputRequiredResult
+from mcp.types import InputRequiredResult, ToolAnnotations
 from pydantic import Field
 
 from . import __name__ as SERVER_NAME
@@ -355,6 +355,35 @@ def _services() -> HandlerContext:
     )
 
 
+# What each tool does to its environment, as MCP tool annotations: a client or
+# an approval layer can then tell the tools that only read from those that
+# change state, and those from the ones that delete -- without a rule written
+# for this server. Every tool's domain is the configured database and this
+# server's workspace, so none is open-world. Hints, not guarantees: the
+# confirmation cleanup_workspace asks for stays.
+_READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+_WRITES = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, open_world_hint=False
+)
+_WRITES_IDEMPOTENT = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
+# Deletes or overwrites what the user made: workspace files, archived versions,
+# a saved semantic model of the same name.
+_DESTRUCTIVE = ToolAnnotations(
+    read_only_hint=False, destructive_hint=True, open_world_hint=False
+)
+_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
+
+
 # ============================================================
 # MCP Tool Registration
 # ============================================================
@@ -363,7 +392,7 @@ def _services() -> HandlerContext:
 # ============================================================
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES_IDEMPOTENT)
 @_connection_aware(mint=True)
 async def connect_database(
     ctx: Context, db_type: _DbType  # type: ignore[valid-type]
@@ -392,7 +421,7 @@ async def connect_database(
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def list_schemas(ctx: Context) -> list[str]:
     """Get a list of available schemas from the connected database.
@@ -402,7 +431,7 @@ async def list_schemas(ctx: Context) -> list[str]:
     return await _h_connection.list_schemas(ctx, services=_services())
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_IDEMPOTENT)
 @_connection_aware()
 async def reset_cache(
     ctx: Context,
@@ -420,7 +449,7 @@ async def reset_cache(
         return await _h_schema.reset_cache(ctx, cache_type, services=_services())
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES)
 @_connection_aware()
 async def discover_schema(
     ctx: Context,
@@ -445,7 +474,7 @@ async def discover_schema(
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def get_table_details(
     ctx: Context,
@@ -471,7 +500,7 @@ async def get_table_details(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES)
 @_connection_aware()
 async def generate_ontology(
     ctx: Context,
@@ -505,7 +534,7 @@ async def generate_ontology(
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def suggest_semantic_names(
     ctx: Context,
@@ -532,7 +561,7 @@ async def suggest_semantic_names(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES)
 @_connection_aware()
 async def apply_semantic_names(
     ctx: Context,
@@ -574,7 +603,7 @@ async def apply_semantic_names(
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES)
 @_connection_aware()
 async def load_my_ontology(
     ctx: Context,
@@ -619,7 +648,7 @@ async def load_my_ontology(
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES)
 @_connection_aware()
 async def download_artifact(
     ctx: Context,
@@ -653,7 +682,7 @@ async def download_artifact(
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def sample_table_data(
     ctx: Context,
@@ -679,7 +708,7 @@ async def sample_table_data(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def execute_sql_query(
     ctx: Context,
@@ -739,7 +768,7 @@ async def execute_sql_query(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES)
 @_connection_aware()
 async def generate_chart(
     ctx: Context,
@@ -788,7 +817,7 @@ async def generate_chart(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_IDEMPOTENT)
 @_connection_aware()
 async def cleanup_workspace(
     ctx: Context,
@@ -827,7 +856,7 @@ async def cleanup_workspace(
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE)
 @_connection_aware()
 async def cleanup_old_versions(
     ctx: Context,
@@ -857,7 +886,7 @@ async def cleanup_old_versions(
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE)
 @_connection_aware()
 async def save_semantic_model(
     ctx: Context,
@@ -884,7 +913,7 @@ async def save_semantic_model(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def get_semantic_model(
     ctx: Context,
@@ -905,7 +934,7 @@ async def get_semantic_model(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def list_semantic_models(ctx: Context) -> dict[str, Any]:
     """List all stored semantic models for the current database connection.
@@ -922,7 +951,7 @@ async def list_semantic_models(ctx: Context) -> dict[str, Any]:
 # --- GraphRAG Tools ---
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def graphrag_search(
     ctx: Context,
@@ -975,7 +1004,7 @@ async def graphrag_search(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES)
 @_connection_aware()
 async def add_semantic_context(
     ctx: Context,
@@ -1029,7 +1058,7 @@ async def add_semantic_context(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def graphrag_query_context(
     ctx: Context,
@@ -1056,7 +1085,7 @@ async def graphrag_query_context(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def graphrag_find_join_path(
     ctx: Context,
@@ -1083,7 +1112,7 @@ async def graphrag_find_join_path(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def reachable_from(
     ctx: Context,
@@ -1114,7 +1143,7 @@ async def reachable_from(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def measurable_from(
     ctx: Context,
@@ -1143,7 +1172,7 @@ async def measurable_from(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def plan_composite_query(
     ctx: Context,
@@ -1181,7 +1210,7 @@ async def plan_composite_query(
 # --- Oxigraph RDF Store & SPARQL Tools ---
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES_IDEMPOTENT)
 @_connection_aware()
 async def store_ontology_in_rdf(
     ctx: Context,
@@ -1208,7 +1237,7 @@ async def store_ontology_in_rdf(
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 @_connection_aware()
 async def query_sparql(
     ctx: Context,
@@ -1249,7 +1278,7 @@ async def query_sparql(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITES)
 @_connection_aware()
 async def add_rdf_knowledge(
     ctx: Context,
