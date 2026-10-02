@@ -330,24 +330,23 @@ class TestMCPToolsAsync:
         self, mock_ctx, mock_session_data
     ):
         """Test connection with missing required environment variables."""
-        # Use os.environ.get patching to simulate missing env vars
+        # Only POSTGRES_HOST is set. Empty rather than removed: connecting
+        # runs load_dotenv(), which would put a developer's .env values back
+        # into removed variables but leaves set ones alone.
         with (
             patch("src.main.get_session_data", return_value=mock_session_data),
-            patch("os.getenv") as mock_getenv,
-        ):
-            # Only return value for POSTGRES_HOST, return None for others
-            def getenv_side_effect(key, default=None):
-                env_map = {
+            patch.dict(
+                "os.environ",
+                {
                     "POSTGRES_HOST": "localhost",
-                    "POSTGRES_PORT": None,
-                    "POSTGRES_DATABASE": None,
-                    "POSTGRES_USERNAME": None,
-                    "POSTGRES_PASSWORD": None,
-                }
-                return env_map.get(key, default)
-
-            mock_getenv.side_effect = getenv_side_effect
-
+                    "POSTGRES_PORT": "",
+                    "POSTGRES_DATABASE": "",
+                    "POSTGRES_USERNAME": "",
+                    "POSTGRES_PASSWORD": "",
+                    "OBA_DATABASES": "",
+                },
+            ),
+        ):
             result = await main_module.connect_database(mock_ctx, db_type="postgresql")
 
         error_data = json.loads(result) if isinstance(result, str) else result

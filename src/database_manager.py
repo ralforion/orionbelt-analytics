@@ -7,6 +7,7 @@ connection pooling configuration, and security validation.
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import time
@@ -156,6 +157,47 @@ class TableInfo:
 # ---------------------------------------------------------------------------
 
 
+def _bigquery_principal(
+    credentials_path: str | None, credentials_json: str | None
+) -> str | None:
+    """The service account a BigQuery connection signs in as.
+
+    Args:
+        credentials_path: Path to a key file, if one is configured.
+        credentials_json: The key itself, if given inline.
+
+    The key the driver signs in with, in the driver's order: a key file when a
+    path is set, the inline key only otherwise. Reading them in another order
+    let an inline key shared by every profile stand in for each profile's own
+    file, and two different service accounts came out as one.
+
+    Returns:
+        ``user:<client_email>``, a digest of the key if it names no account,
+        or None for application default credentials -- one identity for the
+        whole process, so nothing to tell apart.
+    """
+    if credentials_path:
+        try:
+            with open(credentials_path, encoding="utf-8") as handle:
+                raw = handle.read()
+        except OSError:
+            return "credential-file:" + credentials_path
+    elif credentials_json:
+        raw = credentials_json
+    else:
+        return None
+    if not raw.strip():
+        # An empty key file still distinguishes one profile from another.
+        return "credential-file:" + (credentials_path or "")
+    try:
+        email = json.loads(raw).get("client_email")
+    except (ValueError, AttributeError):
+        email = None
+    if email:
+        return f"user:{email}"
+    return "credential:" + hashlib.sha256(raw.encode()).hexdigest()
+
+
 class DatabaseManager:
     """Manages database connections and schema analysis with enhanced reliability and security.
 
@@ -179,6 +221,12 @@ class DatabaseManager:
         self._max_overflow = 10
         self._dremio_rest_connection: dict[str, Any] | None = None
         self._last_connection_params: dict[str, Any] | None = None
+        # Who the connection acts as, for drivers that sign in with a token or
+        # key rather than a username. Two credentials for the same target see
+        # what each is allowed to, so they must not share a connection, its
+        # schema cache or its workspace. Kept off connection_info, which is
+        # shown and written to disk; only a digest reaches the fingerprint.
+        self.auth_identity: str | None = None
 
         # Security and performance
         self._credential_manager = SecureCredentialManager()
@@ -273,6 +321,9 @@ class DatabaseManager:
             driver: The newly connected driver to activate.
         """
         self._driver = driver
+        # Whatever the previous connection signed in as no longer applies;
+        # the connect method that called this records the new identity.
+        self.auth_identity = None
         self._metadata_cache.clear()
         logger.debug("Activated new driver; metadata cache invalidated")
 
@@ -566,6 +617,43 @@ class DatabaseManager:
     # connect_* methods - instantiate the appropriate driver
     # ------------------------------------------------------------------
 
+    def _credential_digest(self, credential: str) -> str:
+        """An identity for a credential with no principal to look up.
+
+        Args:
+            credential: The token or key.
+
+        Returns:
+            A one-way digest; the credential cannot be recovered from it.
+        """
+        return "credential:" + hashlib.sha256(credential.encode()).hexdigest()
+
+    def _query_principal(self, sql: str) -> str | None:
+        """The principal a connection runs as, by asking the database.
+
+        Run on the driver's engine directly. It is the server's own fixed
+        statement, not a user's: sent through execute_sql_query, the validator
+        for user SQL rejected it, logged an injection warning, and every
+        Databricks identity fell back to the token -- so a rotated token
+        orphaned the workspace.
+
+        Args:
+            sql: A one-row, one-column query naming the current user.
+
+        Returns:
+            The principal, or None if the database would not say.
+        """
+        engine = getattr(self._driver, "engine", None)
+        if engine is None:
+            return None
+        try:
+            with engine.connect() as conn:
+                value = conn.execute(text(sql)).scalar()
+        except Exception as e:
+            logger.debug(f"Could not read the connection's principal: {e}")
+            return None
+        return f"user:{value}" if value else None
+
     def connect_postgresql(
         self, host: str, port: int, database: str, username: str, password: str
     ) -> bool:
@@ -765,6 +853,7 @@ class DatabaseManager:
                     "uri": uri,
                     "pat": pat,
                 }
+                self.auth_identity = self._credential_digest(pat)
             else:
                 self._dremio_rest_connection = {
                     "host": host,
@@ -833,6 +922,7 @@ class DatabaseManager:
                 "credentials_path": credentials_path,
                 "credentials_json": credentials_json,
             }
+            self.auth_identity = _bigquery_principal(credentials_path, credentials_json)
         return success
 
     def connect_duckdb(
@@ -875,6 +965,11 @@ class DatabaseManager:
                 "motherduck_token": motherduck_token,
                 "read_only": read_only,
             }
+            self.auth_identity = (
+                self._credential_digest(motherduck_token)
+                if is_motherduck and motherduck_token
+                else None
+            )
         return success
 
     def connect_databricks(
@@ -923,6 +1018,11 @@ class DatabaseManager:
                 "catalog": catalog,
                 "schema": schema,
             }
+            # The user behind the token, so a rotated token keeps its
+            # workspace; the token itself when the warehouse will not say.
+            self.auth_identity = self._query_principal(
+                "SELECT current_user() AS principal"
+            ) or self._credential_digest(access_token)
         return success
 
     def connect_mysql(
@@ -1525,4 +1625,5 @@ class DatabaseManager:
         self.connection_info = {}
         self._last_connection_params = None
         self._dremio_rest_connection = None
+        self.auth_identity = None
         logger.info("Database connection closed and parameters cleared")

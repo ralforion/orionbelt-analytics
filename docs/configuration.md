@@ -12,7 +12,47 @@ OrionBelt Analytics is configured via a `.env` file in the project root. Copy th
 cp .env.template .env
 ```
 
-All database parameters are optional when calling `connect_database` -- the server falls back to `.env` values when tool parameters are not provided.
+Database credentials live only in the server's environment; `connect_database` never takes them as parameters.
+
+### Named Databases
+
+A server can hold several databases, each under a name people use. A user can then say "analyse my finance-2025 database": the model calls `list_databases` to see the configured names with their descriptions, and `connect_database(database="finance-2025")`.
+
+```bash
+OBA_DATABASES=finance-2025,sales
+
+DB_FINANCE_2025_TYPE=databricks
+DB_FINANCE_2025_DESCRIPTION=Finance actuals 2025: GL, cost centres, budgets
+DB_FINANCE_2025_DATABRICKS_CATALOG=finance
+DB_FINANCE_2025_DATABRICKS_SCHEMA=gold
+
+DB_SALES_TYPE=databricks
+DB_SALES_DESCRIPTION=Orders, customers and returns
+DB_SALES_DATABRICKS_CATALOG=sales
+DB_SALES_DATABRICKS_SCHEMA=gold
+
+# Shared by both connections
+DATABRICKS_SERVER_HOSTNAME=adb-1234567890.12.azuredatabricks.net
+DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/abc123
+DATABRICKS_ACCESS_TOKEN=dapi...
+```
+
+| Variable | Meaning |
+|----------|---------|
+| `OBA_DATABASES` | Comma-separated names, in the order `list_databases` shows them |
+| `DB_<NAME>_TYPE` | Required: `postgresql`, `mysql`, `snowflake`, `clickhouse`, `dremio`, `bigquery`, `duckdb` or `databricks` |
+| `DB_<NAME>_DESCRIPTION` | What it holds, in the users' words; the model matches requests against it |
+| `DB_<NAME>_<VARIABLE>` | Any of the type's variables below, e.g. `DB_SALES_DATABRICKS_SCHEMA` |
+
+- `<NAME>` is the name in upper case with every run of other characters an underscore: `finance-2025` → `DB_FINANCE_2025_`.
+- A variable a connection does not set falls back to the unprefixed one, so connections can share a workspace and token and differ only in catalog or schema. Once a type has named connections, its unprefixed variables are their shared defaults and are not listed as a database of their own.
+- Names are matched ignoring case, spaces, dashes and underscores: `Finance 2025` finds `finance-2025`.
+- `list_databases` shows each database's name, type, description and target (catalog and schema, database, or project and dataset). Hosts, users, tokens and passwords are never shown.
+- With exactly one database configured, `connect_database()` needs no argument.
+- Each database keeps its own workspace (schema cache, ontologies, GraphRAG index), identified by where it points and **who it signs in as**, not by its name. Two connections to the same target with different credentials never share a connection, a schema cache or a workspace: each credential sees what it is allowed to. For drivers that sign in with a username, the username identifies it; for token- and key-based ones, the principal behind the credential (Databricks `current_user()`, a BigQuery service account's email), or a one-way digest of the token where there is none to look up (Dremio PAT, MotherDuck). A rotated Databricks token for the same user keeps its workspace.
+- **Upgrading:** connections that sign in with a token or key (Databricks, Dremio with a PAT, BigQuery with a key, MotherDuck) get a new workspace identity, and their workspace is rebuilt on first use. The previous one is left in place, not adopted: nothing in it shows which credential built it.
+
+Without `OBA_DATABASES`, each type configured with its own variables is one database, named after its type, and `connect_database(db_type=...)` works as before.
 
 ### Full `.env` Reference
 

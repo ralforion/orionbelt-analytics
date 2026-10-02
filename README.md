@@ -161,6 +161,7 @@ OrionBelt exposes 26 MCP tools. Here is a summary by category:
 | Tool                | Description                                                            |
 | ------------------- | ---------------------------------------------------------------------- |
 | `connect_database`  | Connect to any supported database using `.env` credentials             |
+| `list_databases`    | List the databases configured on the server, by name and description   |
 | `list_schemas`      | List available schemas in the connected database                       |
 | `reset_cache`       | Clear cached schema and ontology data for the current session          |
 | `discover_schema`   | Analyze schema structure with automatic GraphRAG + ontology generation |

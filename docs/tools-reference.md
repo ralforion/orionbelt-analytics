@@ -10,14 +10,15 @@ Complete reference for all OrionBelt® Analytics MCP tools. These tools are invo
 
 ### Standard Analysis Workflow
 
-1. **connect_database** -- establish a secure database connection
-2. **list_schemas** -- discover available schemas
-3. **discover_schema** -- extract schema structure with relationships (auto-generates R2RML)
-4. **generate_ontology** -- create semantic ontology with `oba:` annotations
-5. **suggest_semantic_names** -- identify cryptic/abbreviated names for review
-6. **apply_semantic_names** -- apply LLM-suggested improvements
-7. **execute_sql_query** -- run validated SQL with fan-trap protection
-8. **generate_chart** -- visualize results
+1. **list_databases** -- see the configured databases, by name
+2. **connect_database** -- connect to the one the user means
+3. **list_schemas** -- discover available schemas
+4. **discover_schema** -- extract schema structure with relationships (auto-generates R2RML)
+5. **generate_ontology** -- create semantic ontology with `oba:` annotations
+6. **suggest_semantic_names** -- identify cryptic/abbreviated names for review
+7. **apply_semantic_names** -- apply LLM-suggested improvements
+8. **execute_sql_query** -- run validated SQL with fan-trap protection
+9. **generate_chart** -- visualize results
 
 ### Resuming a Previous Session
 
@@ -76,13 +77,16 @@ Every tool accepts one optional argument that is not repeated in the tables belo
 
 ### 1. connect_database
 
-Connect to a database using credentials from environment variables.
+Connect to one of the databases the server is configured for, by name. Credentials stay in the server's environment.
 
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `db_type` | string | Yes | Database type: `postgresql`, `mysql`, `snowflake`, `clickhouse`, `dremio`, `bigquery`, `duckdb`, `databricks` |
+| `database` | string | No | Name of a configured database (see [Named Databases](configuration.md#named-databases)), e.g. `finance-2025`. Case, spaces, dashes and underscores are ignored |
+| `db_type` | string | No | Alternatively, a database type configured without a name: `postgresql`, `mysql`, `snowflake`, `clickhouse`, `dremio`, `bigquery`, `duckdb`, `databricks` |
+
+With neither, the only configured database is used; with several configured, the call fails and lists their names.
 
 **Returns:** Connection status message, ending with the connection handle of the session (see [The `connection` Argument](#the-connection-argument)). If a previous workspace exists for this connection, includes a workspace summary with available artifacts.
 
@@ -108,7 +112,17 @@ Connect to a database using credentials from environment variables.
 
 ---
 
-### 2. list_schemas
+### 2. list_databases
+
+List the databases the server can connect to. Call it when the user names a database or does not say which one. Needs no connection.
+
+**Parameters:** none.
+
+**Returns:** `databases`: one entry per configured database with `name`, `type`, `description` (if set) and its target where the type has one (`catalog`, `schema`, `database`, `project_id`, `dataset`). Hosts, users, tokens and passwords are never included.
+
+---
+
+### 3. list_schemas
 
 List available schemas from the connected database.
 
@@ -122,7 +136,7 @@ List available schemas from the connected database.
 
 ---
 
-### 3. reset_cache
+### 4. reset_cache
 
 Clear cached schema and/or ontology data to force re-analysis.
 
@@ -141,7 +155,7 @@ Clear cached schema and/or ontology data to force re-analysis.
 
 ---
 
-### 4. discover_schema
+### 5. discover_schema
 
 Analyze database schema and return table metadata with relationships. Automatically generates W3C R2RML mappings and triggers GraphRAG initialization in the background.
 
@@ -172,7 +186,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 
 ---
 
-### 5. get_table_details
+### 6. get_table_details
 
 Get detailed metadata for a single table, including all columns, data types, keys, and constraints.
 
@@ -197,7 +211,7 @@ Get detailed metadata for a single table, including all columns, data types, key
 
 ---
 
-### 6. generate_ontology
+### 7. generate_ontology
 
 Generate an RDF/OWL ontology from the database schema with `oba:` (OrionBelt Analytics) namespace annotations that link ontology classes directly to SQL tables and columns.
 
@@ -225,7 +239,7 @@ Generate an RDF/OWL ontology from the database schema with `oba:` (OrionBelt Ana
 
 ---
 
-### 7. suggest_semantic_names
+### 8. suggest_semantic_names
 
 Extract and analyze names from a generated ontology to identify abbreviations, cryptic identifiers, and names that would benefit from human-readable alternatives.
 
@@ -251,7 +265,7 @@ Extract and analyze names from a generated ontology to identify abbreviations, c
 
 ---
 
-### 8. apply_semantic_names
+### 9. apply_semantic_names
 
 Apply LLM-suggested semantic name improvements to an existing ontology, replacing cryptic identifiers with business-friendly labels.
 
@@ -299,7 +313,7 @@ The `suggestions` parameter expects a JSON structure like:
 
 ---
 
-### 9. load_my_ontology
+### 10. load_my_ontology
 
 Load a custom `.ttl` (Turtle) ontology, either from inline content or from the import folder, bypassing the automated generation pipeline.
 
@@ -326,7 +340,7 @@ Load a custom `.ttl` (Turtle) ontology, either from inline content or from the i
 
 ---
 
-### 10. download_artifact
+### 11. download_artifact
 
 Download a generated artifact -- the ontology or the R2RML mapping -- as a Turtle (`.ttl`) file with its full content.
 
@@ -355,7 +369,7 @@ Download a generated artifact -- the ontology or the R2RML mapping -- as a Turtl
 
 ---
 
-### 11. sample_table_data
+### 12. sample_table_data
 
 Safely sample rows from a specific table for data exploration and quality assessment.
 
@@ -377,7 +391,7 @@ Safely sample rows from a specific table for data exploration and quality assess
 
 ---
 
-### 12. execute_sql_query
+### 13. execute_sql_query
 
 Execute a SQL query with built-in validation, fan-trap protection, and automatic GraphRAG context enrichment.
 
@@ -415,7 +429,7 @@ Execute a SQL query with built-in validation, fan-trap protection, and automatic
 
 ---
 
-### 13. generate_chart
+### 14. generate_chart
 
 Generate interactive Plotly charts rendered via MCP Apps, or export as static PNG images.
 
@@ -448,7 +462,7 @@ Generate interactive Plotly charts rendered via MCP Apps, or export as static PN
 
 ---
 
-### 14. cleanup_workspace
+### 15. cleanup_workspace
 
 Delete all workspace files for the current database connection and clear session state. The database connection remains active.
 
@@ -466,7 +480,7 @@ Delete all workspace files for the current database connection and clear session
 
 ---
 
-### 15. save_semantic_model
+### 16. save_semantic_model
 
 Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse across sessions.
 
@@ -488,7 +502,7 @@ Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse ac
 
 ---
 
-### 16. get_semantic_model
+### 17. get_semantic_model
 
 Retrieve a stored semantic model YAML by name.
 
@@ -506,7 +520,7 @@ Retrieve a stored semantic model YAML by name.
 
 ---
 
-### 17. list_semantic_models
+### 18. list_semantic_models
 
 List all stored semantic models for the current database connection.
 
@@ -516,7 +530,7 @@ List all stored semantic models for the current database connection.
 
 ---
 
-### 18. graphrag_search
+### 19. graphrag_search
 
 Search the schema using natural language via GraphRAG semantic search, or return a schema overview. GraphRAG is auto-initialized by `discover_schema`.
 
@@ -540,7 +554,7 @@ Search the schema using natural language via GraphRAG semantic search, or return
 
 ---
 
-### 19. graphrag_query_context
+### 20. graphrag_query_context
 
 Get an optimized, minimal schema context for SQL generation, selecting only the tables and columns relevant to a natural-language query.
 
@@ -565,7 +579,7 @@ Get an optimized, minimal schema context for SQL generation, selecting only the 
 
 ---
 
-### 20. graphrag_find_join_path
+### 21. graphrag_find_join_path
 
 Discover a join path between two tables using GraphRAG graph traversal.
 
@@ -591,7 +605,7 @@ Discover a join path between two tables using GraphRAG graph traversal.
 
 ---
 
-### 21. store_ontology_in_rdf
+### 22. store_ontology_in_rdf
 
 Persist the current session's ontology in the Oxigraph RDF store so it can be queried with SPARQL. Usually unnecessary -- `generate_ontology` auto-persists by default -- but useful after loading or editing an ontology with auto-persist disabled.
 
@@ -611,7 +625,7 @@ Persist the current session's ontology in the Oxigraph RDF store so it can be qu
 
 ---
 
-### 22. query_sparql
+### 23. query_sparql
 
 Execute a SPARQL query against the RDF ontology store to explore classes, properties, relationships, and semantic metadata.
 
@@ -634,7 +648,7 @@ Execute a SPARQL query against the RDF ontology store to explore classes, proper
 
 ---
 
-### 23. add_rdf_knowledge
+### 24. add_rdf_knowledge
 
 Add a custom triple (subject-predicate-object) to the RDF store to enrich the ontology with bespoke metadata.
 
@@ -656,7 +670,7 @@ Add a custom triple (subject-predicate-object) to the RDF store to enrich the on
 
 ---
 
-### 24. cleanup_old_versions
+### 25. cleanup_old_versions
 
 Prune old ontology and GraphRAG versions for one schema according to the retention policy. Unlike `cleanup_workspace`, this keeps the current generation and recent history -- it deletes only *archived* versions that have aged out.
 
