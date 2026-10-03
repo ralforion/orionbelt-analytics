@@ -416,12 +416,7 @@ async def connect_database(
         )
         if not isinstance(working_schema, str) or not working_schema:
             working_schema = None
-        for manager in {
-            id(db_manager): db_manager,
-            id(session.db_manager): session.db_manager,
-        }.values():
-            if manager is not None:
-                manager.working_schema = working_schema
+        session.working_schema = working_schema
         if working_schema:
             session.set_current_schema(working_schema)
 
@@ -455,8 +450,22 @@ async def connect_database(
                     restore_result = await _restore_workspace_core(
                         ctx, session, new_conn_id, None, services
                     )
+                # The restore selects a schema of its own; the one announced
+                # above is the one the session works in.
+                if working_schema:
+                    session.set_current_schema(working_schema)
                 if restore_result:
                     response += "\n\n" + _format_restore_summary(restore_result)
+                    restored = restore_result.get(
+                        "restored_schemas", [restore_result.get("schema_name")]
+                    )
+                    if working_schema and working_schema not in restored:
+                        response += (
+                            f"\n\nNote: the working schema '{working_schema}' "
+                            "has nothing restored -- the list above is for "
+                            f"{', '.join(str(r) for r in restored)}. Call "
+                            "discover_schema() to analyze it."
+                        )
                 else:
                     # Workspace detected but restore returned nothing
                     response += "\n\n" + format_workspace_summary(workspace)

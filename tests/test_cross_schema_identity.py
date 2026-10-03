@@ -210,7 +210,9 @@ class TestTheIndexKeepsThemApart:
         assert column.metadata["schema"] == "sales"
 
     def test_search_results_show_the_bare_name_and_the_identity(self, manager):
-        results = manager.search_schema("orders", top_k=4)
+        # Tables only: with columns in the mix, near-ties in the approximate
+        # nearest-neighbour index could push one of the two out of the top k.
+        results = manager.search_schema("orders", top_k=4, element_type="table")
 
         by_id = {r["element"]["id"]: r["element"]["name"] for r in results}
         assert by_id.get("sales.orders") == "orders"

@@ -27,6 +27,8 @@ def duck(monkeypatch, tmp_path):
     path = tmp_path / "w.duckdb"
     con = duckdb.connect(str(path))
     con.execute("CREATE TABLE things (id INTEGER PRIMARY KEY)")
+    con.execute("CREATE SCHEMA archive")
+    con.execute("CREATE TABLE archive.old_things (id INTEGER PRIMARY KEY)")
     con.close()
     fresh = ServerState()
     monkeypatch.setattr(state_module, "_server_state", fresh)
@@ -78,8 +80,6 @@ def test_the_database_names_its_current_schema():
     assert manager.connect_duckdb(":memory:")
 
     assert manager.resolve_working_schema() == "main"
-    manager.disconnect()
-    assert manager.working_schema is None
 
 
 def test_a_postgres_schema_is_configurable_and_shown():
@@ -93,3 +93,74 @@ def test_a_postgres_schema_is_configurable_and_shown():
 
     assert entry.getenv("POSTGRES_SCHEMA") == "sales"
     assert entry.describe()["schema"] == "sales"
+
+
+def _handle(text: str) -> str:
+    return re.search(r"(ob_[a-z0-9]{6})", text).group(1)
+
+
+async def test_each_session_keeps_its_own_working_schema(duck):
+    async with Client(mcp) as client:
+        first = _handle(
+            _text(await client.call_tool("connect_database", {"db_type": "duckdb"}))
+        )
+        second = _handle(
+            _text(await client.call_tool("connect_database", {"db_type": "duckdb"}))
+        )
+        one, two = duck.session_for_handle(first), duck.session_for_handle(second)
+        assert one.runtime is two.runtime  # one shared database manager
+        # As if two named connections differed only in their schema.
+        two.working_schema = "archive"
+
+        mine = (await client.call_tool("discover_schema", {"connection": first})).data
+        theirs = (
+            await client.call_tool("discover_schema", {"connection": second})
+        ).data
+
+    assert (mine["schema"], theirs["schema"]) == ("main", "archive")
+
+
+async def test_a_fresh_ontology_is_generated_for_the_working_schema(duck):
+    async with Client(mcp) as client:
+        handle = _handle(
+            _text(await client.call_tool("connect_database", {"db_type": "duckdb"}))
+        )
+        await client.call_tool(
+            "generate_ontology", {"connection": handle, "auto_persist": False}
+        )
+
+    session = duck.session_for_handle(handle)
+    assert session.current_schema == "main"
+    assert session.ontology_file and "_main_" in session.ontology_file
+
+
+async def test_restore_keeps_the_working_schema_and_says_what_it_covers(
+    duck, monkeypatch
+):
+    import sys
+
+    from src.workspace import detect_workspace
+
+    # Every module that captured OUTPUT_DIR at import writes or reads the
+    # workspace this test needs; point them all at the test directory.
+    output_dir = connection_handler.OUTPUT_DIR
+    for name, module in list(sys.modules.items()):
+        if name.startswith("src") and hasattr(module, "OUTPUT_DIR"):
+            monkeypatch.setattr(module, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(connection_handler, "detect_workspace", detect_workspace)
+    async with Client(mcp) as client:
+        first = _handle(
+            _text(await client.call_tool("connect_database", {"db_type": "duckdb"}))
+        )
+        await client.call_tool(
+            "generate_ontology",
+            {"connection": first, "schema_name": "archive", "auto_persist": False},
+        )
+        # A later connection finds archive's workspace.
+        reconnected = _text(
+            await client.call_tool("connect_database", {"db_type": "duckdb"})
+        )
+
+    session = duck.session_for_handle(_handle(reconnected))
+    assert session.current_schema == "main"
+    assert "working schema 'main' has nothing restored" in reconnected

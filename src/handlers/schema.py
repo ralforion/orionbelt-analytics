@@ -165,7 +165,7 @@ async def discover_schema(
     if not schema_name:
         # The connection's working schema, under its real name: results are
         # qualified with it, which "default" or an empty name never allowed.
-        working = getattr(getattr(session, "db_manager", None), "working_schema", None)
+        working = getattr(session, "working_schema", None)
         if isinstance(working, str) and working:
             schema_name = working
     effective_schema = schema_name or ""

@@ -238,10 +238,6 @@ class DatabaseManager:
         # schema cache or its workspace. Kept off connection_info, which is
         # shown and written to disk; only a digest reaches the fingerprint.
         self.auth_identity: str | None = None
-        # The schema tables are qualified with when the caller names none: the
-        # one configured for the connection, else the database's own current
-        # schema. Kept off connection_info, which names the workspace.
-        self.working_schema: str | None = None
 
         # Security and performance
         self._credential_manager = SecureCredentialManager()
@@ -1666,5 +1662,4 @@ class DatabaseManager:
         self._last_connection_params = None
         self._dremio_rest_connection = None
         self.auth_identity = None
-        self.working_schema = None
         logger.info("Database connection closed and parameters cleared")
