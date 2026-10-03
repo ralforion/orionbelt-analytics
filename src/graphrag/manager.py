@@ -679,6 +679,7 @@ class GraphRAGManager:
         max_related_distance: int = 1,
         query_embedding: Any | None = None,
         retriever: GraphRetriever | None = None,
+        business_candidates: int | None = None,
     ) -> dict[str, Any]:
         """
         Find tables relevant to a natural language query.
@@ -692,6 +693,9 @@ class GraphRAGManager:
             max_related_distance: Maximum graph distance for related tables
             retriever: The join graph to read instead of the shared one -- a
                 session's copy extended with its own ontology's relationships.
+            business_candidates: How many business-name entries to consider;
+                ``top_k`` if not given. The matches are also returned for the
+                caller's column ranking, which may want more than ``top_k``.
 
         Returns:
             Dictionary with primary tables, related tables, and context
@@ -710,7 +714,10 @@ class GraphRAGManager:
         # gave one of its columns -- "revenue" reaching orders through
         # net_amt's "Net revenue".
         business = self.business_name_matches(
-            query, top_k, graph, query_embedding=query_embedding
+            query,
+            business_candidates or top_k,
+            graph,
+            query_embedding=query_embedding,
         )
         table_results = _merge_table_hits(table_results, business, top_k)
 
@@ -824,6 +831,9 @@ class GraphRAGManager:
             max_related_distance=1,
             query_embedding=query_embedding,
             retriever=retriever,
+            # The matches also rank columns, so as many as either list keeps:
+            # with max_tables below max_columns, column names were cut off.
+            business_candidates=max(max_tables, max_columns),
         )
 
         # Find relevant columns
@@ -1241,32 +1251,39 @@ def _resolve_target(
     """The table, and column if any, a business-name entry describes.
 
     Targets are ``table`` or ``table.column`` with bare names, as
-    ``apply_semantic_names`` writes them. The whole target is tried as a table
-    first -- a table name may itself contain a dot -- then split at the last
-    dot into table and column, and the column checked against the table.
+    ``apply_semantic_names`` writes them -- joined with a dot although either
+    name may contain one (a column ``net.amount`` makes ``orders.net.amount``).
+    So no dot is assumed to be the separator: the whole target is tried as a
+    table, then every dot as the split, and a split counts only where the
+    table resolves and has that column.
 
     Args:
         target: The entry's target.
         graph: The join graph whose tables it is resolved against.
 
     Returns:
-        ``(table identity, column or None)``, or None if the target names no
-        indexed table, names one in two schemas, or names a missing column.
+        ``(table identity, column or None)``, or None if nothing fits, the
+        table is in two schemas, or two different readings fit.
     """
+    readings: set[tuple[str, str | None]] = set()
     whole = graph.resolve_name(target)
     if whole.identity is not None and not whole.ambiguous:
-        return whole.identity, None
-    if "." not in target:
+        readings.add((whole.identity, None))
+    for at, char in enumerate(target):
+        if char != ".":
+            continue
+        table_name, column = target[:at], target[at + 1 :]
+        if not table_name or not column:
+            continue
+        found = graph.resolve_name(table_name)
+        if found.identity is None or found.ambiguous:
+            continue
+        meta = graph.get_table_metadata(found.identity) or {}
+        if any(col.get("name") == column for col in meta.get("columns", [])):
+            readings.add((found.identity, column))
+    if len(readings) != 1:
         return None
-    table_name, column = target.rsplit(".", 1)
-    found = graph.resolve_name(table_name)
-    if found.identity is None or found.ambiguous:
-        return None
-    meta = graph.get_table_metadata(found.identity) or {}
-    for col in meta.get("columns", []):
-        if col.get("name") == column:
-            return found.identity, column
-    return None
+    return readings.pop()
 
 
 def _merge_table_hits(

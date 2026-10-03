@@ -20,6 +20,7 @@ from src.graphrag.embedder import (
     SchemaEmbedder,
     resolve_embedding_model,
 )
+from src.graphrag.identity import qualified
 from src.graphrag.manager import GraphRAGManager, _resolve_target
 from src.graphrag.retriever import GraphRetriever
 
@@ -218,3 +219,106 @@ class TestMultilingual:
             "gold.orders",
             "net_amt",
         )
+
+
+class TestDottedNames:
+    """apply_semantic_names joins table and column with a dot, either may hold one."""
+
+    def _graph(self, *tables: dict[str, Any]) -> GraphRetriever:
+        graph = GraphRetriever()
+        graph.build_graph(list(tables))
+        return graph
+
+    def test_a_column_with_a_dot_resolves(self):
+        graph = self._graph(
+            {
+                "name": "orders",
+                "schema": "gold",
+                "columns": [_col("id", "INTEGER"), _col("net.amount", "DECIMAL")],
+                "foreign_keys": [],
+            }
+        )
+
+        assert _resolve_target("orders.net.amount", graph) == (
+            "gold.orders",
+            "net.amount",
+        )
+
+    def test_a_table_with_a_dot_resolves(self):
+        graph = self._graph(
+            {
+                "name": "sales.eu",
+                "schema": "gold",
+                "columns": [_col("id", "INTEGER"), _col("amt", "DECIMAL")],
+                "foreign_keys": [],
+            }
+        )
+
+        identity = qualified("gold", "sales.eu")  # quoted: the name holds a dot
+        assert _resolve_target("sales.eu.amt", graph) == (identity, "amt")
+        assert _resolve_target("sales.eu", graph) == (identity, None)
+
+    def test_two_readings_that_both_fit_are_not_guessed(self):
+        graph = self._graph(
+            {
+                "name": "a",
+                "schema": "gold",
+                "columns": [_col("b.c", "INTEGER")],
+                "foreign_keys": [],
+            },
+            {
+                "name": "a.b",
+                "schema": "gold",
+                "columns": [_col("c", "INTEGER")],
+                "foreign_keys": [],
+            },
+        )
+
+        assert _resolve_target("a.b.c", graph) is None
+
+
+@needs_minilm
+def test_column_matches_are_not_capped_by_the_table_limit(monkeypatch):
+    monkeypatch.setenv("GRAPHRAG_EMBEDDING_MODEL", "minilm")
+    monkeypatch.setattr(manager_module, "CHROMADB_AVAILABLE", False)
+    finance = {
+        "name": "fin",
+        "schema": "gold",
+        "columns": [
+            _col("id", "INTEGER"),
+            _col("np_amt", "DECIMAL"),
+            _col("gm_amt", "DECIMAL"),
+            _col("opx_amt", "DECIMAL"),
+            _col("tx_amt", "DECIMAL"),
+            # Raw names that share the question's words but mean other things.
+            _col("profit_center", "VARCHAR"),
+            _col("gross_weight", "DECIMAL"),
+            _col("operating_unit", "VARCHAR"),
+            _col("tax_region", "VARCHAR"),
+        ],
+        "foreign_keys": [],
+    }
+    mgr = GraphRAGManager(connection_id="test-cap", schema_name="gold")
+    mgr.initialize_from_schema(tables_info=[finance], schema_name="gold")
+    for column, name in [
+        ("np_amt", "Net profit"),
+        ("gm_amt", "Gross margin"),
+        ("opx_amt", "Operating expenses"),
+        ("tx_amt", "Taxes paid"),
+    ]:
+        mgr.add_semantic_context(f"fin.{column}", name)
+
+    def columns(max_tables: int) -> list[tuple[str, str | None]]:
+        context = mgr.get_query_context(
+            "net profit, gross margin, operating expenses and taxes",
+            max_tables=max_tables,
+            max_columns=4,
+        )
+        return [
+            (c["column"], c.get("business_name")) for c in context["relevant_columns"]
+        ]
+
+    # Which columns are relevant does not depend on how many tables are kept.
+    assert columns(max_tables=1) == columns(max_tables=5)
+    named = [c for c, business in columns(max_tables=1) if business]
+    assert len(named) >= 3
