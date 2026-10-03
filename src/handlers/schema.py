@@ -122,6 +122,7 @@ async def reset_cache(
     if cache_type_lower in ("ontology", "all"):
         session.ontology_file = None
         session.loaded_ontology = None
+        session.ontology_graph_uri = None
         session.obqc_validator = None
         cleared.append("ontology")
 

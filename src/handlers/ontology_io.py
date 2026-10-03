@@ -303,6 +303,10 @@ async def load_my_ontology(
         activated = requirements["met"]
         if activated:
             session.loaded_ontology = ontology_content
+            # The graph it is (or would be) persisted into, as below.
+            session.ontology_graph_uri = graph_uri or schema_graph_uri(
+                newest_file.stem.replace("ontology_", "")
+            )
             session.loaded_ontology_path = str(newest_file)
             session.obqc_validator = None
 

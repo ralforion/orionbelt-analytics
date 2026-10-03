@@ -155,6 +155,7 @@ from .handlers import chart as _h_chart  # noqa: E402
 from .handlers import connection as _h_connection  # noqa: E402
 from .handlers import graphrag as _h_graphrag  # noqa: E402
 from .handlers import ontology as _h_ontology  # noqa: E402
+from .handlers import ontology_validation as _h_validation  # noqa: E402
 from .handlers import query as _h_query  # noqa: E402
 from .handlers import rdf as _h_rdf  # noqa: E402
 from .handlers import schema as _h_schema  # noqa: E402
@@ -627,6 +628,51 @@ async def apply_semantic_names(
             ontology_file,
             save_to_file,
             services=_services(),
+        )
+
+
+@mcp.tool(annotations=_WRITES)
+@_connection_aware()
+async def validate_relationship(
+    ctx: Context,
+    from_table: _Identifier,
+    column: _Identifier,
+    to_table: _Identifier | None = None,
+    from_schema: _Identifier | None = None,
+) -> dict[str, Any]:
+    """Check a relationship in the ontology against the data, and record the verdict.
+
+    Use it on relationships inferred from column names or stated by an
+    uploaded ontology, before relying on them -- or whenever a join's result
+    looks wrong. Runs two read-only queries: how many non-null values of the
+    key column exist in the referenced column, and whether that column is
+    unique. Do not write your own queries or RDF notes for this.
+
+    The verdict -- confirmed (>= 99% match), partial (>= 90%), refuted,
+    target_not_unique (the join would multiply rows) or no_data -- is written
+    into the active ontology with the oba: validation terms, refreshed in the
+    RDF store, kept when the ontology is regenerated, and shown on joins by
+    graphrag_find_join_path. Both tables are scanned, so on very large tables
+    it takes as long as a full count.
+
+    Args:
+        from_table: Table holding the key column, e.g. 'purchases'
+        column: The key column, e.g. 'purchasesupplier'
+        to_table: The referenced table; needed only if the column references
+            several tables
+        from_schema: Schema of from_table; needed only if two schemas hold it
+
+    Returns:
+        The verdict with its counts, the queries run, and where it was recorded
+    """
+    async with _writer_lock(ctx):
+        return await _h_validation.validate_relationship(
+            ctx,
+            from_table,
+            column,
+            to_table,
+            services=_services(),
+            from_schema=from_schema,
         )
 
 
@@ -1276,7 +1322,8 @@ async def query_sparql(
     generate_ontology or load_my_ontology. Requires an ontology to be loaded first.
 
     Supports SELECT, ASK, and CONSTRUCT query types (auto-detected from query string).
-    Common prefixes (rdf, rdfs, owl, xsd) are available by default.
+    Prefixes rdf, rdfs, owl, xsd and oba (https://ralforion.com/ns/oba#) are
+    predeclared; a PREFIX in the query overrides them.
 
     Named graphs: each loaded schema lives in its own named graph, and the store
     is accumulative across schemas. Unwrapped patterns are matched against the

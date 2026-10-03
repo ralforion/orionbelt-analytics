@@ -176,6 +176,7 @@ OrionBelt exposes 26 MCP tools. Here is a summary by category:
 | `suggest_semantic_names` | Detect abbreviations and cryptic names for business-friendly renaming |
 | `apply_semantic_names`   | Apply LLM-suggested semantic names and descriptions to ontology       |
 | `load_my_ontology`       | Load a custom `.ttl` ontology file from an import folder              |
+| `validate_relationship`  | Check a relationship against the data and record the verdict in the ontology |
 | `download_artifact`      | Download ontology or R2RML mapping as a Turtle file                   |
 
 ### Query & Visualization

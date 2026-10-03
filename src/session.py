@@ -39,6 +39,9 @@ class OntologyState:
         self.loaded_ontology_path: str | None = None  # File path
         self.obqc_validator: Any | None = None  # OBQCValidator (avoid circular import)
         self.ontology_enriched: bool = False  # True after semantic names applied
+        # The RDF named graph the active ontology was loaded into; tools that
+        # rewrite the ontology refresh this graph, not a default one.
+        self.rdf_graph_uri: str | None = None
         # The connection's join graph extended with the loaded ontology's
         # relationships, with what it was built from: (graph, generation,
         # validator, extended graph). Rebuilt when any of those changes.
@@ -544,6 +547,16 @@ class SessionData:
     @loaded_ontology.setter
     def loaded_ontology(self, value: str | None) -> None:
         self._ensure_schema_state().ontology.loaded_ontology = value
+
+    @property
+    def ontology_graph_uri(self) -> str | None:
+        """The RDF named graph this schema's active ontology lives in."""
+        ss = self._current_schema_state
+        return ss.ontology.rdf_graph_uri if ss else None
+
+    @ontology_graph_uri.setter
+    def ontology_graph_uri(self, value: str | None) -> None:
+        self._ensure_schema_state().ontology.rdf_graph_uri = value
 
     @property
     def ontology_join_graph(self) -> tuple[Any, int, Any, Any] | None:

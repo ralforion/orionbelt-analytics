@@ -907,10 +907,15 @@ async def apply_semantic_names(
                         or session.get_last_analyzed_schema()
                         or "default"
                     )
-                    graph_uri = schema_graph_uri(schema_name)
+                    # The graph the active ontology was loaded into, which a
+                    # generate_ontology(graph_uri=...) may have chosen.
+                    graph_uri = session.ontology_graph_uri or schema_graph_uri(
+                        schema_name
+                    )
                     triple_count = store.load_ontology(
                         updated_ontology, graph_uri, schema_name
                     )
+                    session.ontology_graph_uri = graph_uri
                     result += f"\nPersisted to Oxigraph: {triple_count:,} triples in <{graph_uri}>"
                     result += f"\nToken savings: ~{len(updated_ontology) // 4} tokens saved by auto-persisting to RDF store!"
                     result += '\nUse query_sparql() to explore or download_artifact(artifact_type="ontology") to get the TTL file.'
