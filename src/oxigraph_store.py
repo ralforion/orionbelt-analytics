@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
+from .constants import OBA_NAMESPACE
+
 if TYPE_CHECKING:
     from pyoxigraph import (
         Literal,
@@ -142,6 +144,23 @@ _NAME_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345678
 # Outside strings that is the only place SPARQL allows one, and the escaped
 # character is part of the name: "ex:\#" is a name, not a name and a comment.
 _LOCAL_NAME_ESCAPABLE = set("_~.-!$&'()*+,;=/?#@%")
+
+
+# Prefixes a query may use without declaring them, as the query_sparql tool
+# description promises. A PREFIX the query declares itself takes precedence.
+DEFAULT_PREFIXES = {
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "oba": OBA_NAMESPACE,
+}
+
+
+def _first_line(error: BaseException) -> str:
+    """An error's first line: Oxigraph appends pages of expected-token lists."""
+    text = str(error)
+    return text.splitlines()[0] if text else type(error).__name__
 
 
 class FederatedQueryError(ValueError):
@@ -616,6 +635,7 @@ class OxigraphStoreManager:
                 self.store.query(
                     sparql_query,
                     use_default_graph_as_union=not _declares_dataset(sparql_query),
+                    prefixes=DEFAULT_PREFIXES,
                 ),
             )
             variables = solutions.variables
@@ -636,6 +656,11 @@ class OxigraphStoreManager:
             logger.info(f"SPARQL query returned {len(results)} results")
             return results
 
+        except SyntaxError as e:
+            # The query's own mistake, returned to whoever wrote it; a traceback
+            # in the server log adds nothing.
+            logger.warning(f"SPARQL query failed, not valid SPARQL: {_first_line(e)}")
+            raise
         except Exception as e:
             logger.exception(f"SPARQL query failed: {e}")
             raise
@@ -673,8 +698,16 @@ class OxigraphStoreManager:
                 self.store.query(
                     sparql_query,
                     use_default_graph_as_union=not _declares_dataset(sparql_query),
+                    prefixes=DEFAULT_PREFIXES,
                 )
             )
+        except SyntaxError as e:
+            # The query's own mistake, returned to whoever wrote it; a traceback
+            # in the server log adds nothing.
+            logger.warning(
+                f"SPARQL ASK query failed, not valid SPARQL: {_first_line(e)}"
+            )
+            raise
         except Exception as e:
             logger.exception(f"SPARQL ASK query failed: {e}")
             raise
@@ -716,12 +749,20 @@ class OxigraphStoreManager:
                 self.store.query(
                     sparql_query,
                     use_default_graph_as_union=not _declares_dataset(sparql_query),
+                    prefixes=DEFAULT_PREFIXES,
                 ),
             )
             # serialize() yields bytes (or None for an empty result), so decode to
             # satisfy the str return contract.
             serialized = results.serialize(format=RdfFormat.TURTLE)
             return serialized.decode("utf-8") if serialized is not None else ""
+        except SyntaxError as e:
+            # The query's own mistake, returned to whoever wrote it; a traceback
+            # in the server log adds nothing.
+            logger.warning(
+                f"SPARQL CONSTRUCT query failed, not valid SPARQL: {_first_line(e)}"
+            )
+            raise
         except Exception as e:
             logger.exception(f"SPARQL CONSTRUCT query failed: {e}")
             raise
