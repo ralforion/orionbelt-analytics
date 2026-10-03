@@ -122,7 +122,8 @@ def _recorded_graph_uri(connection_id: str | None, schema_name: str) -> str | No
     try:
         manager = VersionMetadataManager(connection_id, OUTPUT_DIR)
         schema_ws = manager.get_workspace_schema(schema_name) or {}
-    except Exception:
+    except Exception as e:
+        logger.debug(f"No ontology graph recorded for {schema_name}: {e}")
         return None
     value = (schema_ws.get("ontology") or {}).get("graph_uri")
     return str(value) if value else None
