@@ -29,8 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generated ontology; generating again or applying semantic names replaces it.
 - **The Docker image is ~0.2 GB larger:** it includes both embedding models, so
   it needs no internet access at runtime.
+- **SPARQL prefixes `rdf`, `rdfs`, `owl`, `xsd` and `oba` are predeclared**,
+  as the `query_sparql` description always promised; a query's own `PREFIX`
+  still wins. A syntax error in a query is now one warning line in the server
+  log instead of an error with two tracebacks.
 
 ### Added
+- **`validate_relationship`.** Checks a relationship the ontology states --
+  declared, inferred or uploaded -- against the data with two read-only
+  queries (key coverage, target uniqueness) and records the verdict
+  (`confirmed`, `partial`, `refuted`, `target_not_unique`, `no_data`) on the
+  relationship in the active ontology with new `oba:validation*` terms, in the
+  RDF store and in the workspace, so a regenerated ontology keeps it.
+  `graphrag_find_join_path` shows each join's verdict and warns about refuted,
+  partial or non-unique joins. (#163)
 - **Named databases.** `OBA_DATABASES` plus `DB_<NAME>_*` variables configure
   several databases on one server, each with a description; `list_databases`
   shows them (never credentials) and `connect_database(database=...)` connects
@@ -66,6 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   advisories recorded as not reachable (#148, #149).
 
 ### Fixed
+- **`query_sparql` failed on the prefixes it promised** ("Prefix not found"),
+  costing the model a retry. (#162)
+- **`apply_semantic_names` refreshed the default RDF graph** instead of the
+  one the active ontology was loaded into with `graph_uri`. (#163)
 - **Tables have identities that include their schema**, so two schemas holding
   a table of the same name are two tables in GraphRAG, in join paths and in
   search. (#147)
