@@ -348,7 +348,11 @@ async def _auto_generate_ontology_background(
                 schema_state = session.get_or_create_schema_state(schema_name)
                 previous_ontology_file = schema_state.ontology.ontology_file
                 schema_state.ontology.ontology_file = ontology_file.name
-                schema_state.ontology.rdf_graph_uri = f"{base_uri}{schema_name}"
+                # Only if the generated ontology is now the active one. An
+                # upload outranks background generation, and its graph is the
+                # one a later rewrite of the active ontology must refresh.
+                if getattr(schema_state.ontology, "loaded_ontology", None) is None:
+                    schema_state.ontology.rdf_graph_uri = f"{base_uri}{schema_name}"
 
             graph_uri = ""
             triple_count = 0

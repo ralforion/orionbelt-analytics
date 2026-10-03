@@ -488,3 +488,49 @@ class TestPhysicalIdentity:
 
         assert self._record().key() != self._record(to_column="ID").key()
         assert not states(self._ref(to_column="ID"), self._record())
+
+
+async def test_background_generation_leaves_an_active_uploads_graph(shop, monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+
+    import src.handlers.graphrag as graphrag_handler
+
+    upload_graph = "urn:review:active-upload"
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {**on, "schema_name": "main", "auto_persist": False}
+        )
+        # The user's own ontology: here, the generated one uploaded back.
+        uploaded = _active_ontology(shop).serialize(format="turtle")
+        await client.call_tool(
+            "load_my_ontology",
+            {
+                **on,
+                "ontology_content": uploaded,
+                "file_name": "mine.ttl",
+                "import_folder": str(shop / "import"),
+                "graph_uri": upload_graph,
+            },
+        )
+
+        # The background generation finishes after the upload.
+        session = main_module._server_state.session_for_handle(handle)
+        monkeypatch.setattr(graphrag_handler, "notify_client", AsyncMock())
+        await graphrag_handler._auto_generate_ontology_background(
+            "main", session.get_cached_schema("main"), session, Mock()
+        )
+        assert session.loaded_ontology is not None  # the upload is still active
+
+        verdict = (
+            await client.call_tool(
+                "validate_relationship",
+                {**on, "from_table": "purchases", "column": "supplier_id"},
+            )
+        ).data
+
+    assert verdict["recorded_in"]["active_ontology"] == "uploaded"
+    assert verdict["recorded_in"]["rdf_graph"] == upload_graph
