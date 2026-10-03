@@ -340,7 +340,35 @@ Load a custom `.ttl` (Turtle) ontology, either from inline content or from the i
 
 ---
 
-### 11. download_artifact
+### 11. validate_relationship
+
+Check a relationship the ontology states -- declared, inferred from column names, or from an uploaded ontology -- against the data, and record the verdict.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `from_table` | string | Yes | Table holding the key column |
+| `column` | string | Yes | The key column |
+| `to_table` | string | No | The referenced table; needed only if the column references several |
+
+**What it measures**, with two read-only queries: how many non-null values of the key column exist in the referenced column, and whether that column is unique. Both tables are scanned.
+
+| Verdict | Meaning |
+|---------|---------|
+| `confirmed` | At least 99% of non-null keys match: treat it as a key |
+| `partial` | At least 90% match; joins drop the rest |
+| `refuted` | Fewer match: probably not a relationship |
+| `target_not_unique` | The referenced column repeats values, so the join multiplies rows |
+| `no_data` | The key column holds no values |
+
+**Where it is recorded:** on the relationship in the active ontology (a new version, generated or uploaded), with `oba:validationStatus`, `oba:validationMatchRatio`, `oba:validationCheckedRows` and `oba:validationCheckedAt`; in the RDF store; and in the workspace, so a regenerated ontology gets it back. `graphrag_find_join_path` shows each join's verdict, and warns about refuted, partial or non-unique ones.
+
+**Returns:** the verdict with its counts, the two queries run, and where it was recorded.
+
+---
+
+### 12. download_artifact
 
 Download a generated artifact -- the ontology or the R2RML mapping -- as a Turtle (`.ttl`) file with its full content.
 
@@ -369,7 +397,7 @@ Download a generated artifact -- the ontology or the R2RML mapping -- as a Turtl
 
 ---
 
-### 12. sample_table_data
+### 13. sample_table_data
 
 Safely sample rows from a specific table for data exploration and quality assessment.
 
@@ -391,7 +419,7 @@ Safely sample rows from a specific table for data exploration and quality assess
 
 ---
 
-### 13. execute_sql_query
+### 14. execute_sql_query
 
 Execute a SQL query with built-in validation, fan-trap protection, and automatic GraphRAG context enrichment.
 
@@ -429,7 +457,7 @@ Execute a SQL query with built-in validation, fan-trap protection, and automatic
 
 ---
 
-### 14. generate_chart
+### 15. generate_chart
 
 Generate interactive Plotly charts rendered via MCP Apps, or export as static PNG images.
 
@@ -462,7 +490,7 @@ Generate interactive Plotly charts rendered via MCP Apps, or export as static PN
 
 ---
 
-### 15. cleanup_workspace
+### 16. cleanup_workspace
 
 Delete all workspace files for the current database connection and clear session state. The database connection remains active.
 
@@ -480,7 +508,7 @@ Delete all workspace files for the current database connection and clear session
 
 ---
 
-### 16. save_semantic_model
+### 17. save_semantic_model
 
 Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse across sessions.
 
@@ -502,7 +530,7 @@ Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse ac
 
 ---
 
-### 17. get_semantic_model
+### 18. get_semantic_model
 
 Retrieve a stored semantic model YAML by name.
 
@@ -520,7 +548,7 @@ Retrieve a stored semantic model YAML by name.
 
 ---
 
-### 18. list_semantic_models
+### 19. list_semantic_models
 
 List all stored semantic models for the current database connection.
 
@@ -530,7 +558,7 @@ List all stored semantic models for the current database connection.
 
 ---
 
-### 19. graphrag_search
+### 20. graphrag_search
 
 Search the schema using natural language via GraphRAG semantic search, or return a schema overview. GraphRAG is auto-initialized by `discover_schema`.
 
@@ -554,7 +582,7 @@ Search the schema using natural language via GraphRAG semantic search, or return
 
 ---
 
-### 20. graphrag_query_context
+### 21. graphrag_query_context
 
 Get an optimized, minimal schema context for SQL generation, selecting only the tables and columns relevant to a natural-language query.
 
@@ -579,7 +607,7 @@ Get an optimized, minimal schema context for SQL generation, selecting only the 
 
 ---
 
-### 21. graphrag_find_join_path
+### 22. graphrag_find_join_path
 
 Discover a join path between two tables using GraphRAG graph traversal.
 
@@ -605,7 +633,7 @@ Discover a join path between two tables using GraphRAG graph traversal.
 
 ---
 
-### 22. store_ontology_in_rdf
+### 23. store_ontology_in_rdf
 
 Persist the current session's ontology in the Oxigraph RDF store so it can be queried with SPARQL. Usually unnecessary -- `generate_ontology` auto-persists by default -- but useful after loading or editing an ontology with auto-persist disabled.
 
@@ -625,7 +653,7 @@ Persist the current session's ontology in the Oxigraph RDF store so it can be qu
 
 ---
 
-### 23. query_sparql
+### 24. query_sparql
 
 Execute a SPARQL query against the RDF ontology store to explore classes, properties, relationships, and semantic metadata.
 
@@ -649,7 +677,7 @@ Execute a SPARQL query against the RDF ontology store to explore classes, proper
 
 ---
 
-### 24. add_rdf_knowledge
+### 25. add_rdf_knowledge
 
 Add a custom triple (subject-predicate-object) to the RDF store to enrich the ontology with bespoke metadata.
 
@@ -671,7 +699,7 @@ Add a custom triple (subject-predicate-object) to the RDF store to enrich the on
 
 ---
 
-### 25. cleanup_old_versions
+### 26. cleanup_old_versions
 
 Prune old ontology and GraphRAG versions for one schema according to the retention policy. Unlike `cleanup_workspace`, this keeps the current generation and recent history -- it deletes only *archived* versions that have aged out.
 

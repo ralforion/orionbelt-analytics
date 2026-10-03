@@ -156,6 +156,33 @@ oba:inferencePattern a owl:AnnotationProperty ;
     rdfs:range xsd:string .
 
 # =============================================================================
+# 4b. VALIDATION PROPERTIES (used on owl:ObjectProperty, set by validate_relationship)
+# =============================================================================
+# The verdict of checking a relationship against the data: how many non-null
+# key values exist in the referenced column, and whether that column is unique.
+# Recorded on inferred, declared and uploaded relationships alike.
+
+oba:validationStatus a owl:AnnotationProperty ;
+    rdfs:label "validation status" ;
+    rdfs:comment "Verdict of checking the relationship against the data: 'confirmed' (at least 99% of non-null keys match), 'partial' (at least 90%), 'refuted' (fewer), 'target_not_unique' (the referenced column repeats values, so the join multiplies rows) or 'no_data'." ;
+    rdfs:range xsd:string .
+
+oba:validationMatchRatio a owl:AnnotationProperty ;
+    rdfs:label "validation match ratio" ;
+    rdfs:comment "Share of non-null key values found in the referenced column, 0 to 1." ;
+    rdfs:range xsd:decimal .
+
+oba:validationCheckedRows a owl:AnnotationProperty ;
+    rdfs:label "validation checked rows" ;
+    rdfs:comment "Number of non-null key values the check counted." ;
+    rdfs:range xsd:integer .
+
+oba:validationCheckedAt a owl:AnnotationProperty ;
+    rdfs:label "validation checked at" ;
+    rdfs:comment "When the relationship was last checked against the data." ;
+    rdfs:range xsd:dateTime .
+
+# =============================================================================
 # 5. DENORMALIZATION PROPERTIES (used on owl:DatatypeProperty, flagged columns)
 # =============================================================================
 

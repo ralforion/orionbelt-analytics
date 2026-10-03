@@ -31,6 +31,7 @@ from .connection_scope import (
     pin_connection,
     still_connected,
 )
+from .ontology_validation import reapply_recorded
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +348,10 @@ async def generate_ontology(
     # so it does not freeze every concurrent session.
     ontology_ttl = await asyncio.to_thread(
         partial(generator.generate_from_schema, tables_info, views_info=views_info)
+    )
+    # Relationships checked with validate_relationship keep their verdicts.
+    ontology_ttl = await asyncio.to_thread(
+        reapply_recorded, generator, pinned.connection_id, schema_name, ontology_ttl
     )
 
     # Optional SHACL conformance check (Phase 4). Default on, gated by setting;
