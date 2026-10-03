@@ -162,6 +162,12 @@ async def discover_schema(
     )
 
     session = services.get_session_data(ctx)
+    if not schema_name:
+        # The connection's working schema, under its real name: results are
+        # qualified with it, which "default" or an empty name never allowed.
+        working = getattr(getattr(session, "db_manager", None), "working_schema", None)
+        if isinstance(working, str) and working:
+            schema_name = working
     effective_schema = schema_name or ""
 
     # Set current schema so per-schema state (ontology, GraphRAG) is isolated

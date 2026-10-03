@@ -110,6 +110,9 @@ async def connect_database(
     )
     success = False
     db_name = ""
+    # The schema the connection is configured for, if any; otherwise the
+    # database is asked once connected.
+    configured_schema: str | None = None
 
     if db_type == "postgresql":
         host = env("POSTGRES_HOST")
@@ -117,6 +120,7 @@ async def connect_database(
         database = env("POSTGRES_DATABASE")
         username = env("POSTGRES_USERNAME")
         password = env("POSTGRES_PASSWORD")
+        configured_schema = env("POSTGRES_SCHEMA")
 
         required_params = {
             "POSTGRES_HOST": host,
@@ -149,6 +153,7 @@ async def connect_database(
         warehouse = env("SNOWFLAKE_WAREHOUSE")
         database = env("SNOWFLAKE_DATABASE")
         schema = env("SNOWFLAKE_SCHEMA", "PUBLIC")
+        configured_schema = schema
 
         required_params = {
             "SNOWFLAKE_ACCOUNT": account,
@@ -220,6 +225,7 @@ async def connect_database(
         host = env("CLICKHOUSE_HOST")
         port = env("CLICKHOUSE_PORT", "8123")
         database = env("CLICKHOUSE_DATABASE")
+        configured_schema = database
         username = env("CLICKHOUSE_USERNAME", "default")
         password = env("CLICKHOUSE_PASSWORD", "")
         protocol = env("CLICKHOUSE_PROTOCOL", "http")
@@ -251,6 +257,7 @@ async def connect_database(
     elif db_type == "bigquery":
         project_id = env("BIGQUERY_PROJECT_ID")
         dataset = env("BIGQUERY_DATASET", "")
+        configured_schema = dataset or None
         credentials_path = env("BIGQUERY_CREDENTIALS_PATH")
         credentials_json = env("BIGQUERY_CREDENTIALS_JSON")
 
@@ -290,6 +297,7 @@ async def connect_database(
         access_token = env("DATABRICKS_ACCESS_TOKEN")
         catalog = env("DATABRICKS_CATALOG", "hive_metastore")
         schema = env("DATABRICKS_SCHEMA", "default")
+        configured_schema = schema
 
         required_params = {
             "DATABRICKS_SERVER_HOSTNAME": server_hostname,
@@ -317,6 +325,7 @@ async def connect_database(
         host = env("MYSQL_HOST")
         port = env("MYSQL_PORT", "3306")
         database = env("MYSQL_DATABASE")
+        configured_schema = database
         username = env("MYSQL_USERNAME")
         password = env("MYSQL_PASSWORD")
         charset = env("MYSQL_CHARSET", "utf8mb4")
@@ -395,6 +404,27 @@ async def connect_database(
         if not shared_with_others:
             session.clear_schema_cache()
 
+        # The schema tables are qualified with. Told to the caller and made
+        # the session's working schema: without a real name a client cannot
+        # write schema.table and has to go looking for one.
+        # Asked of the manager the session is bound to: binding may have kept
+        # another session's open manager and discarded the fresh one.
+        bound = session.db_manager or db_manager
+        resolve = getattr(bound, "resolve_working_schema", None)
+        working_schema = configured_schema or (
+            await run_db(resolve) if resolve is not None else None
+        )
+        if not isinstance(working_schema, str) or not working_schema:
+            working_schema = None
+        for manager in {
+            id(db_manager): db_manager,
+            id(session.db_manager): session.db_manager,
+        }.values():
+            if manager is not None:
+                manager.working_schema = working_schema
+        if working_schema:
+            session.set_current_schema(working_schema)
+
         await notify_client(ctx, f"Connected to {label}: {db_name}")
 
         # Write workspace connection info
@@ -411,6 +441,12 @@ async def connect_database(
 
         # Detect and auto-restore existing workspace
         response = f"Successfully connected to {label} database: {db_name}"
+        if working_schema:
+            response += (
+                f"\nWorking schema: {working_schema} -- qualify tables as "
+                f"{working_schema}.<table>; discover_schema() without a schema "
+                "analyzes it."
+            )
         workspace = detect_workspace(new_conn_id)
         if workspace and services.provides("get_oxigraph_store"):
             try:
