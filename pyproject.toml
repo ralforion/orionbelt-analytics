@@ -79,6 +79,11 @@ dependencies = [
     "numpy>=1.24.0",
     # ChromaDB for efficient vector storage (replaces JSON files)
     "chromadb>=0.4.0",
+    # Multilingual embedding model (src/graphrag/multilingual.py). All three
+    # also arrive with chromadb; declared because the module imports them.
+    "onnxruntime>=1.20",
+    "tokenizers>=0.20",
+    "huggingface-hub>=0.25",
     # Oxigraph RDF store for SPARQL endpoint
     "pyoxigraph>=0.5,<0.6",
     # NLP word frequency for cryptic name detection
@@ -233,6 +238,7 @@ module = [
     "community.*",
     "pandas.*",
     "networkx.*",
+    "onnxruntime.*",
 ]
 ignore_missing_imports = true
 

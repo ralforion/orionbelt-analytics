@@ -62,6 +62,13 @@ RUN HOME=/opt/model-home /opt/venv/bin/python -c \
     && rm -f /opt/model-home/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx.tar.gz \
     && test -f /opt/model-home/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx/model.onnx
 
+# The multilingual model (GRAPHRAG_EMBEDDING_MODEL=multilingual), for the same
+# reason: a deployment that chooses it must not need huggingface.co at
+# runtime. Fetched by the server's own loader, which pins the revision and
+# checks each file's SHA-256 (src/graphrag/multilingual.py). 118 MB.
+RUN HOME=/opt/model-home /opt/venv/bin/python -c \
+        "from src.graphrag.multilingual import model_files; model_files()"
+
 # Collect the verbatim licence text of every bundled dependency into a single
 # file. The image redistributes the whole production closure, so MIT/BSD/Apache
 # attribution clauses apply to it in a way they do not to the PyPI wheel, which
@@ -115,6 +122,7 @@ RUN useradd --create-home --uid 1000 oba \
 # ~/.cache/chroma. With it present the server never contacts the download
 # location, so the image works without outbound internet access.
 COPY --from=builder --chown=oba:oba /opt/model-home/.cache/chroma /home/oba/.cache/chroma
+COPY --from=builder --chown=oba:oba /opt/model-home/.cache/huggingface /home/oba/.cache/huggingface
 
 USER oba
 

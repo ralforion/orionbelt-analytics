@@ -2986,9 +2986,11 @@ dependencies = [
     { name = "duckdb" },
     { name = "duckdb-engine" },
     { name = "fastmcp", extra = ["apps"] },
+    { name = "huggingface-hub" },
     { name = "kaleido" },
     { name = "networkx" },
     { name = "numpy" },
+    { name = "onnxruntime" },
     { name = "owlrl" },
     { name = "pandas" },
     { name = "pillow" },
@@ -3006,6 +3008,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "sqlalchemy-bigquery" },
     { name = "sqlglot" },
+    { name = "tokenizers" },
     { name = "wordfreq" },
 ]
 
@@ -3038,9 +3041,11 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.1.0" },
     { name = "duckdb-engine", specifier = ">=0.13.0" },
     { name = "fastmcp", extras = ["apps"], specifier = ">=4.0.5,<5" },
+    { name = "huggingface-hub", specifier = ">=0.25" },
     { name = "kaleido", specifier = ">=1.2.0" },
     { name = "networkx", specifier = ">=3.1" },
     { name = "numpy", specifier = ">=1.24.0" },
+    { name = "onnxruntime", specifier = ">=1.20" },
     { name = "owlrl", specifier = ">=7.1.4" },
     { name = "pandas", specifier = ">=2.2.3" },
     { name = "pillow", specifier = ">=12.1.1" },
@@ -3058,6 +3063,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.46" },
     { name = "sqlalchemy-bigquery", specifier = ">=1.11.0" },
     { name = "sqlglot", specifier = ">=28.10.1" },
+    { name = "tokenizers", specifier = ">=0.20" },
     { name = "wordfreq", specifier = ">=3.1.1" },
 ]
 

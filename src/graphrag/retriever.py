@@ -161,6 +161,26 @@ class GraphRetriever:
         matches = [n for n in self._by_name if n.casefold() == folded]
         return matches[0] if len(matches) == 1 else None
 
+    def every_table_for(self, name: str) -> set[str]:
+        """Every table a name could mean, with no preference between them.
+
+        :meth:`resolve_name` prefers an exact identity, so ``sales.net`` means
+        table ``net`` in schema ``sales`` even when a table is literally named
+        ``sales.net``. That is the right answer for a caller asking for one
+        table; a caller that must know whether a name is ambiguous needs both.
+
+        Args:
+            name: A bare table name or a qualified identity.
+
+        Returns:
+            The identities of all tables with that bare name, plus the name
+            itself if it is the identity of a table.
+        """
+        found = set(self._by_name.get(name, ()))
+        if name in self.graph:
+            found.add(name)
+        return found
+
     def identity_for(self, name: str, current_schema: str | None = None) -> str:
         """The node *name* refers to, or *name* itself when nothing matches.
 

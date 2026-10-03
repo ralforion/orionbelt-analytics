@@ -36,7 +36,8 @@ discover_schema()
     |  - Generates vectors for tables, columns, and relationships
     |  - Text representation includes table names, column names/types,
     |    comments, and FK context
-    |  - Uses TF-IDF by default (sentence-transformers optional)
+    |  - all-MiniLM-L6-v2 by default, run locally (ONNX); `multilingual`
+    |    for questions in another language than the schema; TF-IDF fallback
     |
     v
 2. Build Vector Store
@@ -87,7 +88,7 @@ Once initialized, GraphRAG exposes these MCP tools:
 
 - **`graphrag_search(query, top_k, element_type)`** -- Semantic search across the schema. Returns matching tables, columns, or relationships ranked by similarity score.
 
-- **`graphrag_query_context(query, max_tables, max_columns)`** -- The primary RAG retrieval function. Returns a minimal, optimized context dictionary with relevant tables, columns, join paths, and fan-trap warnings. Includes a token estimate so the LLM can gauge context window usage.
+- **`graphrag_query_context(query, max_tables, max_columns)`** -- The primary RAG retrieval function. Returns a minimal, optimized context dictionary with relevant tables, columns, join paths, and fan-trap warnings. Includes a token estimate so the LLM can gauge context window usage. Business names (from `apply_semantic_names` or `graphrag_add_semantic_context`) compete with the schema's own names here: a table or column found through one carries it as `matched_business_name` / `business_name`, so "revenue" reaches a column named `net_amt` once it has been named "Net revenue". Names that fit tables in two schemas are left out rather than guessed.
 
 - **`graphrag_find_join_path(from_table, to_table, max_hops)`** -- Finds the shortest join path between any two tables. Tries directed paths in both directions and an undirected view, then picks the shortest. Returns full join specifications with column mappings.
 
