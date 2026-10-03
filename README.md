@@ -47,7 +47,7 @@ Run Analytics and Semantic Layer side-by-side in Claude Desktop for schema-aware
 
 - **8 database connectors** -- PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB/MotherDuck, Databricks SQL
 - **RDF/OWL ontology generation** with `oba:` namespace SQL annotations and W3C R2RML mappings
-- **GraphRAG** -- graph traversal (up to 12 hops) + ChromaDB vector embeddings for semantic schema discovery
+- **GraphRAG** -- graph traversal (up to 12 hops) + ChromaDB vector embeddings for semantic schema discovery, run locally; a [multilingual option](docs/configuration.md#embedding-model) lets questions in other languages find the schema (German *"Umsatz"* finds a column named *"Net revenue"*)
 - **SPARQL 1.1** query interface via persistent Oxigraph RDF store
 - **OBQC validation** -- deterministic SQL checks against the ontology (table/column existence, join validity, type mismatches, fan-traps)
 - **Interactive charting** -- Plotly charts with MCP-UI rendering in Claude Desktop
