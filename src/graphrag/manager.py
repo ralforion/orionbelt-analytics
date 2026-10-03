@@ -1266,14 +1266,12 @@ def _resolve_target(
         reading fits -- counting a table in two schemas as two readings.
     """
 
-    def tables(name: str) -> list[str]:
-        # Every table the name could be, an ambiguous name included: a reading
-        # through a table in two schemas is still a reading, and dropping it
-        # made another, wrong reading look unique.
-        found = graph.resolve_name(name)
-        if found.ambiguous:
-            return list(found.candidates)
-        return [found.identity] if found.identity is not None else []
+    def tables(name: str) -> set[str]:
+        # Every table the name could be: a table in two schemas is two
+        # readings, and a name like "sales.net" is both the table literally
+        # called that and table "net" in schema "sales". Dropping either made
+        # another, wrong reading look unique.
+        return graph.every_table_for(name)
 
     def has_column(identity: str, column: str) -> bool:
         meta = graph.get_table_metadata(identity) or {}

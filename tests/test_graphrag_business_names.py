@@ -339,6 +339,36 @@ class TestDottedNames:
             "net.amount",
         )
 
+    def test_a_dotted_name_and_a_schema_qualified_one_collide(self):
+        # gold."sales.net" and table net in schema sales: both are "sales.net".
+        graph = self._graph(
+            self._table("sales.net", "gold", "amount"),
+            self._table("net", "sales", "amount"),
+        )
+
+        assert _resolve_target("sales.net", graph) is None
+        assert _resolve_target("sales.net.amount", graph) is None
+
+    def test_a_collision_without_the_column_does_not_block(self):
+        graph = self._graph(
+            self._table("sales.net", "gold", "amount"),
+            self._table("net", "sales", "other"),
+        )
+
+        assert _resolve_target("sales.net.amount", graph) == (
+            qualified("gold", "sales.net"),
+            "amount",
+        )
+
+    def test_a_schema_qualified_target_still_resolves(self):
+        graph = GraphRetriever()
+        graph.build_graph(TABLES)
+
+        assert _resolve_target("gold.orders.net_amt", graph) == (
+            "gold.orders",
+            "net_amt",
+        )
+
 
 @needs_minilm
 def test_column_matches_are_not_capped_by_the_table_limit(monkeypatch):
