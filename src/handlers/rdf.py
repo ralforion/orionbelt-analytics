@@ -182,7 +182,9 @@ async def query_sparql(
 
     try:
         if query_type == "ASK":
-            result = store.query_sparql_ask(sparql_query)
+            # Off the event loop: checking and running a query can take
+            # seconds, and every other request waits while the loop is held.
+            result = await asyncio.to_thread(store.query_sparql_ask, sparql_query)
             await notify_client(ctx, f"SPARQL ASK query returned: {result}")
             return {
                 "success": True,
@@ -200,7 +202,10 @@ async def query_sparql(
                 "query": sparql_query,
             }
         else:
-            results = store.query_sparql(sparql_query, timeout_seconds=timeout_seconds)
+            # The timeout wait happens in the worker thread, not on the loop.
+            results = await asyncio.to_thread(
+                store.query_sparql, sparql_query, timeout_seconds=timeout_seconds
+            )
             await notify_client(ctx, f"SPARQL query returned {len(results)} results")
             return {
                 "success": True,
@@ -229,7 +234,7 @@ async def query_sparql_ask(
         return StoreNotInitializedError("Oxigraph store not initialized").to_response()
 
     try:
-        result = store.query_sparql_ask(sparql_query)
+        result = await asyncio.to_thread(store.query_sparql_ask, sparql_query)
 
         return {"success": True, "result": result, "query": sparql_query}
 
