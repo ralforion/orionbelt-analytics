@@ -638,6 +638,7 @@ async def validate_relationship(
     from_table: _Identifier,
     column: _Identifier,
     to_table: _Identifier | None = None,
+    from_schema: _Identifier | None = None,
 ) -> dict[str, Any]:
     """Check a relationship in the ontology against the data, and record the verdict.
 
@@ -659,13 +660,19 @@ async def validate_relationship(
         column: The key column, e.g. 'purchasesupplier'
         to_table: The referenced table; needed only if the column references
             several tables
+        from_schema: Schema of from_table; needed only if two schemas hold it
 
     Returns:
         The verdict with its counts, the queries run, and where it was recorded
     """
     async with _writer_lock(ctx):
         return await _h_validation.validate_relationship(
-            ctx, from_table, column, to_table, services=_services()
+            ctx,
+            from_table,
+            column,
+            to_table,
+            services=_services(),
+            from_schema=from_schema,
         )
 
 

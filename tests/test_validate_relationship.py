@@ -104,7 +104,9 @@ class TestQueries:
 
 def test_joins_show_their_recorded_verdict_in_either_direction():
     verdicts = {
-        relationship_key("purchases", "supplier_id", "suppliers"): {
+        relationship_key(
+            "main", "purchases", "supplier_id", "main", "suppliers", "id"
+        ): {
             "status": "confirmed",
             "match_ratio": 1.0,
             "checked_at": "2026-10-03T00:00:00+00:00",
@@ -132,6 +134,83 @@ def test_joins_show_their_recorded_verdict_in_either_direction():
 
     assert forward[0]["validation"]["status"] == "confirmed"
     assert backward[0]["validation"]["status"] == "confirmed"
+
+    # The same table names in another schema are other tables.
+    elsewhere = [
+        {
+            "from_table": "archive.purchases",
+            "from_column": "supplier_id",
+            "to_table": "archive.suppliers",
+            "to_column": "id",
+        }
+    ]
+    _attach_validations(elsewhere, verdicts)
+    assert "validation" not in elsewhere[0]
+
+
+def _graph_with_relationship(ref_schema: str | None, ref_column: str = "id") -> Graph:
+    """purchases.supplier_id -> suppliers, with a local suppliers class as range."""
+    from rdflib import URIRef
+    from rdflib.namespace import OWL, RDF, RDFS
+
+    graph = Graph()
+    purchases, suppliers, prop = (
+        URIRef("http://e/Purchases"),
+        URIRef("http://e/Suppliers"),
+        URIRef("http://e/purchases_has_suppliers"),
+    )
+    graph.add((purchases, RDF.type, OWL.Class))
+    graph.add((purchases, OBA.tableName, Literal("purchases")))
+    graph.add((purchases, OBA.schemaName, Literal("sales")))
+    graph.add((suppliers, RDF.type, OWL.Class))
+    graph.add((suppliers, OBA.tableName, Literal("suppliers")))
+    graph.add((suppliers, OBA.schemaName, Literal("sales")))
+    graph.add((prop, RDF.type, OWL.ObjectProperty))
+    graph.add((prop, RDFS.domain, purchases))
+    graph.add((prop, RDFS.range, suppliers))
+    graph.add((prop, OBA.foreignKeyColumn, Literal("supplier_id")))
+    graph.add((prop, OBA.referencedTable, Literal("suppliers")))
+    graph.add((prop, OBA.referencedColumn, Literal(ref_column)))
+    if ref_schema:
+        graph.add((prop, OBA.referencedSchema, Literal(ref_schema)))
+    return graph
+
+
+def test_the_relationships_own_target_schema_wins():
+    from src.relationship_validation import find_relationships
+
+    (ref,) = find_relationships(
+        _graph_with_relationship("crm"), "purchases", "supplier_id"
+    )
+
+    assert (ref.from_schema, ref.to_schema) == ("sales", "crm")
+    coverage, _ = build_check_queries(ref, "postgresql")
+    assert '"crm"."suppliers"' in coverage
+
+
+def test_a_verdict_is_not_reapplied_once_the_target_column_changed():
+    from src.relationship_validation import ValidationRecord, apply_recorded
+
+    record = ValidationRecord(
+        from_schema="sales",
+        from_table="purchases",
+        column="supplier_id",
+        to_schema="sales",
+        to_table="suppliers",
+        to_column="id",
+        status=STATUS_CONFIRMED,
+        match_ratio=1.0,
+        checked_rows=4,
+        matched_rows=4,
+        target_rows=3,
+        target_distinct=3,
+        checked_at="2026-10-03T00:00:00+00:00",
+    )
+    renamed = _graph_with_relationship(None, ref_column="legacy_id")
+    unchanged = _graph_with_relationship(None)
+
+    assert apply_recorded(renamed, {record.key(): record.as_dict()}) == 0
+    assert apply_recorded(unchanged, {record.key(): record.as_dict()}) == 1
 
 
 # --- end to end over MCP, against a DuckDB file ---
@@ -245,3 +324,38 @@ async def test_a_relationship_the_ontology_does_not_state_is_refused(shop):
         )
 
     assert "relationship_not_found" in _text(result)
+
+
+async def test_the_verdict_lands_in_the_active_ontologys_own_graph(shop):
+    graph = "urn:review:active-ontology"
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {**on, "schema_name": "main", "graph_uri": graph}
+        )
+
+        verdict = (
+            await client.call_tool(
+                "validate_relationship",
+                {**on, "from_table": "purchases", "column": "supplier_id"},
+            )
+        ).data
+        found = (
+            await client.call_tool(
+                "query_sparql",
+                {
+                    **on,
+                    "sparql_query": (
+                        "PREFIX oba: <https://ralforion.com/ns/oba#> "
+                        f"SELECT ?s WHERE {{ GRAPH <{graph}> "
+                        "{ ?p oba:validationStatus ?s } }"
+                    ),
+                },
+            )
+        ).data
+
+    assert verdict["recorded_in"]["rdf_graph"] == graph
+    assert {row["s"] for row in found["results"]} == {STATUS_CONFIRMED}

@@ -115,6 +115,19 @@ def reapply_recorded(
     return generator.serialize_ontology()
 
 
+def _recorded_graph_uri(connection_id: str | None, schema_name: str) -> str | None:
+    """The named graph the workspace records for the schema's ontology."""
+    if not connection_id:
+        return None
+    try:
+        manager = VersionMetadataManager(connection_id, OUTPUT_DIR)
+        schema_ws = manager.get_workspace_schema(schema_name) or {}
+    except Exception:
+        return None
+    value = (schema_ws.get("ontology") or {}).get("graph_uri")
+    return str(value) if value else None
+
+
 def _first_row(result: dict[str, Any]) -> list[Any]:
     """The first row's values in column order.
 
@@ -151,6 +164,7 @@ async def validate_relationship(
     column: str,
     to_table: str | None,
     services: "HandlerContext",
+    from_schema: str | None = None,
 ) -> dict[str, Any]:
     """Check one relationship against the data and record the verdict.
 
@@ -160,6 +174,7 @@ async def validate_relationship(
         column: The key column.
         to_table: The referenced table, when the column has several.
         services: Request-scoped services.
+        from_schema: The key table's schema, when two schemas hold the table.
 
     Returns:
         The verdict, the counts behind it, and where it was recorded.
@@ -182,7 +197,9 @@ async def validate_relationship(
         )
         return err
 
-    refs = find_relationships(generator.graph, from_table, column, to_table)
+    refs = find_relationships(
+        generator.graph, from_table, column, to_table, from_schema
+    )
     if not refs:
         err = services.create_error_response(
             f"The ontology states no relationship from {from_table}.{column}"
@@ -192,10 +209,17 @@ async def validate_relationship(
             "relationship_not_found",
         )
         return err
-    if len({r.to_table.lower() for r in refs}) > 1:
+    readings = sorted(
+        {
+            f"{r.from_schema or ''}.{r.from_table}.{r.column} -> "
+            f"{r.to_schema or ''}.{r.to_table}.{r.to_column}"
+            for r in refs
+        }
+    )
+    if len(readings) > 1:
         err = services.create_error_response(
-            f"{from_table}.{column} references several tables: "
-            f"{', '.join(sorted({r.to_table for r in refs}))}. Pass to_table.",
+            f"{from_table}.{column} names several relationships: "
+            f"{'; '.join(readings)}. Pass to_table and/or from_schema.",
             "ambiguous_relationship",
         )
         return err
@@ -230,8 +254,10 @@ async def validate_relationship(
     target_distinct = _count(uniqueness[1] if len(uniqueness) > 1 else 0)
     status, ratio = classify(checked, matched, target_rows, target_distinct)
     record = ValidationRecord(
+        from_schema=ref.from_schema,
         from_table=ref.from_table,
         column=ref.column,
+        to_schema=ref.to_schema,
         to_table=ref.to_table,
         to_column=ref.to_column,
         status=status,
@@ -314,17 +340,23 @@ async def validate_relationship(
                 path, protect=[previous] if previous else []
             )
 
+    # The graph the active ontology lives in: generate_ontology(graph_uri=...)
+    # or load_my_ontology may have chosen one. Writing to the schema's default
+    # instead left the active graph unvalidated and could overwrite another.
+    graph_uri = (
+        session.ontology_graph_uri
+        or _recorded_graph_uri(pinned.connection_id, schema_name)
+        or schema_graph_uri(schema_name)
+    )
     persisted = False
     if OXIGRAPH_AVAILABLE and services.provides("get_oxigraph_store"):
         try:
             store = services.get_oxigraph_store(ctx)
             if store is not None:
                 await asyncio.to_thread(
-                    store.load_ontology,
-                    ontology_ttl,
-                    schema_graph_uri(schema_name),
-                    schema_name,
+                    store.load_ontology, ontology_ttl, graph_uri, schema_name
                 )
+                session.ontology_graph_uri = graph_uri
                 persisted = True
         except Exception as e:
             logger.warning(f"Could not refresh the RDF store: {e}")
@@ -338,7 +370,10 @@ async def validate_relationship(
     return {
         "success": True,
         "relationship": (
-            f"{ref.from_table}.{ref.column} -> {ref.to_table}.{ref.to_column}"
+            f"{ref.from_schema + '.' if ref.from_schema else ''}{ref.from_table}"
+            f".{ref.column} -> "
+            f"{ref.to_schema + '.' if ref.to_schema else ''}{ref.to_table}"
+            f".{ref.to_column}"
         ),
         "status": status,
         "meaning": _MEANING[status],
@@ -352,6 +387,7 @@ async def validate_relationship(
             "ontology_file": filename,
             "active_ontology": "uploaded" if is_upload else "generated",
             "rdf_store": persisted,
+            "rdf_graph": graph_uri if persisted else None,
             "kept_across_regeneration": bool(pinned.connection_id),
         },
         "queries": [coverage_sql, uniqueness_sql],

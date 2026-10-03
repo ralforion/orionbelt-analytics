@@ -551,6 +551,7 @@ async def generate_ontology(
                                 f"Auto-persisted ontology to Oxigraph: "
                                 f"{triple_count} triples in graph <{graph_uri}>"
                             )
+                            session.ontology_graph_uri = graph_uri
                         else:
                             logger.info(
                                 "Skipped RDF auto-persist: a newer ontology "

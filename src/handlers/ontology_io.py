@@ -363,6 +363,8 @@ async def load_my_ontology(
                         ontology_content, graph_uri, schema_name
                     )
                     stored_in_rdf = True
+                    if activated:
+                        session.ontology_graph_uri = used_graph_uri
 
                     logger.info(
                         f"Auto-persisted ontology to Oxigraph: {triple_count} triples in graph <{graph_uri}>"

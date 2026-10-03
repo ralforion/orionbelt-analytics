@@ -65,8 +65,10 @@ class RelationshipRef:
 class ValidationRecord:
     """What a check found, as recorded in the ontology and the workspace."""
 
+    from_schema: str | None
     from_table: str
     column: str
+    to_schema: str | None
     to_table: str
     to_column: str
     status: str
@@ -79,16 +81,43 @@ class ValidationRecord:
 
     def key(self) -> str:
         """Identity of the relationship, independent of name case."""
-        return relationship_key(self.from_table, self.column, self.to_table)
+        return relationship_key(
+            self.from_schema,
+            self.from_table,
+            self.column,
+            self.to_schema,
+            self.to_table,
+            self.to_column,
+        )
 
     def as_dict(self) -> dict[str, Any]:
         """The record as plain data, for metadata and tool results."""
         return asdict(self)
 
 
-def relationship_key(from_table: str, column: str, to_table: str) -> str:
-    """The key a relationship's validation is filed under."""
-    return f"{from_table.lower()}.{column.lower()}->{to_table.lower()}"
+def relationship_key(
+    from_schema: str | None,
+    from_table: str,
+    column: str,
+    to_schema: str | None,
+    to_table: str,
+    to_column: str,
+) -> str:
+    """The key a relationship's validation is filed under.
+
+    Both ends in full -- schema, table and column -- so a verdict never moves
+    to a same-named table in another schema, nor survives its target column
+    changing (``id`` to ``legacy_id``).
+    """
+    parts = (
+        from_schema or "",
+        from_table,
+        column,
+        to_schema or "",
+        to_table,
+        to_column,
+    )
+    return "|".join(part.lower() for part in parts)
 
 
 def _table(schema: str | None, table: str, alias: str) -> exp.Table:
@@ -194,6 +223,7 @@ def find_relationships(
     from_table: str,
     column: str,
     to_table: str | None = None,
+    from_schema: str | None = None,
 ) -> list[RelationshipRef]:
     """The ontology's relationships from a key column, matched ignoring case.
 
@@ -202,6 +232,7 @@ def find_relationships(
         from_table: Table holding the key.
         column: The key column.
         to_table: The referenced table, to choose between several.
+        from_schema: The key table's schema, to choose between several.
 
     Returns:
         Every matching relationship that names its columns and tables.
@@ -222,9 +253,16 @@ def find_relationships(
             continue
         if to_table and ref_table.lower() != to_table.lower():
             continue
+        domain_schema = _literal(graph, domain, OBA.schemaName)
+        if from_schema and (domain_schema or "").lower() != from_schema.lower():
+            continue
+        # The relationship's own statement of where its target lives comes
+        # first: its range class may be a same-named table in another schema.
         range_class = graph.value(prop, RDFS.range)
         to_schema = (
-            _literal(graph, range_class, OBA.schemaName) if range_class else None
+            _literal(graph, prop, OBA.referencedSchema)
+            or (_literal(graph, range_class, OBA.schemaName) if range_class else None)
+            or domain_schema
         )
         found.append(
             RelationshipRef(
@@ -232,7 +270,7 @@ def find_relationships(
                 column=fk_column,
                 to_table=ref_table,
                 to_column=_literal(graph, prop, OBA.referencedColumn) or "id",
-                from_schema=_literal(graph, domain, OBA.schemaName),
+                from_schema=domain_schema,
                 to_schema=to_schema,
                 property_uri=str(prop),
             )
@@ -254,7 +292,23 @@ def record_in_graph(graph: Graph, record: ValidationRecord) -> int:
         How many properties carry it now; 0 if the ontology no longer states
         the relationship.
     """
-    refs = find_relationships(graph, record.from_table, record.column, record.to_table)
+    refs = [
+        ref
+        for ref in find_relationships(
+            graph, record.from_table, record.column, record.to_table
+        )
+        # The same relationship end to end: a changed target column or schema
+        # is a different claim, which this verdict says nothing about.
+        if relationship_key(
+            ref.from_schema,
+            ref.from_table,
+            ref.column,
+            ref.to_schema,
+            ref.to_table,
+            ref.to_column,
+        )
+        == record.key()
+    ]
     for ref in refs:
         prop = URIRef(ref.property_uri)
         for predicate in VALIDATION_PROPERTIES:

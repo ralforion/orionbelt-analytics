@@ -1130,11 +1130,25 @@ def _attach_validations(
     if not verdicts:
         return
     for join in joins:
-        left = split(join["from_table"])[1]
-        right = split(join["to_table"])[1]
+        left_schema, left = split(join["from_table"])
+        right_schema, right = split(join["to_table"])
         for key in (
-            relationship_key(left, join["from_column"], right),
-            relationship_key(right, join["to_column"], left),
+            relationship_key(
+                left_schema,
+                left,
+                join["from_column"],
+                right_schema,
+                right,
+                join["to_column"],
+            ),
+            relationship_key(
+                right_schema,
+                right,
+                join["to_column"],
+                left_schema,
+                left,
+                join["from_column"],
+            ),
         ):
             verdict = verdicts.get(key)
             if verdict:
