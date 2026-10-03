@@ -164,3 +164,46 @@ async def test_restore_keeps_the_working_schema_and_says_what_it_covers(
     session = duck.session_for_handle(_handle(reconnected))
     assert session.current_schema == "main"
     assert "working schema 'main' has nothing restored" in reconnected
+
+
+async def test_after_restore_generation_targets_the_working_schema(duck, monkeypatch):
+    import sys
+
+    from src.workspace import detect_workspace
+
+    output_dir = connection_handler.OUTPUT_DIR
+    for name, module in list(sys.modules.items()):
+        if name.startswith("src") and hasattr(module, "OUTPUT_DIR"):
+            monkeypatch.setattr(module, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(connection_handler, "detect_workspace", detect_workspace)
+    async with Client(mcp) as client:
+        first = _handle(
+            _text(await client.call_tool("connect_database", {"db_type": "duckdb"}))
+        )
+        # A fully discovered archive workspace: schema and ontology.
+        await client.call_tool(
+            "discover_schema",
+            {"connection": first, "schema_name": "archive", "lightweight": False},
+        )
+        await client.call_tool(
+            "generate_ontology",
+            {"connection": first, "schema_name": "archive", "auto_persist": False},
+        )
+
+    # A server restart: nothing in memory, the workspace on disk.
+    duck.cleanup()
+    restarted = ServerState()
+    monkeypatch.setattr(state_module, "_server_state", restarted)
+    monkeypatch.setattr(main_module, "_server_state", restarted)
+    async with Client(mcp) as client:
+        second = _handle(
+            _text(await client.call_tool("connect_database", {"db_type": "duckdb"}))
+        )
+        await client.call_tool(
+            "generate_ontology", {"connection": second, "auto_persist": False}
+        )
+
+    session = restarted.session_for_handle(second)
+    assert session.get_last_analyzed_schema() == "main"
+    assert session.current_schema == "main"
+    assert session.ontology_file and "_main_" in session.ontology_file

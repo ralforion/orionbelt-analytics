@@ -450,10 +450,13 @@ async def connect_database(
                     restore_result = await _restore_workspace_core(
                         ctx, session, new_conn_id, None, services
                     )
-                # The restore selects a schema of its own; the one announced
-                # above is the one the session works in.
+                # The restore selects a schema of its own, and points the
+                # session's default target at the last one it restored; the
+                # one announced above is the one the session works in, for
+                # discovery and for a parameterless generate_ontology() alike.
                 if working_schema:
                     session.set_current_schema(working_schema)
+                    session.mark_schema_analyzed(working_schema)
                 if restore_result:
                     response += "\n\n" + _format_restore_summary(restore_result)
                     restored = restore_result.get(
