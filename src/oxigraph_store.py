@@ -565,8 +565,8 @@ class OxigraphStoreManager:
                 timeout is best-effort: the caller is unblocked, but the orphaned
                 query keeps running in the background until it finishes on its own.
         """
-        reject_federation(sparql_query)
         if timeout_seconds is None:
+            reject_federation(sparql_query)
             return self._execute_select(sparql_query)
 
         result: list[list[dict[str, Any]]] = []
@@ -574,6 +574,10 @@ class OxigraphStoreManager:
 
         def _runner() -> None:
             try:
+                # Inside the worker, so the deadline covers the federation
+                # check too: parsing a large query takes seconds, and waiting
+                # on another query's parse for the lock can take as long.
+                reject_federation(sparql_query)
                 result.append(self._execute_select(sparql_query))
             except BaseException as exc:
                 error.append(exc)

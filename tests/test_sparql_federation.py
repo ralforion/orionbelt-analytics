@@ -9,6 +9,7 @@ store refuses the keyword itself.
 
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 
 import pytest
 
@@ -294,3 +295,74 @@ class TestTheGrammarGateAlone:
     )
     def test_ordinary_queries_pass(self, query):
         reject_federation(query)
+
+
+class TestTheCheckRunsWithinTheDeadline:
+    """Parsing a large query takes seconds; it must neither outrun the timeout
+    nor hold the event loop while it runs."""
+
+    def _slow_check(self, monkeypatch: Any, seconds: float) -> None:
+        import time
+
+        import src.oxigraph_store as store_module
+
+        real = store_module._grammar_finds_service
+
+        def slow(query: str) -> bool:
+            time.sleep(seconds)
+            return real(query)
+
+        monkeypatch.setattr(store_module, "_grammar_finds_service", slow)
+
+    def test_the_timeout_covers_the_federation_check(self, monkeypatch):
+        import time
+
+        from src.oxigraph_store import OxigraphStoreManager
+
+        self._slow_check(monkeypatch, 2.0)
+        store = OxigraphStoreManager()
+
+        started = time.perf_counter()
+        with pytest.raises(TimeoutError):
+            store.query_sparql("SELECT * WHERE { ?s ?p ?o }", timeout_seconds=0.3)
+
+        assert time.perf_counter() - started < 1.0
+
+    @pytest.mark.parametrize("form", ["SELECT", "ASK"])
+    async def test_the_event_loop_keeps_serving_while_a_query_is_checked(
+        self, monkeypatch, form
+    ):
+        import asyncio
+        import time
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock
+
+        import src.handlers.rdf as rdf
+        from src.oxigraph_store import OxigraphStoreManager
+
+        self._slow_check(monkeypatch, 0.6)
+        monkeypatch.setattr(rdf, "notify_client", AsyncMock())
+        store = OxigraphStoreManager()
+        services = SimpleNamespace(get_oxigraph_store=lambda _ctx: store)
+        query = (
+            "SELECT * WHERE { ?s ?p ?o }" if form == "SELECT" else "ASK { ?s ?p ?o }"
+        )
+
+        gaps: list[float] = []
+
+        async def heartbeat() -> None:
+            last = time.perf_counter()
+            for _ in range(20):
+                await asyncio.sleep(0.05)
+                now = time.perf_counter()
+                gaps.append(now - last)
+                last = now
+
+        beat = asyncio.create_task(heartbeat())
+        await asyncio.sleep(0.01)  # let the heartbeat start ticking first
+        result = await rdf.query_sparql(Mock(), query, 5, services)
+        await beat
+
+        assert result["success"] is True, result
+        # A held loop shows as one gap as long as the check (0.6s).
+        assert max(gaps) < 0.3
