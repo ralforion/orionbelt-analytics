@@ -12,6 +12,8 @@ A few packages ship no licence file of their own. Rather than being dropped from
 
 The image also contains a Debian base with system packages (chromium, libpq5, fonts). Their copyright files remain in place under `/usr/share/doc/*/copyright` and are not duplicated here.
 
+It also contains the GraphRAG embedding model **all-MiniLM-L6-v2** (sentence-transformers, https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2), in the ONNX export distributed by Chroma, under `/home/oba/.cache/chroma/onnx_models/all-MiniLM-L6-v2/`. It is licensed under the Apache License 2.0, whose text is included in `licenses/THIRD_PARTY_LICENSES.txt`, and is included unmodified.
+
 ## Licences requiring specific attention
 
 ### psycopg2-binary — LGPL-3.0-or-later, with exceptions

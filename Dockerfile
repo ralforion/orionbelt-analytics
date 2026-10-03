@@ -47,6 +47,21 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
 RUN uv sync --frozen --no-dev
 
+# Bake in the GraphRAG embedding model (all-MiniLM-L6-v2, ONNX). chromadb
+# downloads it on first use from its own S3 bucket into ~/.cache/chroma; in a
+# container that meant every fresh container fetched ~80 MB at runtime, and in
+# a network without internet access the download failed and the server fell
+# back to keyword-only TF-IDF search -- working, but much weaker, and easy to
+# miss. Fetching it here uses chromadb's own loader, so the archive is checked
+# against the SHA-256 chromadb pins, and unpacked exactly as at runtime. Once
+# the unpacked files exist chromadb never reads the archive again, so it is
+# removed. HOME is pointed at a staging directory the runtime stage copies
+# from.
+RUN HOME=/opt/model-home /opt/venv/bin/python -c \
+        "from chromadb.utils.embedding_functions import DefaultEmbeddingFunction as F; F()(['probe'])" \
+    && rm -f /opt/model-home/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx.tar.gz \
+    && test -f /opt/model-home/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx/model.onnx
+
 # Collect the verbatim licence text of every bundled dependency into a single
 # file. The image redistributes the whole production closure, so MIT/BSD/Apache
 # attribution clauses apply to it in a way they do not to the PyPI wheel, which
@@ -95,6 +110,11 @@ COPY --from=builder /licenses /app/licenses
 RUN useradd --create-home --uid 1000 oba \
     && mkdir -p /data \
     && chown -R oba:oba /app /data
+
+# The embedding model, where chromadb looks for it: the runtime user's
+# ~/.cache/chroma. With it present the server never contacts the download
+# location, so the image works without outbound internet access.
+COPY --from=builder --chown=oba:oba /opt/model-home/.cache/chroma /home/oba/.cache/chroma
 
 USER oba
 
