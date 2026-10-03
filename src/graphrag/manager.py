@@ -1262,25 +1262,35 @@ def _resolve_target(
         graph: The join graph whose tables it is resolved against.
 
     Returns:
-        ``(table identity, column or None)``, or None if nothing fits, the
-        table is in two schemas, or two different readings fit.
+        ``(table identity, column or None)``, or None unless exactly one
+        reading fits -- counting a table in two schemas as two readings.
     """
-    readings: set[tuple[str, str | None]] = set()
-    whole = graph.resolve_name(target)
-    if whole.identity is not None and not whole.ambiguous:
-        readings.add((whole.identity, None))
+
+    def tables(name: str) -> list[str]:
+        # Every table the name could be, an ambiguous name included: a reading
+        # through a table in two schemas is still a reading, and dropping it
+        # made another, wrong reading look unique.
+        found = graph.resolve_name(name)
+        if found.ambiguous:
+            return list(found.candidates)
+        return [found.identity] if found.identity is not None else []
+
+    def has_column(identity: str, column: str) -> bool:
+        meta = graph.get_table_metadata(identity) or {}
+        return any(col.get("name") == column for col in meta.get("columns", []))
+
+    readings: set[tuple[str, str | None]] = {(t, None) for t in tables(target)}
     for at, char in enumerate(target):
         if char != ".":
             continue
         table_name, column = target[:at], target[at + 1 :]
         if not table_name or not column:
             continue
-        found = graph.resolve_name(table_name)
-        if found.identity is None or found.ambiguous:
-            continue
-        meta = graph.get_table_metadata(found.identity) or {}
-        if any(col.get("name") == column for col in meta.get("columns", [])):
-            readings.add((found.identity, column))
+        readings.update(
+            (identity, column)
+            for identity in tables(table_name)
+            if has_column(identity, column)
+        )
     if len(readings) != 1:
         return None
     return readings.pop()

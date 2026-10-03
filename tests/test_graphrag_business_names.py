@@ -151,7 +151,29 @@ class TestTargets:
         assert _resolve_target("orders", graph) == ("gold.orders", None)
 
     def test_a_name_in_two_schemas_is_not_guessed(self):
-        assert _resolve_target("orders.net_amt", self._graph()) is None
+        graph = GraphRetriever()
+        graph.build_graph(
+            [
+                *TABLES,
+                {
+                    "name": "orders",
+                    "schema": "archive",
+                    "columns": [_col("id", "INTEGER"), _col("net_amt", "DECIMAL")],
+                    "foreign_keys": [],
+                },
+            ]
+        )
+
+        # Both schemas' orders have the column: two readings, no answer.
+        assert _resolve_target("orders.net_amt", graph) is None
+        assert _resolve_target("orders", graph) is None
+
+    def test_only_the_schema_that_has_the_column_is_a_reading(self):
+        # archive.orders has no net_amt, so it is not a reading of the target.
+        assert _resolve_target("orders.net_amt", self._graph()) == (
+            "gold.orders",
+            "net_amt",
+        )
 
     def test_a_missing_column_or_table_resolves_to_nothing(self):
         graph = GraphRetriever()
@@ -275,6 +297,47 @@ class TestDottedNames:
         )
 
         assert _resolve_target("a.b.c", graph) is None
+
+    def _table(self, name: str, schema: str, column: str) -> dict[str, Any]:
+        return {
+            "name": name,
+            "schema": schema,
+            "columns": [_col(column, "DECIMAL")],
+            "foreign_keys": [],
+        }
+
+    def test_a_reading_through_a_table_in_two_schemas_still_counts(self):
+        # sales.net (in two schemas) . amount  vs  sales . net.amount
+        graph = self._graph(
+            self._table("sales.net", "gold", "amount"),
+            self._table("sales.net", "archive", "amount"),
+            self._table("sales", "gold", "net.amount"),
+        )
+
+        assert _resolve_target("sales.net.amount", graph) is None
+
+    def test_discovering_another_schema_does_not_flip_a_rejection(self):
+        tables = [
+            self._table("sales.net", "gold", "amount"),
+            self._table("sales", "gold", "net.amount"),
+        ]
+        before = self._graph(*tables)
+        after = self._graph(*tables, self._table("sales.net", "archive", "amount"))
+
+        assert _resolve_target("sales.net.amount", before) is None
+        assert _resolve_target("sales.net.amount", after) is None
+
+    def test_an_ambiguous_table_without_the_column_does_not_block(self):
+        graph = self._graph(
+            self._table("sales.net", "gold", "other"),
+            self._table("sales.net", "archive", "other"),
+            self._table("sales", "gold", "net.amount"),
+        )
+
+        assert _resolve_target("sales.net.amount", graph) == (
+            "gold.sales",
+            "net.amount",
+        )
 
 
 @needs_minilm
