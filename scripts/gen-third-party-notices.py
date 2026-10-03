@@ -553,6 +553,15 @@ def render(resolved: dict[str, str]) -> str:
         "under `/usr/share/doc/*/copyright` and are not duplicated here."
     )
     out.append("")
+    out.append(
+        "It also contains the GraphRAG embedding model **all-MiniLM-L6-v2** "
+        "(sentence-transformers, https://huggingface.co/sentence-transformers/"
+        "all-MiniLM-L6-v2), in the ONNX export distributed by Chroma, under "
+        "`/home/oba/.cache/chroma/onnx_models/all-MiniLM-L6-v2/`. It is "
+        "licensed under the Apache License 2.0, whose text is included in "
+        "`licenses/THIRD_PARTY_LICENSES.txt`, and is included unmodified."
+    )
+    out.append("")
 
     out.append("## Licences requiring specific attention")
     out.append("")
