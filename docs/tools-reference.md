@@ -671,7 +671,7 @@ Execute a SPARQL query against the RDF ontology store to explore classes, proper
 
 **Key Features:**
 - Requires an ontology to be loaded (`generate_ontology` or `load_my_ontology`) and `pyoxigraph` installed
-- Common prefixes (`rdf`, `rdfs`, `owl`, `xsd`) are available by default; the `oba:` namespace is `https://ralforion.com/ns/oba#`
+- Prefixes `rdf`, `rdfs`, `owl`, `xsd` and `oba` (`https://ralforion.com/ns/oba#`) are predeclared, so a query may use them without `PREFIX` lines; a `PREFIX` the query declares itself takes precedence
 - Query type is auto-detected from the query string -- no separate parameter
 - Federated queries are refused: a `SERVICE` clause would make the server request the endpoint it names, from the server's network. Two independent checks must both pass -- a lexical scan and a parse with rdflib's SPARQL 1.1 grammar -- so a query must be standard SPARQL 1.1; one the grammar cannot read is refused as well
 

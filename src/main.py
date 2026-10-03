@@ -1322,7 +1322,8 @@ async def query_sparql(
     generate_ontology or load_my_ontology. Requires an ontology to be loaded first.
 
     Supports SELECT, ASK, and CONSTRUCT query types (auto-detected from query string).
-    Common prefixes (rdf, rdfs, owl, xsd) are available by default.
+    Prefixes rdf, rdfs, owl, xsd and oba (https://ralforion.com/ns/oba#) are
+    predeclared; a PREFIX in the query overrides them.
 
     Named graphs: each loaded schema lives in its own named graph, and the store
     is accumulative across schemas. Unwrapped patterns are matched against the
