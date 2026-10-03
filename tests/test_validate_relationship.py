@@ -359,3 +359,132 @@ async def test_the_verdict_lands_in_the_active_ontologys_own_graph(shop):
 
     assert verdict["recorded_in"]["rdf_graph"] == graph
     assert {row["s"] for row in found["results"]} == {STATUS_CONFIRMED}
+
+
+async def test_a_replaced_ontology_takes_its_own_graph(shop):
+    first, second = "urn:review:a", "urn:review:b"
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {**on, "schema_name": "main", "graph_uri": first}
+        )
+        await client.call_tool("reset_cache", {**on, "cache_type": "ontology"})
+        await client.call_tool(
+            "generate_ontology",
+            {**on, "schema_name": "main", "graph_uri": second, "auto_persist": False},
+        )
+
+        verdict = (
+            await client.call_tool(
+                "validate_relationship",
+                {**on, "from_table": "purchases", "column": "supplier_id"},
+            )
+        ).data
+        in_first = (
+            await client.call_tool(
+                "query_sparql",
+                {
+                    **on,
+                    "sparql_query": (
+                        "PREFIX oba: <https://ralforion.com/ns/oba#> "
+                        f"ASK {{ GRAPH <{first}> {{ ?p oba:validationStatus ?s }} }}"
+                    ),
+                },
+            )
+        ).data
+
+    assert verdict["recorded_in"]["rdf_graph"] == second
+    assert in_first["result"] is False
+
+
+class TestPhysicalIdentity:
+    def _record(self, **changes: Any) -> Any:
+        from src.relationship_validation import ValidationRecord
+
+        values = {
+            "from_schema": "main",
+            "from_table": "orders",
+            "column": "customer_id",
+            "to_schema": "main",
+            "to_table": "customers",
+            "to_column": "id",
+            "status": STATUS_REFUTED,
+            "match_ratio": 0.25,
+            "checked_rows": 4,
+            "matched_rows": 1,
+            "target_rows": 2,
+            "target_distinct": 2,
+            "checked_at": "2026-10-03T00:00:00+00:00",
+        }
+        values.update(changes)
+        return ValidationRecord(**values)
+
+    def _ref(self, **changes: Any) -> RelationshipRef:
+        values = {
+            "from_table": "orders",
+            "column": "customer_id",
+            "to_table": "customers",
+            "to_column": "id",
+            "from_schema": None,
+            "to_schema": None,
+            "property_uri": "http://e/p",
+        }
+        values.update(changes)
+        return RelationshipRef(**values)
+
+    def test_a_schema_less_ontology_resolves_to_the_physical_schema(self):
+        from types import SimpleNamespace
+
+        from src.graphrag.retriever import GraphRetriever
+        from src.handlers.ontology_validation import _physical_schema
+
+        graph = GraphRetriever()
+        graph.build_graph(
+            [
+                {"name": "orders", "schema": "main", "columns": [], "foreign_keys": []},
+                {
+                    "name": "customers",
+                    "schema": "main",
+                    "columns": [],
+                    "foreign_keys": [],
+                },
+            ]
+        )
+        session = SimpleNamespace(
+            graphrag_manager=SimpleNamespace(graph_retriever=graph),
+            current_schema="elsewhere",
+        )
+
+        assert _physical_schema(session, "orders", None) == "main"
+        assert _physical_schema(session, "orders", "stated") == "stated"
+        assert _physical_schema(session, "unknown", None) == "elsewhere"
+
+    def test_its_verdict_is_shown_on_the_physical_join(self):
+        record = self._record()
+        joins = [
+            {
+                "from_table": "main.orders",
+                "from_column": "customer_id",
+                "to_table": "main.customers",
+                "to_column": "id",
+            }
+        ]
+
+        _attach_validations(joins, {record.key(): record.as_dict()})
+
+        assert joins[0]["validation"]["status"] == STATUS_REFUTED
+
+    def test_a_schema_less_ontology_still_takes_the_verdict_back(self):
+        from src.relationship_validation import states
+
+        assert states(self._ref(), self._record())
+        assert not states(self._ref(from_schema="other"), self._record())
+
+    def test_columns_differing_only_in_case_are_different(self):
+        from src.relationship_validation import states
+
+        assert self._record().key() != self._record(to_column="ID").key()
+        assert not states(self._ref(to_column="ID"), self._record())

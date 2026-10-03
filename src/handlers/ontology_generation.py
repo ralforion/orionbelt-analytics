@@ -427,6 +427,11 @@ async def generate_ontology(
                 )
             previous_ontology_file = session.ontology_file
             session.ontology_file = ontology_filename
+            # Bound with the ontology, persisted or not: a tool that rewrites it
+            # later must refresh this graph, never the previous ontology's.
+            session.ontology_graph_uri = graph_uri or schema_graph_uri(
+                schema_name or "default"
+            )
             session.obqc_validator = None
             # This is now the active ontology; one loaded earlier would
             # otherwise keep winning over it.

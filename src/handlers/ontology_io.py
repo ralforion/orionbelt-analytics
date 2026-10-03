@@ -303,6 +303,10 @@ async def load_my_ontology(
         activated = requirements["met"]
         if activated:
             session.loaded_ontology = ontology_content
+            # The graph it is (or would be) persisted into, as below.
+            session.ontology_graph_uri = graph_uri or schema_graph_uri(
+                newest_file.stem.replace("ontology_", "")
+            )
             session.loaded_ontology_path = str(newest_file)
             session.obqc_validator = None
 
@@ -363,8 +367,6 @@ async def load_my_ontology(
                         ontology_content, graph_uri, schema_name
                     )
                     stored_in_rdf = True
-                    if activated:
-                        session.ontology_graph_uri = used_graph_uri
 
                     logger.info(
                         f"Auto-persisted ontology to Oxigraph: {triple_count} triples in graph <{graph_uri}>"

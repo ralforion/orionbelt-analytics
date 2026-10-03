@@ -14,6 +14,7 @@ No MCP dependencies: importable and testable on its own.
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -107,17 +108,33 @@ def relationship_key(
 
     Both ends in full -- schema, table and column -- so a verdict never moves
     to a same-named table in another schema, nor survives its target column
-    changing (``id`` to ``legacy_id``).
+    changing (``id`` to ``legacy_id``). Exactly as written: quoted identifiers
+    such as ``"id"`` and ``"ID"`` are different columns. A JSON list, so no
+    character in a name can make two keys collide.
     """
-    parts = (
-        from_schema or "",
-        from_table,
-        column,
-        to_schema or "",
-        to_table,
-        to_column,
+    return json.dumps(
+        [from_schema or "", from_table, column, to_schema or "", to_table, to_column]
     )
-    return "|".join(part.lower() for part in parts)
+
+
+def states(ref: RelationshipRef, record: ValidationRecord) -> bool:
+    """Whether an ontology relationship is the one a verdict was recorded for.
+
+    Tables and columns must match exactly. A schema the ontology leaves out
+    matches the verdict's resolved schema -- a schema-less ontology describes
+    the tables of the schema it is used with -- but a schema it states must
+    be the same.
+    """
+    if (ref.from_table, ref.column, ref.to_table, ref.to_column) != (
+        record.from_table,
+        record.column,
+        record.to_table,
+        record.to_column,
+    ):
+        return False
+    return (ref.from_schema in (None, record.from_schema)) and (
+        ref.to_schema in (None, record.to_schema)
+    )
 
 
 def _table(schema: str | None, table: str, alias: str) -> exp.Table:
@@ -299,15 +316,7 @@ def record_in_graph(graph: Graph, record: ValidationRecord) -> int:
         )
         # The same relationship end to end: a changed target column or schema
         # is a different claim, which this verdict says nothing about.
-        if relationship_key(
-            ref.from_schema,
-            ref.from_table,
-            ref.column,
-            ref.to_schema,
-            ref.to_table,
-            ref.to_column,
-        )
-        == record.key()
+        if states(ref, record)
     ]
     for ref in refs:
         prop = URIRef(ref.property_uri)

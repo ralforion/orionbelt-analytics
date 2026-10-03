@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+from dataclasses import replace
 from functools import partial
 from typing import Any
 
 from fastmcp import Context
 
 from ..async_utils import run_db
+from ..graphrag.identity import split
 from ..handler_context import HandlerContext
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import VersionMetadataManager, mutate_workspace_metadata
@@ -113,6 +115,28 @@ def reapply_recorded(
     if not records or not apply_recorded(generator.graph, records):
         return ontology_ttl
     return generator.serialize_ontology()
+
+
+def _physical_schema(session: Any, table: str, stated: str | None) -> str | None:
+    """The schema a table really is in, when the ontology does not say.
+
+    The one schema GraphRAG holds the table in, if exactly one; otherwise the
+    schema the session works in.
+    """
+    if stated:
+        return stated
+    manager = getattr(session, "graphrag_manager", None)
+    if manager is not None:
+        schemas = {
+            split(identity)[0]
+            for identity in manager.graph_retriever.every_table_for(table)
+        }
+        if len(schemas) == 1:
+            only = schemas.pop()
+            if only:
+                return only
+    current = getattr(session, "current_schema", None)
+    return str(current) if current else None
 
 
 def _recorded_graph_uri(connection_id: str | None, schema_name: str) -> str | None:
@@ -224,7 +248,15 @@ async def validate_relationship(
             "ambiguous_relationship",
         )
         return err
-    ref = refs[0]
+    # The physical tables, whether or not the ontology names their schema: the
+    # query, the recorded verdict and the joins it is shown on must all mean
+    # the same table. A schema-less upload otherwise recorded None, which no
+    # join in GraphRAG (main.orders) ever matched.
+    ref = replace(
+        refs[0],
+        from_schema=_physical_schema(session, refs[0].from_table, refs[0].from_schema),
+        to_schema=_physical_schema(session, refs[0].to_table, refs[0].to_schema),
+    )
 
     db_manager = services.get_session_db_manager(ctx)
     db_type = (getattr(db_manager, "connection_info", None) or {}).get("type", "")

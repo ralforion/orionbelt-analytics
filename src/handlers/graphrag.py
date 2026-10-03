@@ -348,6 +348,7 @@ async def _auto_generate_ontology_background(
                 schema_state = session.get_or_create_schema_state(schema_name)
                 previous_ontology_file = schema_state.ontology.ontology_file
                 schema_state.ontology.ontology_file = ontology_file.name
+                schema_state.ontology.rdf_graph_uri = f"{base_uri}{schema_name}"
 
             graph_uri = ""
             triple_count = 0
