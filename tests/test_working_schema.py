@@ -207,3 +207,29 @@ async def test_after_restore_generation_targets_the_working_schema(duck, monkeyp
     assert session.get_last_analyzed_schema() == "main"
     assert session.current_schema == "main"
     assert session.ontology_file and "_main_" in session.ontology_file
+
+
+async def test_reconnecting_a_shared_handle_resets_its_default_target(duck):
+    async with Client(mcp) as client:
+        mine = _handle(
+            _text(await client.call_tool("connect_database", {"db_type": "duckdb"}))
+        )
+        # Another session on the same database keeps the runtime shared, so
+        # reconnecting does not clear the schema cache.
+        await client.call_tool("connect_database", {"db_type": "duckdb"})
+        await client.call_tool(
+            "discover_schema", {"connection": mine, "schema_name": "archive"}
+        )
+        reconnected = _text(
+            await client.call_tool(
+                "connect_database", {"db_type": "duckdb", "connection": mine}
+            )
+        )
+        await client.call_tool(
+            "generate_ontology", {"connection": mine, "auto_persist": False}
+        )
+
+    assert "Working schema: main" in reconnected
+    session = duck.session_for_handle(mine)
+    assert session.get_last_analyzed_schema() == "main"
+    assert session.ontology_file and "_main_" in session.ontology_file

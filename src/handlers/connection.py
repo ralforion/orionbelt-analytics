@@ -418,7 +418,12 @@ async def connect_database(
             working_schema = None
         session.working_schema = working_schema
         if working_schema:
+            # The session's own pointers, on every successful connect: the
+            # current schema and the default target a parameterless
+            # generate_ontology() uses. Not the shared schema cache, which
+            # other sessions on this database may be relying on.
             session.set_current_schema(working_schema)
+            session.mark_schema_analyzed(working_schema)
 
         await notify_client(ctx, f"Connected to {label}: {db_name}")
 
