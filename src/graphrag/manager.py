@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from .community_detector import CommunityDetector
 from .embedder import MODEL_TFIDF, SchemaEmbedder
-from .identity import qualified
+from .identity import display_name, qualified
 from .retriever import GraphRetriever
 
 if TYPE_CHECKING:
@@ -607,6 +607,70 @@ class GraphRAGManager:
 
         return result
 
+    def business_name_matches(
+        self,
+        query: str,
+        top_k: int,
+        retriever: GraphRetriever | None = None,
+        query_embedding: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        """Schema elements whose business name or description fits the query.
+
+        Business names -- from ``apply_semantic_names`` or
+        ``graphrag_add_semantic_context`` -- are indexed as entries of their
+        own, keyed by the table or ``table.column`` they describe. Searching
+        tables and columns alone never reads them, so a concept that exists
+        only in the business vocabulary was unreachable from a question.
+
+        Args:
+            query: The question.
+            top_k: How many business-name entries to consider.
+            retriever: The join graph to resolve targets in.
+            query_embedding: The question, already embedded.
+
+        Returns:
+            One match per entry that resolves to exactly one table: its
+            ``table`` identity, ``column`` (or None), ``score`` and the
+            ``business_name`` text. Relationship entries and names that fit
+            two schemas are left out rather than guessed.
+        """
+        # TF-IDF fixed its vocabulary when the schema was indexed, so the
+        # words a business name introduces score nothing (add_semantic_context
+        # says so when it stores one).
+        if self.embedder.embedding_model == MODEL_TFIDF:
+            return []
+        graph = retriever or self.graph_retriever
+        try:
+            hits = self.search_schema(
+                query,
+                top_k=top_k,
+                element_type="semantic_context",
+                query_embedding=query_embedding,
+            )
+        except Exception as e:
+            logger.debug(f"Business-name search skipped: {e}")
+            return []
+
+        matches: list[dict[str, Any]] = []
+        for hit in hits:
+            meta = hit["element"].get("metadata") or {}
+            target = str(meta.get("target") or "").strip()
+            if not target or "__to__" in target:
+                continue
+            resolved = _resolve_target(target, graph)
+            if resolved is None:
+                continue
+            table, column = resolved
+            matches.append(
+                {
+                    "table": table,
+                    "column": column,
+                    "score": float(hit["similarity_score"]),
+                    "business_name": str(meta.get("context") or ""),
+                }
+            )
+        return matches
+
     def find_relevant_tables(
         self,
         query: str,
@@ -641,6 +705,15 @@ class GraphRAGManager:
             query, top_k=top_k, element_type="table", query_embedding=query_embedding
         )
 
+        # Business names compete with the schema's own names. A table whose
+        # columns are cryptic is found through the name someone gave it, or
+        # gave one of its columns -- "revenue" reaching orders through
+        # net_amt's "Net revenue".
+        business = self.business_name_matches(
+            query, top_k, graph, query_embedding=query_embedding
+        )
+        table_results = _merge_table_hits(table_results, business, top_k)
+
         # The element id, not the display name: it carries the schema, so a
         # table of the same name in another schema is not confused with this
         # one when its joins and community are looked up.
@@ -651,6 +724,7 @@ class GraphRAGManager:
             "related_tables": {},
             "communities": {},
             "suggested_joins": [],
+            "business_name_matches": business,
         }
 
         if not primary_tables:
@@ -777,15 +851,18 @@ class GraphRAGManager:
             table_meta = self.graph_retriever.get_table_metadata(identity)
 
             if table_meta:
-                context["relevant_tables"].append(
-                    {
-                        "name": table_name,
-                        "relevance_score": table_result["similarity_score"],
-                        "column_count": len(table_meta.get("columns", [])),
-                        "has_foreign_keys": bool(table_meta.get("foreign_keys")),
-                        "comment": table_meta.get("comment"),
-                    }
-                )
+                entry: dict[str, Any] = {
+                    "name": table_name,
+                    "relevance_score": table_result["similarity_score"],
+                    "column_count": len(table_meta.get("columns", [])),
+                    "has_foreign_keys": bool(table_meta.get("foreign_keys")),
+                    "comment": table_meta.get("comment"),
+                }
+                if table_result.get("matched_business_name"):
+                    entry["matched_business_name"] = table_result[
+                        "matched_business_name"
+                    ]
+                context["relevant_tables"].append(entry)
 
         # Add relevant columns
         for col_result in column_results:
@@ -797,6 +874,12 @@ class GraphRAGManager:
                     "relevance_score": col_result["similarity_score"],
                 }
             )
+        context["relevant_columns"] = _merge_column_hits(
+            context["relevant_columns"],
+            table_info.get("business_name_matches", []),
+            retriever or self.graph_retriever,
+            max_columns,
+        )
 
         # Estimate token usage (rough approximation)
         context["token_estimate"] = (
@@ -1150,3 +1233,124 @@ class GraphRAGManager:
         self._initialized = False
         self._schema_name = None
         logger.info("Cleared GraphRAG state")
+
+
+def _resolve_target(
+    target: str, graph: GraphRetriever
+) -> tuple[str, str | None] | None:
+    """The table, and column if any, a business-name entry describes.
+
+    Targets are ``table`` or ``table.column`` with bare names, as
+    ``apply_semantic_names`` writes them. The whole target is tried as a table
+    first -- a table name may itself contain a dot -- then split at the last
+    dot into table and column, and the column checked against the table.
+
+    Args:
+        target: The entry's target.
+        graph: The join graph whose tables it is resolved against.
+
+    Returns:
+        ``(table identity, column or None)``, or None if the target names no
+        indexed table, names one in two schemas, or names a missing column.
+    """
+    whole = graph.resolve_name(target)
+    if whole.identity is not None and not whole.ambiguous:
+        return whole.identity, None
+    if "." not in target:
+        return None
+    table_name, column = target.rsplit(".", 1)
+    found = graph.resolve_name(table_name)
+    if found.identity is None or found.ambiguous:
+        return None
+    meta = graph.get_table_metadata(found.identity) or {}
+    for col in meta.get("columns", []):
+        if col.get("name") == column:
+            return found.identity, column
+    return None
+
+
+def _merge_table_hits(
+    table_results: list[dict[str, Any]],
+    business: list[dict[str, Any]],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Table search results with the tables business names point at, re-ranked.
+
+    A table keeps the better of its own score and its best business-name
+    score, and says which business name lifted it.
+
+    Args:
+        table_results: Results of the table search.
+        business: :meth:`GraphRAGManager.business_name_matches` output.
+        top_k: How many tables to keep.
+
+    Returns:
+        At most ``top_k`` table results, best first.
+    """
+    ranked: dict[str, dict[str, Any]] = {r["element"]["id"]: r for r in table_results}
+    for match in business:
+        identity = match["table"]
+        held = ranked.get(identity)
+        if held is not None and held["similarity_score"] >= match["score"]:
+            continue
+        element = (held or {}).get("element") or {
+            "type": "table",
+            "id": identity,
+            "name": display_name(identity),
+            "description": "",
+            "metadata": {"table": identity},
+        }
+        ranked[identity] = {
+            "element": element,
+            "similarity_score": match["score"],
+            "matched_business_name": match["business_name"],
+        }
+    return sorted(ranked.values(), key=lambda r: -r["similarity_score"])[:top_k]
+
+
+def _merge_column_hits(
+    columns: list[dict[str, Any]],
+    business: list[dict[str, Any]],
+    graph: GraphRetriever,
+    max_columns: int,
+) -> list[dict[str, Any]]:
+    """Relevant columns with the columns business names point at, re-ranked.
+
+    Args:
+        columns: Columns found by the column search.
+        business: :meth:`GraphRAGManager.business_name_matches` output.
+        graph: The join graph, for each column's data type.
+        max_columns: How many columns to keep.
+
+    Returns:
+        At most ``max_columns`` columns, best first; a column found through
+        its business name carries it as ``business_name``.
+    """
+    by_key: dict[tuple[str, str], dict[str, Any]] = {
+        (c["table"], c["column"]): c for c in columns
+    }
+    for match in business:
+        if match["column"] is None:
+            continue
+        key = (match["table"], match["column"])
+        held = by_key.get(key)
+        if held is not None and held["relevance_score"] >= match["score"]:
+            held.setdefault("business_name", match["business_name"])
+            continue
+        meta = graph.get_table_metadata(match["table"]) or {}
+        data_type = next(
+            (
+                c.get("data_type")
+                for c in meta.get("columns", [])
+                if c.get("name") == match["column"]
+            ),
+            None,
+        )
+        by_key[key] = {
+            "table": match["table"],
+            "column": match["column"],
+            "data_type": data_type,
+            "relevance_score": match["score"],
+            "business_name": match["business_name"],
+        }
+    return sorted(by_key.values(), key=lambda c: -c["relevance_score"])[:max_columns]

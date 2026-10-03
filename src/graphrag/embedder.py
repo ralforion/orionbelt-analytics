@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 MODEL_MINILM = "minilm"
 MODEL_TFIDF = "tfidf"
 MODEL_SENTENCE_TRANSFORMERS = "sentence-transformers"
+# paraphrase-multilingual-MiniLM-L12-v2: questions and schema names in
+# different languages meet in one space. See multilingual.py.
+MODEL_MULTILINGUAL = "multilingual"
 
 DEFAULT_EMBEDDING_MODEL = MODEL_MINILM
 
@@ -78,19 +81,25 @@ def resolve_embedding_model(requested: str | None = None) -> str:
         requested: Explicit backend name, or None to read the environment.
 
     Returns:
-        One of ``minilm``, ``tfidf`` or ``sentence-transformers``. Unknown
+        One of ``minilm``, ``multilingual``, ``tfidf`` or
+        ``sentence-transformers``. Unknown
         names fall back to the default with a warning rather than raising, so a
         typo in .env cannot stop the server from starting.
     """
     name = (requested or os.getenv("GRAPHRAG_EMBEDDING_MODEL") or "").strip().lower()
     if not name:
         return DEFAULT_EMBEDDING_MODEL
-    if name in (MODEL_MINILM, MODEL_TFIDF, MODEL_SENTENCE_TRANSFORMERS):
+    if name in (
+        MODEL_MINILM,
+        MODEL_TFIDF,
+        MODEL_SENTENCE_TRANSFORMERS,
+        MODEL_MULTILINGUAL,
+    ):
         return name
     logger.warning(
         f"Unknown GRAPHRAG_EMBEDDING_MODEL '{name}'; "
         f"using '{DEFAULT_EMBEDDING_MODEL}'. "
-        f"Valid values: {MODEL_MINILM}, {MODEL_TFIDF}, "
+        f"Valid values: {MODEL_MINILM}, {MODEL_MULTILINGUAL}, {MODEL_TFIDF}, "
         f"{MODEL_SENTENCE_TRANSFORMERS}."
     )
     return DEFAULT_EMBEDDING_MODEL
@@ -116,11 +125,14 @@ class SchemaEmbedder:
         Initialize the schema embedder.
 
         Args:
-            embedding_model: Backend name ("minilm", "tfidf",
+            embedding_model: Backend name ("minilm", "multilingual", "tfidf",
                 "sentence-transformers"), or None to resolve from
                 GRAPHRAG_EMBEDDING_MODEL and fall back to the default.
         """
         self.embedding_model = resolve_embedding_model(embedding_model)
+        # chromadb's MiniLM function or MultilingualEmbedding: both take a list
+        # of texts and return one vector per text.
+        self._embedding_function: Any = None
         self._initialize_model()
 
     def _initialize_model(self) -> None:
@@ -173,6 +185,27 @@ class SchemaEmbedder:
                     "~/.cache/chroma to use MiniLM."
                 )
                 self.embedding_model = MODEL_TFIDF
+                self._initialize_model()
+        elif self.embedding_model == MODEL_MULTILINGUAL:
+            try:
+                from .multilingual import MultilingualEmbedding
+
+                self._embedding_function = MultilingualEmbedding()
+                logger.info(
+                    "Loaded embedding model: "
+                    "paraphrase-multilingual-MiniLM-L12-v2 (ONNX, 8-bit)"
+                )
+            except Exception as e:
+                # Asked for by name, so falling back is worth a loud warning:
+                # MiniLM still works, but questions in another language than
+                # the schema no longer meet it.
+                logger.warning(
+                    f"Could not load the multilingual embedding model ({e}); "
+                    "falling back to MiniLM, which matches English only. "
+                    "Restore access to huggingface.co, or use the Docker image, "
+                    "which includes the model."
+                )
+                self.embedding_model = MODEL_MINILM
                 self._initialize_model()
         elif self.embedding_model == MODEL_SENTENCE_TRANSFORMERS:
             try:
@@ -445,7 +478,7 @@ class SchemaEmbedder:
         Returns:
             Embedding vector
         """
-        if self.embedding_model == MODEL_MINILM:
+        if self.embedding_model in (MODEL_MINILM, MODEL_MULTILINGUAL):
             return np.asarray(self._embedding_function([text])[0], dtype=np.float32)
         if self.embedding_model == MODEL_SENTENCE_TRANSFORMERS:
             encoded = self.model.encode(text, convert_to_numpy=True)
@@ -570,7 +603,7 @@ class SchemaEmbedder:
         if not texts:
             return []
 
-        if self.embedding_model == MODEL_MINILM:
+        if self.embedding_model in (MODEL_MINILM, MODEL_MULTILINGUAL):
             vectors: list[np.ndarray] = []
             for start in range(0, len(texts), EMBEDDING_BATCH_SIZE):
                 batch = texts[start : start + EMBEDDING_BATCH_SIZE]
