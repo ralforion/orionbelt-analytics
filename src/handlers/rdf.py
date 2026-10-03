@@ -19,7 +19,11 @@ from ..lifecycle.metadata import (
     update_workspace_rdf,
     update_workspace_section,
 )
-from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
+from ..oxigraph_store import (
+    OXIGRAPH_AVAILABLE,
+    FederatedQueryError,
+    schema_graph_uri,
+)
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..utils import notify_client, read_text_file, utc_now
 
@@ -215,6 +219,9 @@ async def query_sparql(
                 "query": sparql_query,
             }
 
+    except (SyntaxError, FederatedQueryError, TimeoutError) as e:
+        # The query's own problem, explained to the caller; the store logged it.
+        return RDFError(f"SPARQL query failed: {e!s}").to_response()
     except Exception as e:
         logger.exception(f"SPARQL query failed: {e}")
         return RDFError(f"SPARQL query failed: {e!s}").to_response()
@@ -238,6 +245,8 @@ async def query_sparql_ask(
 
         return {"success": True, "result": result, "query": sparql_query}
 
+    except (SyntaxError, FederatedQueryError) as e:
+        return RDFError(f"SPARQL ASK query failed: {e!s}").to_response()
     except Exception as e:
         logger.exception(f"SPARQL ASK query failed: {e}")
         return RDFError(f"SPARQL ASK query failed: {e!s}").to_response()
