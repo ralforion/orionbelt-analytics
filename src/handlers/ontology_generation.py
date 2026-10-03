@@ -31,6 +31,7 @@ from .connection_scope import (
     pin_connection,
     still_connected,
 )
+from .ontology_validation import reapply_recorded
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +349,10 @@ async def generate_ontology(
     ontology_ttl = await asyncio.to_thread(
         partial(generator.generate_from_schema, tables_info, views_info=views_info)
     )
+    # Relationships checked with validate_relationship keep their verdicts.
+    ontology_ttl = await asyncio.to_thread(
+        reapply_recorded, generator, pinned.connection_id, schema_name, ontology_ttl
+    )
 
     # Optional SHACL conformance check (Phase 4). Default on, gated by setting;
     # never hard-fails generation — surfaces violations as a warning only.
@@ -422,6 +427,11 @@ async def generate_ontology(
                 )
             previous_ontology_file = session.ontology_file
             session.ontology_file = ontology_filename
+            # Bound with the ontology, persisted or not: a tool that rewrites it
+            # later must refresh this graph, never the previous ontology's.
+            session.ontology_graph_uri = graph_uri or schema_graph_uri(
+                schema_name or "default"
+            )
             session.obqc_validator = None
             # This is now the active ontology; one loaded earlier would
             # otherwise keep winning over it.
@@ -546,6 +556,7 @@ async def generate_ontology(
                                 f"Auto-persisted ontology to Oxigraph: "
                                 f"{triple_count} triples in graph <{graph_uri}>"
                             )
+                            session.ontology_graph_uri = graph_uri
                         else:
                             logger.info(
                                 "Skipped RDF auto-persist: a newer ontology "

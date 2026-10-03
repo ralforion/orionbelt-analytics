@@ -320,6 +320,35 @@ oba:RelationshipShape a sh:NodeShape ;
         sh:name "is inferred relationship"
     ] ;
 
+    # Optional: validation verdict (validate_relationship)
+    sh:property [
+        sh:path oba:validationStatus ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:in ( "confirmed" "partial" "refuted" "target_not_unique" "no_data" ) ;
+        sh:name "validation status"
+    ] ;
+    sh:property [
+        sh:path oba:validationMatchRatio ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:decimal ;
+        sh:minInclusive 0 ;
+        sh:maxInclusive 1 ;
+        sh:name "validation match ratio"
+    ] ;
+    sh:property [
+        sh:path oba:validationCheckedRows ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:name "validation checked rows"
+    ] ;
+    sh:property [
+        sh:path oba:validationCheckedAt ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:dateTime ;
+        sh:name "validation checked at"
+    ] ;
+
     # Optional: semantic enrichment
     sh:property [
         sh:path oba:semanticName ;

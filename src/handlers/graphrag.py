@@ -13,7 +13,7 @@ from fastmcp import Context
 from ..async_utils import run_db
 from ..exceptions import ConnectionError
 from ..graphrag import GraphRAGManager
-from ..graphrag.identity import qualified
+from ..graphrag.identity import qualified, split
 from ..handler_context import HandlerContext
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import (
@@ -24,6 +24,7 @@ from ..lifecycle.metadata import (
 from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
+from ..relationship_validation import relationship_key
 from ..session import GraphRAGState
 from ..utils import notify_client, utc_now, write_text_file
 from .connection_scope import (
@@ -31,6 +32,7 @@ from .connection_scope import (
     pin_connection,
     still_connected,
 )
+from .ontology_validation import recorded_validations
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +308,15 @@ async def _auto_generate_ontology_background(
                 ),
             )
         )
+        from .ontology_validation import reapply_recorded
+
+        ontology_ttl = await asyncio.to_thread(
+            reapply_recorded,
+            ontology_generator,
+            connection_id,
+            schema_name,
+            ontology_ttl,
+        )
 
         conn_dir = (
             get_connection_dir(connection_id) if connection_id else ensure_output_dir()
@@ -337,6 +348,11 @@ async def _auto_generate_ontology_background(
                 schema_state = session.get_or_create_schema_state(schema_name)
                 previous_ontology_file = schema_state.ontology.ontology_file
                 schema_state.ontology.ontology_file = ontology_file.name
+                # Only if the generated ontology is now the active one. An
+                # upload outranks background generation, and its graph is the
+                # one a later rewrite of the active ontology must refresh.
+                if getattr(schema_state.ontology, "loaded_ontology", None) is None:
+                    schema_state.ontology.rdf_graph_uri = f"{base_uri}{schema_name}"
 
             graph_uri = ""
             triple_count = 0
@@ -957,11 +973,34 @@ async def graphrag_find_join_path(
             # Always present, so "unambiguous" is an answer and not an absence.
             "ambiguous": bool(alternatives),
         }
-        if any(join.get("source") == "inferred" for join in join_path):
+        verdicts = await asyncio.to_thread(
+            recorded_validations, getattr(session, "connection_id", None)
+        )
+        _attach_validations(join_path, verdicts)
+        for alternative in alternatives:
+            _attach_validations(alternative, verdicts)
+        if any(
+            join.get("source") == "inferred"
+            and (join.get("validation") or {}).get("status") != "confirmed"
+            for join in join_path
+        ):
             response["inferred_joins_note"] = (
                 "Some joins on this path are inferred from column names, not "
                 "declared by the database (each says so, with its confidence). "
-                "Check the columns match before relying on them."
+                "Check them with validate_relationship before relying on them."
+            )
+        doubtful = [
+            join
+            for join in join_path
+            if (join.get("validation") or {}).get("status")
+            in ("partial", "refuted", "target_not_unique")
+        ]
+        if doubtful:
+            response["validation_warning"] = (
+                f"{len(doubtful)} join(s) on this path failed or only partly "
+                "passed validate_relationship (see each join's validation). "
+                "A refuted join is probably not a relationship; a partial one "
+                "drops unmatched rows; a non-unique target multiplies rows."
             )
         if alternatives:
             response["alternatives"] = [
@@ -1079,6 +1118,51 @@ async def _join_graph(ctx: Context, session: Any, services: "HandlerContext") ->
     extended = base.with_relationships(relationships)
     session.ontology_join_graph = (base, base.generation, validator, extended)
     return extended
+
+
+def _attach_validations(
+    joins: list[dict[str, Any]], verdicts: dict[str, dict[str, Any]]
+) -> None:
+    """Add each join's recorded validate_relationship verdict, if any.
+
+    A join may walk a relationship against its direction, so both readings
+    are looked up.
+
+    Args:
+        joins: Join specifications, changed in place.
+        verdicts: Recorded verdicts keyed by relationship.
+    """
+    if not verdicts:
+        return
+    for join in joins:
+        left_schema, left = split(join["from_table"])
+        right_schema, right = split(join["to_table"])
+        for key in (
+            relationship_key(
+                left_schema,
+                left,
+                join["from_column"],
+                right_schema,
+                right,
+                join["to_column"],
+            ),
+            relationship_key(
+                right_schema,
+                right,
+                join["to_column"],
+                left_schema,
+                left,
+                join["from_column"],
+            ),
+        ):
+            verdict = verdicts.get(key)
+            if verdict:
+                join["validation"] = {
+                    "status": verdict.get("status"),
+                    "match_ratio": verdict.get("match_ratio"),
+                    "checked_at": verdict.get("checked_at"),
+                }
+                break
 
 
 def _resolve_table_for_session(
