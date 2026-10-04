@@ -51,6 +51,20 @@ Complete reference for all OrionBelt® Analytics MCP tools. These tools are invo
 
 ---
 
+## Next Steps in Results
+
+Successful results of the main tools name the most likely next call, read from the session's state (connected, working schema discovered, ontology active and enriched): a dict result carries `next_steps`, a list of `{"tool", "arguments", "why"}`, most likely first; a text result ends with a "Next step" section. Placeholders such as `<the user's question>` mark arguments the caller fills in. Error results carry no next steps -- they say how to recover.
+
+| After | Most likely next |
+|-------|------------------|
+| `list_databases` | `connect_database` (with `database` when several are configured) |
+| `connect_database`, `discover_schema` | `discover_schema` → `generate_ontology` → `graphrag_query_context`, whichever is not done yet |
+| `generate_ontology`, `load_my_ontology`, `apply_semantic_names` | `graphrag_query_context` once GraphRAG is ready (otherwise `get_table_details`), then `execute_sql_query`; optionally `suggest_semantic_names` (generated ontology, not yet enriched) and `validate_relationship` |
+| `suggest_semantic_names` | `apply_semantic_names` |
+| `validate_relationship` | questions; or `graphrag_find_join_path` when refuted |
+| `graphrag_query_context`, `graphrag_find_join_path`, `plan_composite_query`, `reachable_from`, `measurable_from` | `execute_sql_query` |
+| `execute_sql_query` | `generate_chart` (optional) |
+
 ## The `connection` Argument
 
 Every tool accepts one optional argument that is not repeated in the tables below:
