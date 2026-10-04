@@ -29,12 +29,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generated ontology; generating again or applying semantic names replaces it.
 - **The Docker image is ~0.2 GB larger:** it includes both embedding models, so
   it needs no internet access at runtime.
+- **Discovery without a schema uses the working schema, under its real name**,
+  not `"default"`. Schema state an earlier version saved under `"default"` is
+  not reused: the working schema is discovered afresh under its real name.
+- **`oba:View` and `oba:ViewColumn` are `rdfs:Class`** in the OBA vocabulary
+  (they were `owl:Class`), so the table shape no longer reports them as tables
+  when the vocabulary is merged into validation.
 - **SPARQL prefixes `rdf`, `rdfs`, `owl`, `xsd` and `oba` are predeclared**,
   as the `query_sparql` description always promised; a query's own `PREFIX`
   still wins. A syntax error in a query is now one warning line in the server
   log instead of an error with two tracebacks.
 
 ### Added
+- **A working schema per connection.** Configured (`POSTGRES_SCHEMA`, new;
+  `SNOWFLAKE_SCHEMA`, `DATABRICKS_SCHEMA`, `BIGQUERY_DATASET`, `MYSQL_DATABASE`,
+  `CLICKHOUSE_DATABASE`, and their `DB_<NAME>_` forms) or else asked of the
+  database at connect. `connect_database` names it ("qualify tables as
+  sales.<table>"), `discover_schema()` and `generate_ontology()` without a
+  schema use it, and it survives a workspace restore. Session-scoped: sessions
+  sharing a database keep their own. (#164)
 - **`validate_relationship`.** Checks a relationship the ontology states --
   declared, inferred or uploaded -- against the data with two read-only
   queries (key coverage, target uniqueness) and records the verdict
@@ -78,6 +91,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   advisories recorded as not reachable (#148, #149).
 
 ### Fixed
+- **SHACL relationship shape skipped relationships missing a required
+  annotation**: it selected nodes by `oba:relationshipType`, the annotation it
+  requires. It now selects them by any OBA relationship annotation. (#165)
 - **`query_sparql` failed on the prefixes it promised** ("Prefix not found"),
   costing the model a retry. (#162)
 - **`apply_semantic_names` refreshed the default RDF graph** instead of the
