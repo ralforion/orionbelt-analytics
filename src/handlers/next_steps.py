@@ -53,6 +53,15 @@ def _has_ontology(session: Any) -> bool:
     )
 
 
+def _graphrag_ready(session: Any) -> bool:
+    """Whether GraphRAG tools will answer rather than graphrag_not_initialized.
+
+    Every hint naming one goes through here: no tool builds GraphRAG on
+    demand, so a hint to an unready one is a hint into an error.
+    """
+    return getattr(session, "graphrag_initialized", False) is True
+
+
 def _answering(session: Any) -> list[dict[str, Any]]:
     """Steps once the schema and ontology are in place.
 
@@ -61,7 +70,7 @@ def _answering(session: Any) -> list[dict[str, Any]]:
     graphrag_not_initialized, so the hint would send the model into an error.
     No tool builds it on demand, so the alternative is the direct route.
     """
-    ready = getattr(session, "graphrag_initialized", False) is True
+    ready = _graphrag_ready(session)
     first = (
         _step(
             "graphrag_query_context",
@@ -222,14 +231,29 @@ def for_tool(tool: str, session: Any, result: Any) -> list[dict[str, Any]]:
         return _answering(session)
     if tool == "validate_relationship":
         if data.get("status") in ("refuted", "target_not_unique"):
+            if _graphrag_ready(session):
+                return [
+                    _step(
+                        "graphrag_find_join_path",
+                        "Do not join on this relationship; look for another "
+                        "route between the tables",
+                        from_table="<table>",
+                        to_table="<table>",
+                    )
+                ]
             return [
                 _step(
-                    "graphrag_find_join_path",
-                    "Do not join on this relationship; look for another route "
-                    "between the tables",
+                    "get_table_details",
+                    "Do not join on this relationship; find the column that "
+                    "really links the tables",
+                    table_name="<either table>",
+                ),
+                _step(
+                    "validate_relationship",
+                    "Check the candidate key before relying on it",
                     from_table="<table>",
-                    to_table="<table>",
-                )
+                    column="<candidate key column>",
+                ),
             ]
         return _answering(session)
     if tool in (

@@ -253,3 +253,50 @@ async def test_every_tool_a_hint_names_exists():
 
     assert named
     assert named <= registered, named - registered
+
+
+GRAPHRAG_TOOLS = {
+    "graphrag_query_context",
+    "graphrag_find_join_path",
+    "graphrag_search",
+    "plan_composite_query",
+    "reachable_from",
+    "measurable_from",
+}
+
+
+async def test_no_hint_names_a_graphrag_tool_before_graphrag_is_ready():
+    registered = {tool.name for tool in await mcp.list_tools()}
+    sessions = [
+        _session(graphrag_initialized=False),
+        _session(cached=True, graphrag_initialized=False),
+        _session(cached=True, ontology_file="o.ttl", graphrag_initialized=False),
+        _session(loaded_ontology="<ttl>", graphrag_initialized=False),
+    ]
+    results = [
+        "ok",
+        {"success": True},
+        {"status": "refuted"},
+        {"status": "target_not_unique"},
+        {"status": "confirmed"},
+        {"activated": True},
+        {"next_step": "suggest_semantic_names"},
+    ]
+
+    named = {
+        step["tool"]
+        for tool in registered
+        for session in sessions
+        for result in results
+        for step in for_tool(tool, session, result)
+    }
+
+    assert not named & GRAPHRAG_TOOLS, named & GRAPHRAG_TOOLS
+
+
+def test_a_refuted_relationship_without_graphrag_has_a_usable_route():
+    session = _session(graphrag_initialized=False)
+
+    steps = for_tool("validate_relationship", session, {"status": "refuted"})
+
+    assert _tools(steps) == ["get_table_details", "validate_relationship"]
