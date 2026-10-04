@@ -1,0 +1,302 @@
+"""Every main tool's result names the most likely next call.
+
+Hints existed but scattered: some results had a next_steps dict, some a
+next_step string, and the clearest went out only as progress messages most
+clients never show the model. Now one rule set, read from the session's
+state, and one shape: next_steps, a list of {tool, arguments, why}.
+"""
+
+import json
+import re
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from fastmcp import Client
+
+import src.main as main_module
+import src.server_state as state_module
+from src.handlers import connection as connection_handler
+from src.handlers.next_steps import attach, for_tool
+from src.main import mcp
+from src.server_state import ServerState
+
+
+def _session(**state: Any) -> Any:
+    cached = state.pop("cached", False)
+    values = {
+        "current_schema": "main",
+        "working_schema": "main",
+        "ontology_file": None,
+        "loaded_ontology": None,
+        "ontology_enriched": False,
+        "graphrag_initialized": True,
+        "get_cached_schema": lambda _schema: [object()] if cached else None,
+    }
+    values.update(state)
+    return SimpleNamespace(**values)
+
+
+def _tools(steps: list[dict[str, Any]]) -> list[str]:
+    return [step["tool"] for step in steps]
+
+
+class TestTheRules:
+    def test_a_fresh_connection_discovers_first(self):
+        assert _tools(for_tool("connect_database", _session(), "ok"))[0] == (
+            "discover_schema"
+        )
+
+    def test_a_discovered_schema_needs_an_ontology(self):
+        steps = for_tool("discover_schema", _session(cached=True), {})
+
+        assert _tools(steps) == ["generate_ontology"]
+
+    def test_a_restored_workspace_goes_straight_to_questions(self):
+        session = _session(cached=True, ontology_file="o.ttl")
+
+        assert _tools(for_tool("connect_database", session, "ok"))[0] == (
+            "graphrag_query_context"
+        )
+
+    def test_after_an_ontology_naming_and_validation_are_offered(self):
+        session = _session(cached=True, ontology_file="o.ttl")
+        tools = _tools(for_tool("generate_ontology", session, "ok"))
+
+        assert tools[:2] == ["graphrag_query_context", "execute_sql_query"]
+        assert "suggest_semantic_names" in tools
+        assert "validate_relationship" in tools
+
+    def test_an_enriched_ontology_is_not_offered_naming_again(self):
+        session = _session(cached=True, ontology_enriched=True)
+
+        assert "suggest_semantic_names" not in _tools(
+            for_tool("generate_ontology", session, "ok")
+        )
+
+    def test_without_graphrag_the_direct_route_is_offered(self, monkeypatch):
+        session = _session(
+            cached=True, ontology_file="o.ttl", graphrag_initialized=False
+        )
+
+        monkeypatch.setenv("AUTO_GRAPHRAG", "true")
+        building = for_tool("generate_ontology", session, "ok")
+        monkeypatch.setenv("AUTO_GRAPHRAG", "false")
+        disabled = for_tool("generate_ontology", session, "ok")
+
+        assert _tools(building)[0] == _tools(disabled)[0] == "get_table_details"
+        assert "graphrag_query_context" not in _tools(building)
+        assert "background" in building[0]["why"]
+        assert "AUTO_GRAPHRAG=false" in disabled[0]["why"]
+
+    def test_an_active_upload_is_not_offered_naming(self):
+        session = _session(cached=True, ontology_file=None, loaded_ontology="<ttl>")
+
+        tools = _tools(for_tool("load_my_ontology", session, {"activated": True}))
+
+        assert "suggest_semantic_names" not in tools
+
+    def test_an_upload_that_did_not_activate_says_what_to_fix(self):
+        steps = for_tool("load_my_ontology", _session(), {"activated": False})
+
+        assert _tools(steps) == ["load_my_ontology"]
+        assert "oba_requirements" in steps[0]["why"]
+
+    def test_a_refuted_relationship_points_to_another_route(self):
+        steps = for_tool("validate_relationship", _session(), {"status": "refuted"})
+
+        assert _tools(steps) == ["graphrag_find_join_path"]
+
+    def test_a_query_result_can_be_charted(self):
+        steps = for_tool("execute_sql_query", _session(), {"success": True})
+
+        assert _tools(steps) == ["generate_chart"]
+
+    @pytest.mark.parametrize(
+        "databases, arguments",
+        [([{"name": "a"}], set()), ([{"name": "a"}, {"name": "b"}], {"database"})],
+    )
+    def test_one_database_needs_no_choice(self, databases, arguments):
+        (step,) = for_tool("list_databases", _session(), {"databases": databases})
+
+        assert set(step["arguments"]) == arguments
+
+
+class TestAttaching:
+    STEPS = [{"tool": "t", "arguments": {"a": 1}, "why": "because"}]
+
+    def test_a_dict_gets_one_uniform_field(self):
+        result = attach({"ok": 1, "next_step": "old"}, self.STEPS)
+
+        assert result == {"ok": 1, "next_steps": self.STEPS}
+
+    def test_a_success_with_empty_error_fields_still_gets_them(self):
+        result = attach(
+            {"success": True, "error": None, "error_type": None}, self.STEPS
+        )
+
+        assert result["next_steps"] == self.STEPS
+
+    def test_text_gets_a_section(self):
+        result = attach("Connected.", self.STEPS)
+
+        assert result.startswith("Connected.")
+        assert "## Next step\n- t(a=1) -- because" in result
+
+    @pytest.mark.parametrize(
+        "failed",
+        [
+            {"success": False, "error": "x"},
+            {"error": "x", "error_type": "y"},
+            {"success": None, "error": "x", "error_type": "y"},
+            json.dumps({"error": "x", "error_type": "y"}),
+        ],
+    )
+    def test_an_error_keeps_its_own_guidance(self, failed):
+        assert attach(failed, self.STEPS) == failed
+
+
+@pytest.fixture
+def duck(monkeypatch, tmp_path):
+    import duckdb
+
+    path = tmp_path / "n.duckdb"
+    con = duckdb.connect(str(path))
+    con.execute("CREATE TABLE customers (id INTEGER PRIMARY KEY, name VARCHAR)")
+    con.execute("INSERT INTO customers VALUES (1, 'a'), (2, 'b')")
+    con.close()
+    fresh = ServerState()
+    monkeypatch.setattr(state_module, "_server_state", fresh)
+    monkeypatch.setattr(main_module, "_server_state", fresh)
+    monkeypatch.setattr("src.paths.OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(connection_handler, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(connection_handler, "detect_workspace", lambda _cid: None)
+    monkeypatch.setenv("AUTO_GRAPHRAG", "false")
+    monkeypatch.setenv("OBA_SHACL_VALIDATE", "false")
+    monkeypatch.delenv("OBA_DATABASES", raising=False)
+    monkeypatch.delenv("MOTHERDUCK_TOKEN", raising=False)
+    monkeypatch.setenv("DUCKDB_DATABASE_PATH", str(path))
+    yield fresh
+    fresh.cleanup()
+
+
+async def test_the_workflow_names_each_next_call(duck):
+    async with Client(mcp) as client:
+        connected = (
+            await client.call_tool("connect_database", {"db_type": "duckdb"})
+        ).data
+        handle = re.search(r"(ob_[a-z0-9]{6})", connected).group(1)
+        on = {"connection": handle}
+        discovered = (await client.call_tool("discover_schema", on)).data
+        generated = await client.call_tool(
+            "generate_ontology", {**on, "auto_persist": False}
+        )
+        queried = (
+            await client.call_tool(
+                "execute_sql_query",
+                {
+                    **on,
+                    "sql_query": "SELECT id, name FROM main.customers",
+                    "checklist_completed": True,
+                },
+            )
+        ).data
+
+    assert "## Next step\n- discover_schema()" in connected
+    assert _tools(discovered["next_steps"]) == ["generate_ontology"]
+    generated_text = (
+        generated.data if isinstance(generated.data, str) else str(generated.data)
+    )
+    # AUTO_GRAPHRAG is off here: the hint must not send the model into
+    # graphrag_not_initialized.
+    assert "get_table_details(" in generated_text
+    assert "graphrag_query_context(" not in generated_text
+    assert _tools(queried["next_steps"]) == ["generate_chart"]
+
+
+def test_list_databases_gets_its_hint_without_a_session(monkeypatch):
+    def no_session(_ctx: Any) -> Any:
+        raise RuntimeError("no session yet")
+
+    monkeypatch.setattr(main_module, "get_session_data", no_session)
+
+    result = main_module._with_next_steps(
+        None, "list_databases", {"success": True, "databases": [{"name": "a"}]}
+    )
+
+    assert _tools(result["next_steps"]) == ["connect_database"]
+
+
+async def test_every_tool_a_hint_names_exists():
+    registered = {tool.name for tool in await mcp.list_tools()}
+    sessions = [
+        _session(),
+        _session(cached=True),
+        _session(cached=True, ontology_file="o.ttl"),
+        _session(cached=True, ontology_file="o.ttl", graphrag_initialized=False),
+        _session(loaded_ontology="<ttl>"),
+    ]
+    results = [
+        "ok",
+        {"success": True, "databases": [{"name": "a"}, {"name": "b"}]},
+        {"activated": False},
+        {"status": "refuted"},
+        {"next_step": "suggest_semantic_names"},
+    ]
+    named = {
+        step["tool"]
+        for tool in registered
+        for session in sessions
+        for result in results
+        for step in for_tool(tool, session, result)
+    }
+
+    assert named
+    assert named <= registered, named - registered
+
+
+GRAPHRAG_TOOLS = {
+    "graphrag_query_context",
+    "graphrag_find_join_path",
+    "graphrag_search",
+    "plan_composite_query",
+    "reachable_from",
+    "measurable_from",
+}
+
+
+async def test_no_hint_names_a_graphrag_tool_before_graphrag_is_ready():
+    registered = {tool.name for tool in await mcp.list_tools()}
+    sessions = [
+        _session(graphrag_initialized=False),
+        _session(cached=True, graphrag_initialized=False),
+        _session(cached=True, ontology_file="o.ttl", graphrag_initialized=False),
+        _session(loaded_ontology="<ttl>", graphrag_initialized=False),
+    ]
+    results = [
+        "ok",
+        {"success": True},
+        {"status": "refuted"},
+        {"status": "target_not_unique"},
+        {"status": "confirmed"},
+        {"activated": True},
+        {"next_step": "suggest_semantic_names"},
+    ]
+
+    named = {
+        step["tool"]
+        for tool in registered
+        for session in sessions
+        for result in results
+        for step in for_tool(tool, session, result)
+    }
+
+    assert not named & GRAPHRAG_TOOLS, named & GRAPHRAG_TOOLS
+
+
+def test_a_refuted_relationship_without_graphrag_has_a_usable_route():
+    session = _session(graphrag_initialized=False)
+
+    steps = for_tool("validate_relationship", session, {"status": "refuted"})
+
+    assert _tools(steps) == ["get_table_details", "validate_relationship"]

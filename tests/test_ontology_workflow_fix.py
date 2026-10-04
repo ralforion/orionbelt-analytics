@@ -178,7 +178,8 @@ async def test_lightweight_caches_for_ontology(mock_context, mock_db_manager, tm
         assert result["table_count"] == 3
         assert "table_names" in result
         assert "relationships" in result
-        assert result["next_step"] == "generate_ontology"
+        # One shape for every tool: a list of {tool, arguments, why}.
+        assert result["next_steps"][0]["tool"] == "generate_ontology"
 
         # CRITICAL: Verify that cache_schema_analysis was called with full TableInfo objects
         session.cache_schema_analysis.assert_called_once()
