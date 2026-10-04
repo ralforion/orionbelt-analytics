@@ -7,6 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-03
+
+### Upgrade notes
+- **Token- and key-based connections rebuild their workspace once.** A
+  connection is now identified by who it signs in as as well as where it
+  points, so two credentials for one target never share a connection, schema
+  cache or workspace. Databricks (by `current_user()`, so a rotated token keeps
+  its workspace), Dremio with a PAT, BigQuery with a key and MotherDuck get a
+  new workspace id; the previous workspace is left in place, not adopted.
+- **`BIGQUERY_CREDENTIALS_JSON` is now used.** The driver accepted it and
+  connected with the environment's default credentials instead. It now signs in
+  with the key; a value that is not a JSON key naming its `type` refuses to
+  connect rather than falling back.
+- **`query_sparql` refuses `SERVICE`**, and queries rdflib's SPARQL 1.1 grammar
+  cannot parse. Federated queries made the server request any endpoint a query
+  named, internal hosts included.
+- **`load_my_ontology` activates only ontologies that map to the database**
+  (`oba:tableName` with `oba:columnName`). Others load for SPARQL only and the
+  active ontology stays. An activated upload now takes precedence over the
+  generated ontology; generating again or applying semantic names replaces it.
+- **The Docker image is ~0.2 GB larger:** it includes both embedding models, so
+  it needs no internet access at runtime.
+- **Discovery without a schema uses the working schema, under its real name**,
+  not `"default"`. Schema state an earlier version saved under `"default"` is
+  not reused: the working schema is discovered afresh under its real name.
+- **`oba:View` and `oba:ViewColumn` are `rdfs:Class`** in the OBA vocabulary
+  (they were `owl:Class`), so the table shape no longer reports them as tables
+  when the vocabulary is merged into validation.
+- **Tool results carry a uniform `next_steps` list** (see Added); the older
+  `next_step` string and `next_steps` dict shapes are gone from tool output.
+- **SPARQL prefixes `rdf`, `rdfs`, `owl`, `xsd` and `oba` are predeclared**,
+  as the `query_sparql` description always promised; a query's own `PREFIX`
+  still wins. A syntax error in a query is now one warning line in the server
+  log instead of an error with two tracebacks.
+
+### Added
+- **Every main tool's result names the most likely next call.** Read from the
+  session's state (connected, working schema discovered, ontology active and
+  enriched, GraphRAG ready): `next_steps`, a list of `{tool, arguments, why}`,
+  in dict results, and a "Next step" section in text results. Only calls that
+  will work are named -- GraphRAG tools only once GraphRAG is ready, naming
+  only for the generated ontology -- and errors keep their own guidance.
+  Replaces the scattered `next_step` / `next_steps` hints. (#166)
+- **A working schema per connection.** Configured (`POSTGRES_SCHEMA`, new;
+  `SNOWFLAKE_SCHEMA`, `DATABRICKS_SCHEMA`, `BIGQUERY_DATASET`, `MYSQL_DATABASE`,
+  `CLICKHOUSE_DATABASE`, and their `DB_<NAME>_` forms) or else asked of the
+  database at connect. `connect_database` names it ("qualify tables as
+  sales.<table>"), `discover_schema()` and `generate_ontology()` without a
+  schema use it, and it survives a workspace restore. Session-scoped: sessions
+  sharing a database keep their own. (#164)
+- **`validate_relationship`.** Checks a relationship the ontology states --
+  declared, inferred or uploaded -- against the data with two read-only
+  queries (key coverage, target uniqueness) and records the verdict
+  (`confirmed`, `partial`, `refuted`, `target_not_unique`, `no_data`) on the
+  relationship in the active ontology with new `oba:validation*` terms, in the
+  RDF store and in the workspace, so a regenerated ontology keeps it.
+  `graphrag_find_join_path` shows each join's verdict and warns about refuted,
+  partial or non-unique joins. (#163)
+- **Named databases.** `OBA_DATABASES` plus `DB_<NAME>_*` variables configure
+  several databases on one server, each with a description; `list_databases`
+  shows them (never credentials) and `connect_database(database=...)` connects
+  by name. A type's unprefixed variables are their shared defaults. (#154)
+- **Join discovery without declared keys.** GraphRAG's join graph includes
+  relationships inferred from column names (high and medium confidence, marked
+  with their confidence, never replacing a declared key), and a loaded
+  ontology's relationships for the session that loaded it. (#153)
+- **Business names steer every question.** `graphrag_query_context` searches
+  the names applied with `apply_semantic_names` or
+  `graphrag_add_semantic_context` alongside the schema's own, and says which
+  one matched. (#160)
+- **`GRAPHRAG_EMBEDDING_MODEL=multilingual`.** paraphrase-multilingual-MiniLM-L12-v2,
+  so questions and schema names in different languages meet: German "Umsatz"
+  finds a column named "Net revenue". 8-bit ONNX, pinned revision, SHA-256
+  checked; no PyTorch. (#160)
+- **MCP tool annotations** on every tool: read-only, destructive, idempotent,
+  closed-world, so clients and approval layers can treat tools by what they do.
+  (#157)
+
+### Changed
+- **The Docker image includes the embedding models** (all-MiniLM-L6-v2 and the
+  multilingual model), fetched at build time with checksums verified. (#159, #160)
+- **FastMCP 4.0.10** (from 4.0.5): resource URI-template encoding, binary
+  contents kept in the response cache, JSON-schema constraints kept when a
+  format is set. (#167)
+- **Runtime performance.** Work moved off the event loop, repeated work cached,
+  and six defects the measurements exposed fixed. (#146)
+
+### Security
+- **SPARQL federation refused** by two independent checks, a lexical scan and a
+  parse with rdflib's grammar; checking runs inside the query timeout and off
+  the event loop. (#157, #158)
+- **No connection sharing across credentials** (see Upgrade notes). (#154)
+- Dependency advisories: urllib3 2.8.0 (#155), pyjwt (#148); oauthlib
+  advisories recorded as not reachable (#148, #149).
+
+### Fixed
+- **SHACL relationship shape skipped relationships missing a required
+  annotation**: it selected nodes by `oba:relationshipType`, the annotation it
+  requires. It now selects them by any OBA relationship annotation. (#165)
+- **`query_sparql` failed on the prefixes it promised** ("Prefix not found"),
+  costing the model a retry. (#162)
+- **`apply_semantic_names` refreshed the default RDF graph** instead of the
+  one the active ontology was loaded into with `graph_uri`. (#163)
+- **Tables have identities that include their schema**, so two schemas holding
+  a table of the same name are two tables in GraphRAG, in join paths and in
+  search. (#147)
+- **An uploaded ontology was ignored by OBQC** whenever a generated one existed.
+  (#153)
+
+
 ### Fixed
 - **Rediscovering a schema replaces what changed.** A schema is rediscovered
   precisely when it has changed, and two halves of the derived data kept the
