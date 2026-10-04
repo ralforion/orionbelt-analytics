@@ -35,12 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`oba:View` and `oba:ViewColumn` are `rdfs:Class`** in the OBA vocabulary
   (they were `owl:Class`), so the table shape no longer reports them as tables
   when the vocabulary is merged into validation.
+- **Tool results carry a uniform `next_steps` list** (see Added); the older
+  `next_step` string and `next_steps` dict shapes are gone from tool output.
 - **SPARQL prefixes `rdf`, `rdfs`, `owl`, `xsd` and `oba` are predeclared**,
   as the `query_sparql` description always promised; a query's own `PREFIX`
   still wins. A syntax error in a query is now one warning line in the server
   log instead of an error with two tracebacks.
 
 ### Added
+- **Every main tool's result names the most likely next call.** Read from the
+  session's state (connected, working schema discovered, ontology active and
+  enriched, GraphRAG ready): `next_steps`, a list of `{tool, arguments, why}`,
+  in dict results, and a "Next step" section in text results. Only calls that
+  will work are named -- GraphRAG tools only once GraphRAG is ready, naming
+  only for the generated ontology -- and errors keep their own guidance.
+  Replaces the scattered `next_step` / `next_steps` hints. (#166)
 - **A working schema per connection.** Configured (`POSTGRES_SCHEMA`, new;
   `SNOWFLAKE_SCHEMA`, `DATABRICKS_SCHEMA`, `BIGQUERY_DATASET`, `MYSQL_DATABASE`,
   `CLICKHOUSE_DATABASE`, and their `DB_<NAME>_` forms) or else asked of the
