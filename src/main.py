@@ -397,11 +397,13 @@ def _with_next_steps[R](ctx: Context, tool: str, result: R) -> R:
     Returns a value of the same type: a dict gains ``next_steps``, a string a
     "Next step" section, anything else is returned as it came.
     """
+    # Without a session the rules still work from the result alone -- the
+    # first list_databases() of a sessionless client has none yet.
+    session: Any = None
     try:
         session = get_session_data(ctx)
     except Exception as e:
         logger.debug(f"No session for next steps after {tool}: {e}")
-        return result
     return cast(
         R,
         _h_next_steps.attach(result, _h_next_steps.for_tool(tool, session, result)),

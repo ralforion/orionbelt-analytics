@@ -30,6 +30,7 @@ def _session(**state: Any) -> Any:
         "ontology_file": None,
         "loaded_ontology": None,
         "ontology_enriched": False,
+        "graphrag_initialized": True,
         "get_cached_schema": lambda _schema: [object()] if cached else None,
     }
     values.update(state)
@@ -59,7 +60,8 @@ class TestTheRules:
         )
 
     def test_after_an_ontology_naming_and_validation_are_offered(self):
-        tools = _tools(for_tool("generate_ontology", _session(cached=True), "ok"))
+        session = _session(cached=True, ontology_file="o.ttl")
+        tools = _tools(for_tool("generate_ontology", session, "ok"))
 
         assert tools[:2] == ["graphrag_query_context", "execute_sql_query"]
         assert "suggest_semantic_names" in tools
@@ -71,6 +73,28 @@ class TestTheRules:
         assert "suggest_semantic_names" not in _tools(
             for_tool("generate_ontology", session, "ok")
         )
+
+    def test_without_graphrag_the_direct_route_is_offered(self, monkeypatch):
+        session = _session(
+            cached=True, ontology_file="o.ttl", graphrag_initialized=False
+        )
+
+        monkeypatch.setenv("AUTO_GRAPHRAG", "true")
+        building = for_tool("generate_ontology", session, "ok")
+        monkeypatch.setenv("AUTO_GRAPHRAG", "false")
+        disabled = for_tool("generate_ontology", session, "ok")
+
+        assert _tools(building)[0] == _tools(disabled)[0] == "get_table_details"
+        assert "graphrag_query_context" not in _tools(building)
+        assert "background" in building[0]["why"]
+        assert "AUTO_GRAPHRAG=false" in disabled[0]["why"]
+
+    def test_an_active_upload_is_not_offered_naming(self):
+        session = _session(cached=True, ontology_file=None, loaded_ontology="<ttl>")
+
+        tools = _tools(for_tool("load_my_ontology", session, {"activated": True}))
+
+        assert "suggest_semantic_names" not in tools
 
     def test_an_upload_that_did_not_activate_says_what_to_fix(self):
         steps = for_tool("load_my_ontology", _session(), {"activated": False})
@@ -183,5 +207,49 @@ async def test_the_workflow_names_each_next_call(duck):
     generated_text = (
         generated.data if isinstance(generated.data, str) else str(generated.data)
     )
-    assert "graphrag_query_context(" in generated_text
+    # AUTO_GRAPHRAG is off here: the hint must not send the model into
+    # graphrag_not_initialized.
+    assert "get_table_details(" in generated_text
+    assert "graphrag_query_context(" not in generated_text
     assert _tools(queried["next_steps"]) == ["generate_chart"]
+
+
+def test_list_databases_gets_its_hint_without_a_session(monkeypatch):
+    def no_session(_ctx: Any) -> Any:
+        raise RuntimeError("no session yet")
+
+    monkeypatch.setattr(main_module, "get_session_data", no_session)
+
+    result = main_module._with_next_steps(
+        None, "list_databases", {"success": True, "databases": [{"name": "a"}]}
+    )
+
+    assert _tools(result["next_steps"]) == ["connect_database"]
+
+
+async def test_every_tool_a_hint_names_exists():
+    registered = {tool.name for tool in await mcp.list_tools()}
+    sessions = [
+        _session(),
+        _session(cached=True),
+        _session(cached=True, ontology_file="o.ttl"),
+        _session(cached=True, ontology_file="o.ttl", graphrag_initialized=False),
+        _session(loaded_ontology="<ttl>"),
+    ]
+    results = [
+        "ok",
+        {"success": True, "databases": [{"name": "a"}, {"name": "b"}]},
+        {"activated": False},
+        {"status": "refuted"},
+        {"next_step": "suggest_semantic_names"},
+    ]
+    named = {
+        step["tool"]
+        for tool in registered
+        for session in sessions
+        for result in results
+        for step in for_tool(tool, session, result)
+    }
+
+    assert named
+    assert named <= registered, named - registered

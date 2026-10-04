@@ -14,6 +14,7 @@ results get one; an error already says how to recover.
 """
 
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -53,13 +54,36 @@ def _has_ontology(session: Any) -> bool:
 
 
 def _answering(session: Any) -> list[dict[str, Any]]:
-    """Steps once the schema and ontology are in place."""
-    return [
+    """Steps once the schema and ontology are in place.
+
+    GraphRAG only when it is ready: with AUTO_GRAPHRAG=false, or before the
+    background build finishes, graphrag_query_context answers
+    graphrag_not_initialized, so the hint would send the model into an error.
+    No tool builds it on demand, so the alternative is the direct route.
+    """
+    ready = getattr(session, "graphrag_initialized", False) is True
+    first = (
         _step(
             "graphrag_query_context",
             "Get the tables, columns and joins the question needs, then write SQL",
             query=QUESTION,
-        ),
+        )
+        if ready
+        else _step(
+            "get_table_details",
+            (
+                "Schema search is still being built in the background; until "
+                "graphrag_query_context answers, read the tables the question "
+                "needs directly"
+                if os.getenv("AUTO_GRAPHRAG", "true").lower() == "true"
+                else "Schema search is off (AUTO_GRAPHRAG=false); read the tables "
+                "the question needs directly"
+            ),
+            table_name="<table the question is about>",
+        )
+    )
+    return [
+        first,
         _step(
             "execute_sql_query",
             "Run the SQL; OBQC checks it against the ontology first",
@@ -70,7 +94,12 @@ def _answering(session: Any) -> list[dict[str, Any]]:
 
 def _after_ontology(session: Any) -> list[dict[str, Any]]:
     steps = _answering(session)
-    if not getattr(session, "ontology_enriched", False):
+    # suggest_semantic_names reads the generated ontology file, not an upload:
+    # offered only while the generated ontology is the active one.
+    generated_active = getattr(session, "loaded_ontology", None) is None and (
+        isinstance(getattr(session, "ontology_file", None), str)
+    )
+    if generated_active and not getattr(session, "ontology_enriched", False):
         steps.append(
             _step(
                 "suggest_semantic_names",

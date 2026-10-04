@@ -59,7 +59,7 @@ Successful results of the main tools name the most likely next call, read from t
 |-------|------------------|
 | `list_databases` | `connect_database` (with `database` when several are configured) |
 | `connect_database`, `discover_schema` | `discover_schema` → `generate_ontology` → `graphrag_query_context`, whichever is not done yet |
-| `generate_ontology`, `load_my_ontology`, `apply_semantic_names` | `graphrag_query_context`, then `execute_sql_query`; optionally `suggest_semantic_names` (not yet enriched) and `validate_relationship` |
+| `generate_ontology`, `load_my_ontology`, `apply_semantic_names` | `graphrag_query_context` once GraphRAG is ready (otherwise `get_table_details`), then `execute_sql_query`; optionally `suggest_semantic_names` (generated ontology, not yet enriched) and `validate_relationship` |
 | `suggest_semantic_names` | `apply_semantic_names` |
 | `validate_relationship` | questions; or `graphrag_find_join_path` when refuted |
 | `graphrag_query_context`, `graphrag_find_join_path`, `plan_composite_query`, `reachable_from`, `measurable_from` | `execute_sql_query` |
