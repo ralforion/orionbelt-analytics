@@ -489,7 +489,8 @@ async def discover_schema(
     REQUIRES: connect_database must be called first and must complete before calling this tool.
 
     Args:
-        schema_name: Schema to analyze (optional, uses default if not specified)
+        schema_name: Schema to analyze (optional; without it, the connection's
+            working schema, named in the connect_database response)
         lightweight: If True (default), return minimal data (table names, FK relationships, fan-trap warnings).
                      If False, return full schema with all column details.
     """

@@ -157,6 +157,17 @@ class TableInfo:
 # ---------------------------------------------------------------------------
 
 
+# How each engine names the schema an unqualified table resolves in.
+_CURRENT_SCHEMA_SQL = {
+    "postgresql": "SELECT current_schema()",
+    "duckdb": "SELECT current_schema()",
+    "mysql": "SELECT DATABASE()",
+    "snowflake": "SELECT CURRENT_SCHEMA()",
+    "databricks": "SELECT current_schema()",
+    "clickhouse": "SELECT currentDatabase()",
+}
+
+
 def _bigquery_principal(
     credentials_path: str | None, credentials_json: str | None
 ) -> str | None:
@@ -628,14 +639,30 @@ class DatabaseManager:
         """
         return "credential:" + hashlib.sha256(credential.encode()).hexdigest()
 
+    def _scalar(self, sql: str) -> Any | None:
+        """The single value a fixed server-side statement returns.
+
+        Run on the driver's engine directly: it is the server's own statement,
+        not a user's, and the validator for user SQL is not meant for it.
+
+        Args:
+            sql: A one-row, one-column query.
+
+        Returns:
+            The value, or None if the database would not answer.
+        """
+        engine = getattr(self._driver, "engine", None)
+        if engine is None:
+            return None
+        try:
+            with engine.connect() as conn:
+                return conn.execute(text(sql)).scalar()
+        except Exception as e:
+            logger.debug(f"Could not run {sql!r}: {e}")
+            return None
+
     def _query_principal(self, sql: str) -> str | None:
         """The principal a connection runs as, by asking the database.
-
-        Run on the driver's engine directly. It is the server's own fixed
-        statement, not a user's: sent through execute_sql_query, the validator
-        for user SQL rejected it, logged an injection warning, and every
-        Databricks identity fell back to the token -- so a rotated token
-        orphaned the workspace.
 
         Args:
             sql: A one-row, one-column query naming the current user.
@@ -643,16 +670,25 @@ class DatabaseManager:
         Returns:
             The principal, or None if the database would not say.
         """
-        engine = getattr(self._driver, "engine", None)
-        if engine is None:
-            return None
-        try:
-            with engine.connect() as conn:
-                value = conn.execute(text(sql)).scalar()
-        except Exception as e:
-            logger.debug(f"Could not read the connection's principal: {e}")
-            return None
+        value = self._scalar(sql)
         return f"user:{value}" if value else None
+
+    def resolve_working_schema(self) -> str | None:
+        """The schema unqualified names resolve in, as the database reports it.
+
+        BigQuery has no session schema; its dataset is the configured one.
+        Dremio has none to ask for.
+
+        Returns:
+            The schema name, or None if the database has none to report.
+        """
+        db_type = (self.connection_info or {}).get("type", "")
+        if db_type == "bigquery":
+            dataset = (self.connection_info or {}).get("dataset")
+            return str(dataset) if dataset else None
+        sql = _CURRENT_SCHEMA_SQL.get(db_type)
+        value = self._scalar(sql) if sql else None
+        return str(value) if value else None
 
     def connect_postgresql(
         self, host: str, port: int, database: str, username: str, password: str

@@ -48,7 +48,7 @@ _PRESENCE_VARIABLES: dict[str, tuple[str, ...]] = {
 # in. A whitelist, so a variable added to a driver later stays hidden until
 # someone decides it is safe to show.
 _DISPLAY_VARIABLES: dict[str, tuple[str, ...]] = {
-    "postgresql": ("POSTGRES_DATABASE",),
+    "postgresql": ("POSTGRES_DATABASE", "POSTGRES_SCHEMA"),
     "mysql": ("MYSQL_DATABASE",),
     "snowflake": ("SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA"),
     "dremio": (),
