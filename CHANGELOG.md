@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **SPARQL CONSTRUCT results no longer leak.** The server runs SPARQL in worker
+  threads, and pyoxigraph results are bound to the thread that made them. The
+  federation check's rdflib parse left reference cycles that kept a CONSTRUCT
+  result alive past the call, so the garbage collector freed it later on
+  another thread; pyoxigraph refuses that ("unsendable, but is being dropped
+  on another thread") and the result leaked -- about 7 in 100 queries. The
+  query now runs in its own frame, as SELECT already did, and only text leaves
+  the worker.
+
 ## [2.1.0] - 2026-10-03
 
 ### Upgrade notes
