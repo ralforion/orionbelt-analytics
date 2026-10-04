@@ -180,6 +180,13 @@ async def generate_ontology(
     effective_schema_for_state = schema_name
     if not effective_schema_for_state:
         effective_schema_for_state = session.get_last_analyzed_schema()
+    if not effective_schema_for_state:
+        # A fresh connection: the schema it was configured for, not the
+        # database default.
+        working = getattr(session, "working_schema", None)
+        if isinstance(working, str) and working:
+            effective_schema_for_state = working
+            schema_name = working
     if effective_schema_for_state:
         session.set_current_schema(effective_schema_for_state)
 

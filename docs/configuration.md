@@ -14,6 +14,21 @@ cp .env.template .env
 
 Database credentials live only in the server's environment; `connect_database` never takes them as parameters.
 
+### Working schema
+
+Every connection has a working schema: the one tables are qualified with (`schema.table`) and the one `discover_schema()` analyzes when called without a schema. `connect_database` names it in its response, so the model can qualify tables from the start.
+
+| Database | Configured by | Otherwise |
+|---|---|---|
+| PostgreSQL | `POSTGRES_SCHEMA` | the connection's `current_schema()`, usually `public` |
+| Snowflake | `SNOWFLAKE_SCHEMA` | `PUBLIC` |
+| Databricks | `DATABRICKS_SCHEMA` | `default` |
+| BigQuery | `BIGQUERY_DATASET` | none |
+| MySQL, ClickHouse | `MYSQL_DATABASE`, `CLICKHOUSE_DATABASE` | |
+| DuckDB | -- | `current_schema()`, usually `main` |
+
+Named databases take the same variables with their prefix, e.g. `DB_SALES_POSTGRES_SCHEMA`. For PostgreSQL the setting names the working schema without changing the connection's `search_path`, so an unqualified query behaves as before.
+
 ### Named Databases
 
 A server can hold several databases, each under a name people use. A user can then say "analyse my finance-2025 database": the model calls `list_databases` to see the configured names with their descriptions, and `connect_database(database="finance-2025")`.
@@ -172,6 +187,9 @@ POSTGRES_PORT=5432
 POSTGRES_DATABASE=mydb
 POSTGRES_USERNAME=user
 POSTGRES_PASSWORD=password
+# Optional: the working schema tables are qualified with (default: the
+# connection's current schema, usually public)
+# POSTGRES_SCHEMA=public
 
 # -----------------------------------------------------------------
 # MySQL Configuration

@@ -88,7 +88,7 @@ Connect to one of the databases the server is configured for, by name. Credentia
 
 With neither, the only configured database is used; with several configured, the call fails and lists their names.
 
-**Returns:** Connection status message, ending with the connection handle of the session (see [The `connection` Argument](#the-connection-argument)). If a previous workspace exists for this connection, includes a workspace summary with available artifacts.
+**Returns:** Connection status message, naming the connection's **working schema** (see [Working schema](configuration.md#working-schema)) and ending with the connection handle of the session (see [The `connection` Argument](#the-connection-argument)). If a previous workspace exists for this connection, includes a workspace summary with available artifacts.
 
 **Key Features:**
 - Credentials are read from environment variables (e.g., `POSTGRES_HOST`, `SNOWFLAKE_ACCOUNT`), not passed as parameters

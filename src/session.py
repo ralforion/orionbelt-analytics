@@ -365,6 +365,11 @@ class SessionData:
         # this session: minted by ServerState, passed as the `connection` tool
         # argument. An address, not a secret.
         self.handle: str | None = None
+        # The schema tables are qualified with when the caller names none:
+        # configured for the connection this session made, else the database's
+        # current schema. The session's own -- two named connections may share
+        # one database manager and differ only in their schema.
+        self.working_schema: str | None = None
         # Whether the log has already said that a caller without session or
         # handle was placed here (the sole-session fallback). Once is enough.
         self.fallback_noted: bool = False
