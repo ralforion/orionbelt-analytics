@@ -88,6 +88,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **The Docker image includes the embedding models** (all-MiniLM-L6-v2 and the
   multilingual model), fetched at build time with checksums verified. (#159, #160)
+- **FastMCP 4.0.10** (from 4.0.5): resource URI-template encoding, binary
+  contents kept in the response cache, JSON-schema constraints kept when a
+  format is set. (#167)
 - **Runtime performance.** Work moved off the event loop, repeated work cached,
   and six defects the measurements exposed fixed. (#146)
 
