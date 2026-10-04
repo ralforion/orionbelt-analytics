@@ -267,9 +267,14 @@ oba:ColumnShape a sh:NodeShape ;
 # -----------------------------------------------------------------------------
 # Relationship Shape (base) --- validates generated relationship properties
 #
-# Targets subjects of oba:relationshipType (every generated forward/inverse
-# relationship), not owl:ObjectProperty at large, so meta-level vocabulary
-# object properties (e.g. oba:joinsTo) are not treated as focus nodes.
+# Targets the subjects of ANY OBA relationship annotation, not only of
+# oba:relationshipType: a shape selected by the property it requires never
+# reports that property missing. A relationship that lost oba:relationshipType
+# -- or its domain, range and label -- is still selected through the others.
+# Not owl:ObjectProperty at large, so meta-level vocabulary object properties
+# (e.g. oba:joinsTo) are not treated as focus nodes. An inverse relationship
+# stripped of every OBA annotation is indistinguishable from a business
+# property and is not selected.
 #
 # Both forward (FK-holding) and inverse relationships carry these properties.
 # FK-specific annotations (foreignKeyColumn, referencedTable, etc.) are only
@@ -278,8 +283,16 @@ oba:ColumnShape a sh:NodeShape ;
 
 oba:RelationshipShape a sh:NodeShape ;
     sh:targetSubjectsOf oba:relationshipType ;
+    sh:targetSubjectsOf oba:foreignKeyColumn ;
+    sh:targetSubjectsOf oba:referencedTable ;
+    sh:targetSubjectsOf oba:referencedColumn ;
+    sh:targetSubjectsOf oba:referencedSchema ;
+    sh:targetSubjectsOf oba:sqlJoinCondition ;
+    sh:targetSubjectsOf oba:isInferredRelationship ;
+    sh:targetSubjectsOf oba:inferenceConfidence ;
+    sh:targetSubjectsOf oba:validationStatus ;
     rdfs:label "OBA Relationship Shape" ;
-    rdfs:comment "Base shape for generated relationship object properties (forward and inverse).  Targets subjects of oba:relationshipType so it validates only generated relationships, never meta-level vocabulary terms such as oba:joinsTo (which is an owl:ObjectProperty but carries no oba:relationshipType).  This keeps the shapes correct even when the OBA vocabulary is merged into the data graph (e.g. pyshacl -e oba.ttl)." ;
+    rdfs:comment "Base shape for generated relationship object properties (forward and inverse).  Targets the subjects of any OBA relationship annotation -- not only oba:relationshipType, which it requires -- so it validates relationships that lost a required annotation too, and never meta-level vocabulary terms such as oba:joinsTo (an owl:ObjectProperty carrying no OBA relationship annotation).  This keeps the shapes correct even when the OBA vocabulary is merged into the data graph (e.g. pyshacl -e oba.ttl)." ;
 
     # Required on both forward and inverse
     sh:property [

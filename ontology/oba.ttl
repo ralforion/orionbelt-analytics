@@ -274,11 +274,14 @@ oba:businessRule a owl:AnnotationProperty ;
 # cardinality, so a join to one cannot be validated.  oba:derivedFrom records
 # provenance for lineage and impact analysis, NOT a join path.
 
-oba:View a owl:Class ;
+# Declared rdfs:Class, not owl:Class: table shapes and table extraction select
+# owl:Class, and the vocabulary merged into a data graph (pyshacl -e oba.ttl)
+# must not present its own terms as database tables.
+oba:View a rdfs:Class ;
     rdfs:label "database view" ;
     rdfs:comment "A database view: a named query whose joins and grain are already fixed.  Typed apart from owl:Class so table consumers never mistake one for a base table." .
 
-oba:ViewColumn a owl:Class ;
+oba:ViewColumn a rdfs:Class ;
     rdfs:label "view column" ;
     rdfs:comment "A column exposed by a view.  Typed apart from owl:DatatypeProperty for the same reason oba:View is typed apart from owl:Class." .
 
