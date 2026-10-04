@@ -17,7 +17,7 @@ import os
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
@@ -129,6 +129,7 @@ PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks.
 - `execute_sql_query()` runs built-in syntax, security, and OBQC validation
 - For multi-fact aggregation, use the UNION ALL pattern (see `/fan-trap-prevention`)
 - Databases are configured on the server by name; `list_databases()` shows them with descriptions. Match the user's wording ("the finance database") to one, and ask if more than one fits
+- Successful results name the most likely next call: `next_steps` (a list of tool, arguments, why) or a "Next step" section. Follow it unless the user asked for something else
 - `connect_database()` returns a connection handle (e.g. `ob_k2m9qa`). Every tool accepts it as the optional `connection` argument. If a call fails asking for a connection, pass the handle on every call from then on
 """,
 )
@@ -154,6 +155,7 @@ from .handler_context import HandlerContext  # noqa: E402
 from .handlers import chart as _h_chart  # noqa: E402
 from .handlers import connection as _h_connection  # noqa: E402
 from .handlers import graphrag as _h_graphrag  # noqa: E402
+from .handlers import next_steps as _h_next_steps  # noqa: E402
 from .handlers import ontology as _h_ontology  # noqa: E402
 from .handlers import ontology_validation as _h_validation  # noqa: E402
 from .handlers import query as _h_query  # noqa: E402
@@ -389,6 +391,23 @@ _DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
 )
 
 
+def _with_next_steps[R](ctx: Context, tool: str, result: R) -> R:
+    """The tool's result with the most likely next calls (handlers/next_steps).
+
+    Returns a value of the same type: a dict gains ``next_steps``, a string a
+    "Next step" section, anything else is returned as it came.
+    """
+    try:
+        session = get_session_data(ctx)
+    except Exception as e:
+        logger.debug(f"No session for next steps after {tool}: {e}")
+        return result
+    return cast(
+        R,
+        _h_next_steps.attach(result, _h_next_steps.for_tool(tool, session, result)),
+    )
+
+
 # ============================================================
 # MCP Tool Registration
 # ============================================================
@@ -428,11 +447,15 @@ async def connect_database(
     # it. The handler takes the new runtime's writer lock itself, for the
     # restore, which keeps the order every tool uses: binding, then writer.
     async with _server_state.binding_lock(get_session_data(ctx)):
-        return await _h_connection.connect_database(
+        return _with_next_steps(
             ctx,
-            db_type,
-            services=_services(),
-            database=database,
+            "connect_database",
+            await _h_connection.connect_database(
+                ctx,
+                db_type,
+                services=_services(),
+                database=database,
+            ),
         )
 
 
@@ -446,7 +469,9 @@ async def list_databases(ctx: Context) -> dict[str, Any]:
     Shows each one's name, type, description and target catalog/schema; never
     credentials. No connection needed.
     """
-    return await _h_connection.list_databases(services=_services())
+    return _with_next_steps(
+        ctx, "list_databases", await _h_connection.list_databases(services=_services())
+    )
 
 
 @mcp.tool(annotations=_READ_ONLY)
@@ -495,11 +520,15 @@ async def discover_schema(
                      If False, return full schema with all column details.
     """
     async with _writer_lock(ctx):
-        return await _h_schema.discover_schema(
+        return _with_next_steps(
             ctx,
-            schema_name,
-            lightweight,
-            services=_services(),
+            "discover_schema",
+            await _h_schema.discover_schema(
+                ctx,
+                schema_name,
+                lightweight,
+                services=_services(),
+            ),
         )
 
 
@@ -552,14 +581,18 @@ async def generate_ontology(
         Ontology TTL or status message
     """
     async with _writer_lock(ctx):
-        return await _h_ontology.generate_ontology(
+        return _with_next_steps(
             ctx,
-            schema_info,
-            schema_name,
-            base_uri,
-            auto_persist,
-            graph_uri,
-            services=_services(),
+            "generate_ontology",
+            await _h_ontology.generate_ontology(
+                ctx,
+                schema_info,
+                schema_name,
+                base_uri,
+                auto_persist,
+                graph_uri,
+                services=_services(),
+            ),
         )
 
 
@@ -583,10 +616,14 @@ async def suggest_semantic_names(
     Returns:
         Dictionary containing extracted names, analysis results, and instructions
     """
-    return await _h_ontology.suggest_semantic_names(
+    return _with_next_steps(
         ctx,
-        ontology_file,
-        services=_services(),
+        "suggest_semantic_names",
+        await _h_ontology.suggest_semantic_names(
+            ctx,
+            ontology_file,
+            services=_services(),
+        ),
     )
 
 
@@ -623,12 +660,16 @@ async def apply_semantic_names(
         save_to_file: Whether to save the updated ontology to a file
     """
     async with _writer_lock(ctx):
-        return await _h_ontology.apply_semantic_names(
+        return _with_next_steps(
             ctx,
-            suggestions,
-            ontology_file,
-            save_to_file,
-            services=_services(),
+            "apply_semantic_names",
+            await _h_ontology.apply_semantic_names(
+                ctx,
+                suggestions,
+                ontology_file,
+                save_to_file,
+                services=_services(),
+            ),
         )
 
 
@@ -667,13 +708,17 @@ async def validate_relationship(
         The verdict with its counts, the queries run, and where it was recorded
     """
     async with _writer_lock(ctx):
-        return await _h_validation.validate_relationship(
+        return _with_next_steps(
             ctx,
-            from_table,
-            column,
-            to_table,
-            services=_services(),
-            from_schema=from_schema,
+            "validate_relationship",
+            await _h_validation.validate_relationship(
+                ctx,
+                from_table,
+                column,
+                to_table,
+                services=_services(),
+                from_schema=from_schema,
+            ),
         )
 
 
@@ -711,14 +756,18 @@ async def load_my_ontology(
         Dictionary with ontology information and status
     """
     async with _writer_lock(ctx):
-        return await _h_ontology.load_my_ontology(
+        return _with_next_steps(
             ctx,
-            import_folder,
-            auto_persist,
-            graph_uri,
-            ontology_content=ontology_content,
-            file_name=file_name,
-            services=_services(),
+            "load_my_ontology",
+            await _h_ontology.load_my_ontology(
+                ctx,
+                import_folder,
+                auto_persist,
+                graph_uri,
+                ontology_content=ontology_content,
+                file_name=file_name,
+                services=_services(),
+            ),
         )
 
 
@@ -831,14 +880,18 @@ async def execute_sql_query(
             confirm; if they decline, restructure the query instead of retrying. The finding is still reported, as a warning
             instead of a blocking error, and `obqc_fan_trap` names the tables.
     """
-    return await _h_query.execute_sql_query(
+    return _with_next_steps(
         ctx,
-        sql_query,
-        limit,
-        checklist_completed,
-        query_intent,
-        services=_services(),
-        allow_fan_out=allow_fan_out,
+        "execute_sql_query",
+        await _h_query.execute_sql_query(
+            ctx,
+            sql_query,
+            limit,
+            checklist_completed,
+            query_intent,
+            services=_services(),
+            allow_fan_out=allow_fan_out,
+        ),
     )
 
 
@@ -1150,12 +1203,16 @@ async def graphrag_query_context(
     Returns:
         Optimized context with relevant tables, columns, relationships
     """
-    return await _h_graphrag.graphrag_query_context(
+    return _with_next_steps(
         ctx,
-        query,
-        max_tables,
-        max_columns,
-        services=_services(),
+        "graphrag_query_context",
+        await _h_graphrag.graphrag_query_context(
+            ctx,
+            query,
+            max_tables,
+            max_columns,
+            services=_services(),
+        ),
     )
 
 
@@ -1177,12 +1234,16 @@ async def graphrag_find_join_path(
     Returns:
         Dictionary with join path specifications
     """
-    return await _h_graphrag.graphrag_find_join_path(
+    return _with_next_steps(
         ctx,
-        from_table,
-        to_table,
-        max_hops,
-        services=_services(),
+        "graphrag_find_join_path",
+        await _h_graphrag.graphrag_find_join_path(
+            ctx,
+            from_table,
+            to_table,
+            max_hops,
+            services=_services(),
+        ),
     )
 
 
@@ -1209,11 +1270,15 @@ async def reachable_from(
     Returns:
         Dictionary with reachable (dimension-capable) tables and per-hop breakdown
     """
-    return await _h_graphrag.reachable_from(
+    return _with_next_steps(
         ctx,
-        table,
-        max_hops,
-        services=_services(),
+        "reachable_from",
+        await _h_graphrag.reachable_from(
+            ctx,
+            table,
+            max_hops,
+            services=_services(),
+        ),
     )
 
 
@@ -1238,11 +1303,15 @@ async def measurable_from(
     Returns:
         Dictionary with measure-capable tables and per-hop breakdown
     """
-    return await _h_graphrag.measurable_from(
+    return _with_next_steps(
         ctx,
-        table,
-        max_hops,
-        services=_services(),
+        "measurable_from",
+        await _h_graphrag.measurable_from(
+            ctx,
+            table,
+            max_hops,
+            services=_services(),
+        ),
     )
 
 
@@ -1273,11 +1342,15 @@ async def plan_composite_query(
         Dictionary with cfl_required flag, leg roots, conformed dimensions, and
         per-leg dimension/NULL-pad decomposition
     """
-    return await _h_graphrag.plan_composite_query(
+    return _with_next_steps(
         ctx,
-        facts,
-        dimensions,
-        services=_services(),
+        "plan_composite_query",
+        await _h_graphrag.plan_composite_query(
+            ctx,
+            facts,
+            dimensions,
+            services=_services(),
+        ),
     )
 
 
