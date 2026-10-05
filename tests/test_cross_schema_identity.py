@@ -218,6 +218,59 @@ class TestTheIndexKeepsThemApart:
         assert by_id.get("sales.orders") == "orders"
         assert by_id.get("archive.orders") == "orders"
 
+    def test_a_table_the_approximate_index_misses_is_still_found(self, manager):
+        # The flake this test once was: both schemas' orders.id and
+        # orders.amount embed to identical vectors, which leaves ChromaDB's HNSW
+        # graph poorly connected -- differently per build -- and a filtered
+        # search then returned one of the two tables. Simulated here, as the
+        # real miss cannot be produced on demand.
+        manager.vector_store.collection = _Dropping(
+            manager.vector_store.collection, drop="archive.orders"
+        )
+
+        results = manager.search_schema("orders", top_k=4, element_type="table")
+
+        assert {r["element"]["id"] for r in results} == {
+            "sales.orders",
+            "archive.orders",
+        }
+
+    def test_the_exact_ranking_agrees_with_the_index(self, manager):
+        complete = manager.search_schema("orders", top_k=4, element_type="table")
+        manager.vector_store.collection = _Dropping(
+            manager.vector_store.collection, drop="archive.orders"
+        )
+
+        recovered = manager.search_schema("orders", top_k=4, element_type="table")
+
+        assert [r["element"]["id"] for r in recovered] == [
+            r["element"]["id"] for r in complete
+        ]
+        # Same metric as ChromaDB's; only float32 rounding differs.
+        assert [r["similarity_score"] for r in recovered] == pytest.approx(
+            [r["similarity_score"] for r in complete]
+        )
+
+
+class _Dropping:
+    """A collection whose approximate query misses one element."""
+
+    def __init__(self, collection: Any, drop: str) -> None:
+        self._collection = collection
+        self._drop = drop
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._collection, name)
+
+    def query(self, **kwargs: Any) -> dict[str, Any]:
+        found = self._collection.query(**kwargs)
+        keep = [i for i, id_ in enumerate(found["ids"][0]) if id_ != self._drop]
+        return {
+            key: [[values[0][i] for i in keep]] if values else values
+            for key, values in found.items()
+            if key in ("ids", "metadatas", "distances", "embeddings")
+        }
+
 
 class TestNothingChangesWithoutSchemas:
     """Most callers have no schemas, and nothing about them is ambiguous."""
