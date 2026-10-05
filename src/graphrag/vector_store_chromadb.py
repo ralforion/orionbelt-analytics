@@ -451,6 +451,11 @@ class ChromaDBVectorStore:
             logger.error(f"ChromaDB query failed: {e}")
             return []
 
+        if where_filter is not None and len(results["ids"][0]) < top_k:
+            results = self._exact_if_short(
+                query_embedding, top_k, where_filter, results
+            )
+
         # Convert results to StoredElement format
         stored_elements: list[tuple[StoredElement, float]] = []
 
@@ -496,6 +501,55 @@ class ChromaDBVectorStore:
             stored_elements.append((element, similarity))
 
         return stored_elements
+
+    def _exact_if_short(
+        self,
+        query_embedding: np.ndarray,
+        top_k: int,
+        where_filter: dict[str, Any],
+        results: dict[str, Any],
+    ) -> dict[str, Any]:
+        """An exact search when a filtered query found fewer than exist.
+
+        ChromaDB answers with its approximate HNSW index, and a filtered search
+        there can miss elements outright: schemas repeat columns, repeated
+        columns embed to identical vectors, and identical vectors leave the
+        graph poorly connected -- differently on each build, as ChromaDB builds
+        it on several threads. A search for a two-table schema's tables could
+        then return one. Short results are the visible symptom; when more
+        elements match the filter than came back, rank all of them exactly.
+        The filtered set is one element type, small enough to rank directly.
+
+        Args:
+            query_embedding: The query vector, already at the index dimension.
+            top_k: Number of results wanted.
+            where_filter: The metadata filter the query used.
+            results: What the approximate query returned.
+
+        Returns:
+            ``results``, or the exact top ``top_k`` in the same shape.
+        """
+        returned = len(results["ids"][0])
+        matching = self.collection.get(
+            where=cast(Any, where_filter), include=["embeddings", "metadatas"]
+        )
+        if len(matching["ids"]) <= returned:
+            return results
+        logger.debug(
+            f"Approximate search returned {returned} of {len(matching['ids'])} "
+            f"elements matching {where_filter}; ranking them exactly"
+        )
+        metadatas = matching["metadatas"] or [{} for _ in matching["ids"]]
+        embeddings = np.asarray(matching["embeddings"], dtype=np.float32)
+        # ChromaDB's "l2" space reports squared Euclidean distance.
+        distances = np.sum((embeddings - query_embedding) ** 2, axis=1)
+        order = np.argsort(distances, kind="stable")[:top_k]
+        return {
+            "ids": [[matching["ids"][i] for i in order]],
+            "metadatas": [[metadatas[i] for i in order]],
+            "distances": [[float(distances[i]) for i in order]],
+            "embeddings": [[embeddings[i] for i in order]],
+        }
 
     def search_by_text(
         self,
