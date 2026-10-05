@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-05
+
 ### Fixed
 - **Filtered schema search no longer drops matches.** ChromaDB searches
   with an approximate (HNSW) index, and schemas that repeat columns produce
@@ -14,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each build. A search for one element type, e.g. tables, could then return
   fewer matches than exist (one of two tables). When a filtered search comes
   back short while more elements match, they are now ranked exactly, with the
-  same distance ChromaDB uses.
+  same distance ChromaDB uses. (#170)
 - **SPARQL CONSTRUCT results no longer leak.** The server runs SPARQL in worker
   threads, and pyoxigraph results are bound to the thread that made them. The
   federation check's rdflib parse left reference cycles that kept a CONSTRUCT
@@ -22,7 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another thread; pyoxigraph refuses that ("unsendable, but is being dropped
   on another thread") and the result leaked -- about 7 in 100 queries. The
   query now runs in its own frame, as SELECT already did, and only text leaves
-  the worker.
+  the worker. (#168)
+
+### Changed
+- Dependencies (lockfile only): snowflake-connector-python 4.8.0, duckdb
+  1.5.6, cryptography 50.0.2, sqlglot 30.21.0, onnxruntime 1.30.0, tokenizers
+  0.23.2, python-dotenv 1.2.4. (#169)
 
 ## [2.1.0] - 2026-10-03
 
