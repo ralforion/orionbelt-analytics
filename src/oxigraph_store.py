@@ -712,6 +712,40 @@ class OxigraphStoreManager:
             logger.exception(f"SPARQL ASK query failed: {e}")
             raise
 
+    def _execute_construct(self, sparql_query: str) -> str:
+        """Execute a CONSTRUCT query and serialize it to Turtle.
+
+        A separate frame from the federation check on purpose, as
+        :meth:`_execute_select` is. rdflib's parse leaves reference cycles
+        that reach back to the frame that called it; a pyoxigraph result
+        held in that frame then outlives the call and is freed by the garbage
+        collector on whatever thread runs it -- usually not the worker that
+        made it. pyoxigraph results are bound to their thread, so it refuses
+        the drop ("unsendable, but is being dropped on another thread") and
+        the result leaks. Here the result lives and dies in this frame, on
+        the calling thread, and only text leaves.
+
+        Args:
+            sparql_query: SPARQL CONSTRUCT query string.
+
+        Returns:
+            The constructed triples as Turtle ("" when none).
+        """
+        # CONSTRUCT yields QueryTriples; narrow the query() union so serialize()
+        # resolves to the RDF (not results) overload.
+        results = cast(
+            "QueryTriples",
+            self.store.query(
+                sparql_query,
+                use_default_graph_as_union=not _declares_dataset(sparql_query),
+                prefixes=DEFAULT_PREFIXES,
+            ),
+        )
+        # serialize() yields bytes (or None for an empty result), so decode to
+        # satisfy the str return contract.
+        serialized = results.serialize(format=RdfFormat.TURTLE)
+        return serialized.decode("utf-8") if serialized is not None else ""
+
     def query_sparql_construct(self, sparql_query: str) -> str:
         """
         Execute SPARQL CONSTRUCT query.
@@ -742,20 +776,7 @@ class OxigraphStoreManager:
         """
         reject_federation(sparql_query)
         try:
-            # CONSTRUCT yields QueryTriples; narrow the query() union so serialize()
-            # resolves to the RDF (not results) overload.
-            results = cast(
-                "QueryTriples",
-                self.store.query(
-                    sparql_query,
-                    use_default_graph_as_union=not _declares_dataset(sparql_query),
-                    prefixes=DEFAULT_PREFIXES,
-                ),
-            )
-            # serialize() yields bytes (or None for an empty result), so decode to
-            # satisfy the str return contract.
-            serialized = results.serialize(format=RdfFormat.TURTLE)
-            return serialized.decode("utf-8") if serialized is not None else ""
+            return self._execute_construct(sparql_query)
         except SyntaxError as e:
             # The query's own mistake, returned to whoever wrote it; a traceback
             # in the server log adds nothing.
