@@ -74,11 +74,11 @@ class ForeignKey:
 def foreign_keys(table_name: str, fk_entries: list[dict[str, Any]]) -> list[ForeignKey]:
     """Group a table's foreign key entries into keys and name them.
 
-    Drivers report one entry per key column and no constraint name, so a
-    composite key arrives as several entries naming the same table. They are
-    taken as one key when each references a different column; when they
-    repeat a referenced column, or leave it out, each entry is a key of its
-    own (two keys to one table, such as billing and shipping address).
+    Drivers report one entry per key column, tagged with the constraint it
+    belongs to (``constraint_name``); the entries of one constraint are one
+    key. An entry without that tag (a schema saved by an older version) is a
+    key of its own: which columns form a key cannot be told from their names
+    -- two keys to ``users.id`` and ``users.email`` look like one composite.
 
     A key is named after the two tables. When a table has several keys to the
     same table, each is also named after its first column, so they stay
@@ -91,20 +91,16 @@ def foreign_keys(table_name: str, fk_entries: list[dict[str, Any]]) -> list[Fore
     Returns:
         The keys, in the order their first entry appears
     """
-    by_target: dict[tuple[str, Any], list[dict[str, Any]]] = {}
-    for entry in fk_entries:
+    by_constraint: dict[Any, ForeignKey] = {}
+    for i, entry in enumerate(fk_entries):
         if not entry.get("referenced_table") or not entry.get("column"):
             continue
-        target = (entry["referenced_table"], entry.get("referenced_schema"))
-        by_target.setdefault(target, []).append(entry)
-
-    keys: list[ForeignKey] = []
-    for (ref_table, _), entries in by_target.items():
-        ref_columns = [e.get("referenced_column") for e in entries]
-        if all(ref_columns) and len(set(ref_columns)) == len(ref_columns):
-            keys.append(ForeignKey(ref_table, entries))
-        else:
-            keys.extend(ForeignKey(ref_table, [e]) for e in entries)
+        constraint = entry.get("constraint_name")
+        group = (constraint, entry["referenced_table"]) if constraint else i
+        if group not in by_constraint:
+            by_constraint[group] = ForeignKey(entry["referenced_table"])
+        by_constraint[group].entries.append(entry)
+    keys = list(by_constraint.values())
 
     per_target: dict[str, int] = {}
     for key in keys:
@@ -119,3 +115,36 @@ def foreign_keys(table_name: str, fk_entries: list[dict[str, Any]]) -> list[Fore
             table_name, key.referenced_table, key.via_column
         )
     return keys
+
+
+def assumed_key_column(table_name: str, column_names: list[str]) -> str | None:
+    """The column taken as a keyless table's key, judged by its name alone.
+
+    Warehouses rarely declare keys. Relationships to such tables are inferred
+    from names (``customer_id`` -> ``customers.id``), which already assumes
+    that ``customers.id`` identifies a row; this names that assumption, so
+    every consumer makes the same one. It is never verified here.
+
+    Args:
+        table_name: The table
+        column_names: Its columns
+
+    Returns:
+        ``id``, else ``<table>_id`` or ``<table>_sk`` (also singular), or None
+    """
+    table = table_name.lower()
+    stems = [table]
+    if table.endswith("ies"):
+        stems.append(table[:-3] + "y")
+    elif table.endswith("es"):
+        stems.append(table[:-2])
+    if table.endswith("s"):
+        stems.append(table[:-1])
+    candidates = ["id"] + [
+        f"{stem}{suffix}" for suffix in ("_id", "_sk") for stem in stems
+    ]
+    by_lower = {c.lower(): c for c in column_names}
+    for candidate in candidates:
+        if candidate in by_lower:
+            return by_lower[candidate]
+    return None

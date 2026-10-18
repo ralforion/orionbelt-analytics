@@ -302,6 +302,10 @@ class MySQLDriver(DatabaseDriver):
                                         "referenced_table": fk_table,
                                         "referenced_column": fk_column,
                                         "referenced_schema": fk_schema,
+                                        # Which constraint the column belongs to, so the
+                                        # columns of a composite key stay one key.
+                                        "constraint_name": fk.get("name")
+                                        or f"#{table_fks.index(fk)}",
                                     }
                                 )
                                 logger.debug(

@@ -21,6 +21,7 @@ from .constants import DEFAULT_BASE_URI
 from .database_manager import TableInfo
 from .ontology_naming import (
     ForeignKey,
+    assumed_key_column,
     class_local_name,
     column_property_local_name,
     foreign_keys,
@@ -75,9 +76,9 @@ class R2RMLGenerator:
         """
         self.base_iri = base_iri if base_iri.endswith("/") else base_iri + "/"
         self.database_name = database_name
-        self.vocabulary_iri = (
-            vocabulary_iri if vocabulary_iri.endswith("/") else vocabulary_iri + "/"
-        )
+        # Kept exactly as given, as the ontology generator does: a "#"
+        # namespace must not become "#/".
+        self.vocabulary_iri = vocabulary_iri
 
     def generate_from_schema(
         self, tables_info: list[TableInfo], schema_name: str | None = None
@@ -101,14 +102,35 @@ class R2RMLGenerator:
         lines.extend(self._generate_prefixes())
         lines.append("")
 
-        # Build a lookup for tables by name for FK resolution
-        table_lookup = {t.name: t for t in tables_info}
-
-        # Generate TriplesMap for each table
+        # A row needs a key to be named. Tables without one are left out:
+        # naming rows from all their columns would merge rows, or drop every
+        # row holding a NULL.
+        row_keys: dict[str, list[str]] = {}
         for table_info in tables_info:
-            lines.extend(
-                self._generate_triples_map(table_info, schema_name, table_lookup)
-            )
+            key = self._row_key(table_info)
+            if key is None:
+                logger.warning(
+                    f"Table '{table_info.name}' has no primary key and no "
+                    "key-like column; leaving it out of the R2RML mapping"
+                )
+                lines.append(
+                    f"# {table_info.name}: not mapped -- no primary key and no "
+                    "key-like column (id, <table>_id, <table>_sk)"
+                )
+                lines.append("")
+            else:
+                row_keys[table_info.name] = key
+
+        for table_info in tables_info:
+            if table_info.name not in row_keys:
+                continue
+            if not table_info.primary_keys:
+                (key_column,) = row_keys[table_info.name]
+                lines.append(
+                    f"# key inferred from naming, not declared: "
+                    f"{table_info.name}.{key_column}"
+                )
+            lines.extend(self._generate_triples_map(table_info, schema_name, row_keys))
             lines.append("")
 
         return "\n".join(lines)
@@ -130,14 +152,14 @@ class R2RMLGenerator:
         self,
         table_info: TableInfo,
         schema_name: str | None,
-        table_lookup: dict[str, TableInfo],
+        row_keys: dict[str, list[str]],
     ) -> list[str]:
         """Generate a TriplesMap for a single table.
 
         Args:
             table_info: TableInfo object for the table
             schema_name: Optional schema name
-            table_lookup: Dictionary mapping table names to TableInfo objects
+            row_keys: Key columns of each mapped table, by table name
 
         Returns:
             List of Turtle lines for the TriplesMap
@@ -164,7 +186,7 @@ class R2RMLGenerator:
 
         # Subject map
         lines.append("    rr:subjectMap [")
-        lines.extend(self._generate_subject_map(table_info))
+        lines.extend(self._generate_subject_map(table_info, row_keys[table_name]))
         lines.append(f"        rr:class ont:{class_local_name(table_name)}")
         lines.append("    ] ;")
 
@@ -178,7 +200,7 @@ class R2RMLGenerator:
                 f"rr:objectMap [ rr:column {column_ref} ] ] ;"
             )
 
-        for key, fk_columns in self._resolve_foreign_keys(table_info, table_lookup):
+        for key, fk_columns in self._resolve_foreign_keys(table_info, row_keys):
             lines.extend(self._generate_fk_predicate_object_map(key, fk_columns))
 
         # Remove trailing semicolon from last predicate-object map and add period
@@ -187,49 +209,39 @@ class R2RMLGenerator:
 
         return lines
 
-    def _generate_subject_map(self, table_info: TableInfo) -> list[str]:
-        """Generate the term lines of a table's subject map.
+    @staticmethod
+    def _row_key(table_info: TableInfo) -> list[str] | None:
+        """The columns that identify a row: the declared or the assumed key."""
+        if table_info.primary_keys:
+            return list(table_info.primary_keys)
+        column = assumed_key_column(
+            table_info.name, [c.name for c in table_info.columns]
+        )
+        return [column] if column else None
 
-        A table with a primary key gets an IRI per row. Without one there is
-        no column that identifies a row, so the row becomes a blank node keyed
-        on its non-null columns rather than an IRI that may merge rows.
+    def _generate_subject_map(
+        self, table_info: TableInfo, key_columns: list[str]
+    ) -> list[str]:
+        """Generate the term lines of a table's subject map.
 
         Args:
             table_info: TableInfo object
+            key_columns: The columns that identify a row
 
         Returns:
             Turtle lines for the subject map's term
         """
-        pk_columns = table_info.primary_keys
-        if pk_columns:
-            key_columns = pk_columns
-        else:
-            key_columns = [c.name for c in table_info.columns if not c.is_nullable]
-            if not key_columns:
-                key_columns = [c.name for c in table_info.columns]
-            logger.warning(
-                f"Table '{table_info.name}' has no primary key; "
-                "mapping its rows to blank nodes"
-            )
-
         # R2RML percent-encodes "/" inside a column value, so "/" separates
         # the parts of a composite key unambiguously.
         placeholders = "/".join(
             "{" + _template_text(_sql_identifier(c)) + "}" for c in key_columns
         )
-        if pk_columns:
-            prefix = _template_text(
-                f"{self.base_iri}{class_local_name(table_info.name)}/"
-            )
-            return [f"        rr:template {_turtle_string(prefix + placeholders)} ;"]
-        return [
-            f"        rr:template {_turtle_string(placeholders)} ;",
-            "        rr:termType rr:BlankNode ;",
-        ]
+        prefix = _template_text(f"{self.base_iri}{class_local_name(table_info.name)}/")
+        return [f"        rr:template {_turtle_string(prefix + placeholders)} ;"]
 
     @staticmethod
     def _resolve_foreign_keys(
-        table_info: TableInfo, table_lookup: dict[str, TableInfo]
+        table_info: TableInfo, row_keys: dict[str, list[str]]
     ) -> list[tuple[ForeignKey, list[tuple[str, str]]]]:
         """The table's foreign keys that can be mapped as joins.
 
@@ -237,15 +249,15 @@ class R2RMLGenerator:
 
         Args:
             table_info: TableInfo object of the referencing table
-            table_lookup: Dict mapping table names to TableInfo
+            row_keys: Key columns of each mapped table, by table name
 
         Returns:
             Each mappable key with its (child column, parent column) pairs
         """
         resolved = []
         for key in foreign_keys(table_info.name, table_info.foreign_keys):
-            parent = table_lookup.get(key.referenced_table)
-            if parent is None:
+            parent_key = row_keys.get(key.referenced_table)
+            if parent_key is None:
                 # Mapping a join needs the parent's TriplesMap, which only
                 # exists for tables of this mapping.
                 logger.debug(
@@ -255,10 +267,19 @@ class R2RMLGenerator:
                 continue
             pairs = []
             for child, parent_column in key.column_pairs:
-                if not parent_column and len(parent.primary_keys) == 1:
-                    parent_column = parent.primary_keys[0]
+                if not parent_column and len(parent_key) == 1:
+                    parent_column = parent_key[0]
                 if parent_column:
                     pairs.append((child, parent_column))
+            parent_columns = {parent_col for _, parent_col in pairs}
+            if parent_columns < set(parent_key):
+                # Part of a composite key, from a schema that did not record
+                # which columns form one key: the join would match many rows.
+                logger.debug(
+                    f"FK {table_info.name} -> {key.referenced_table}: covers "
+                    "part of a composite key, keeping the column values only"
+                )
+                continue
             if pairs:
                 resolved.append((key, pairs))
         return resolved

@@ -33,8 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the parent table's mapping, so composite keys and keys onto non-key columns
   map correctly, and the key column's value is mapped as well as the link.
 - **R2RML: tables without a primary key no longer merge rows.** Their rows
-  were IRIs built from the first column; they are now blank nodes keyed on
-  the non-null columns.
+  were IRIs built from the first column, whatever it held. Since warehouses
+  rarely declare keys, a key-like column (`id`, `<table>_id`, `<table>_sk`) is
+  now taken as the key -- the assumption relationship inference already makes
+  -- and marked in the mapping as inferred. A table with neither is left out
+  of the mapping, with a comment saying so.
+- **R2RML: a composite foreign key is one join, and only one.** Drivers now
+  record which constraint each key column belongs to (`constraint_name`), so
+  the columns of one key are joined together and two keys onto the same table
+  (`users.id`, `users.email`) stay apart. Schemas saved before this carry no
+  constraint; their key columns are taken one by one, and a join onto part of
+  a composite key is left out rather than matching many rows.
+- **R2RML: a `#` vocabulary namespace is kept as given,** instead of
+  becoming `#/` and missing the ontology's classes.
 - **R2RML: table and column names keep their case.** They are delimited
   identifiers (`rr:tableName "\"SALES\".\"ORDERS\""`) instead of an unquoted
   `SELECT *`, which broke on case-sensitive names, e.g. on Snowflake.

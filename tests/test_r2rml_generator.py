@@ -86,11 +86,13 @@ def _schema() -> list[TableInfo]:
                 "column": "order_id",
                 "referenced_table": "order_lines",
                 "referenced_column": "order_id",
+                "constraint_name": "shipments_line_fk",
             },
             {
                 "column": "line_no",
                 "referenced_table": "order_lines",
                 "referenced_column": "line_no",
+                "constraint_name": "shipments_line_fk",
             },
         ],
     )
@@ -171,12 +173,107 @@ def test_composite_primary_key_separated_by_slash() -> None:
     )
 
 
-def test_table_without_primary_key_maps_to_blank_nodes() -> None:
-    """Keyed on its non-null columns, never on a guessed identifier."""
+def _keyless(name: str, columns: list[str]) -> TableInfo:
+    return TableInfo(
+        name=name,
+        schema="sales",
+        columns=[_col(c, nullable=True) for c in columns],
+        primary_keys=[],
+        foreign_keys=[],
+    )
+
+
+def test_keyless_table_uses_its_id_column_as_key() -> None:
+    """Warehouses rarely declare keys: an id-named column is assumed."""
+    tables = [_keyless("customers", ["id", "name"])]
+    ttl = R2RMLGenerator(base_iri=BASE, vocabulary_iri=VOCAB).generate_from_schema(
+        tables, schema_name="sales"
+    )
+    assert "# key inferred from naming, not declared: customers.id" in ttl
+    graph = _mapping(tables)
+    subject = graph.value(_triples_map(graph, "customers"), RR.subjectMap)
+    assert str(graph.value(subject, RR.template)) == BASE + 'customers/{"id"}'
+    assert graph.value(subject, RR.termType) is None  # an IRI
+
+
+def test_keyless_table_uses_table_named_key() -> None:
+    for column in ("customer_id", "customers_id", "customer_sk"):
+        graph = _mapping([_keyless("customers", [column, "name"])])
+        subject = graph.value(_triples_map(graph, "customers"), RR.subjectMap)
+        assert str(graph.value(subject, RR.template)) == (
+            BASE + f'customers/{{"{column}"}}'
+        )
+
+
+def test_keyless_table_without_key_like_column_is_left_out() -> None:
+    """Naming rows from all columns would merge rows or drop NULL rows."""
+    events = _keyless("events", ["kind", "at"])
+    referencing = TableInfo(
+        name="alerts",
+        schema="sales",
+        columns=[_col("id", pk=True), _col("event_kind", fk=True)],
+        primary_keys=["id"],
+        foreign_keys=[
+            {
+                "column": "event_kind",
+                "referenced_table": "events",
+                "referenced_column": "kind",
+                "constraint_name": "alerts_event_fk",
+            }
+        ],
+    )
+    ttl = R2RMLGenerator(base_iri=BASE, vocabulary_iri=VOCAB).generate_from_schema(
+        [events, referencing], schema_name="sales"
+    )
+    assert "# events: not mapped" in ttl
+    graph = _mapping([events, referencing])
+    assert len(set(graph.subjects(RDF.type, RR.TriplesMap))) == 1
+    tm = _triples_map(graph, "alerts")
+    assert not _object_maps(graph, tm, "alerts_has_events")
+    assert _object_maps(graph, tm, "alerts_event_kind")
+
+
+def test_no_subject_is_a_blank_node() -> None:
     graph = _mapping()
-    subject = graph.value(_triples_map(graph, "audit_log"), RR.subjectMap)
-    assert graph.value(subject, RR.termType) == RR.BlankNode
-    assert str(graph.value(subject, RR.template)) == '{"event"}'
+    assert RR.BlankNode not in set(graph.objects(None, RR.termType))
+    assert '"sales"."audit_log"' not in {
+        str(graph.value(graph.value(tm, RR.logicalTable), RR.tableName))
+        for tm in graph.subjects(RDF.type, RR.TriplesMap)
+    }
+
+
+def test_hash_vocabulary_is_kept_exactly() -> None:
+    vocab = "http://example.org/vocab#"
+    tables = _schema()
+    ttl = R2RMLGenerator(base_iri=BASE, vocabulary_iri=vocab).generate_from_schema(
+        tables, schema_name="sales"
+    )
+    mapping = Graph()
+    mapping.parse(data=ttl, format="turtle", publicID="http://mapping/")
+    ontology = Graph()
+    ontology.parse(
+        data=OntologyGenerator(base_uri=vocab).generate_from_schema(
+            tables, include_inferred_relationships=False
+        ),
+        format="turtle",
+    )
+    classes = set(mapping.objects(None, RR["class"]))
+    assert URIRef(vocab + "orders") in classes
+    for cls in classes:
+        assert (cls, RDF.type, OWL.Class) in ontology, cls
+
+
+def test_partial_composite_key_without_constraint_is_not_joined() -> None:
+    """Joining on one column of a two-column key would match many rows."""
+    shipments = next(t for t in _schema() if t.name == "shipments")
+    for fk in shipments.foreign_keys:
+        del fk["constraint_name"]
+    order_lines = next(t for t in _schema() if t.name == "order_lines")
+    graph = _mapping([order_lines, shipments])
+    tm = _triples_map(graph, "shipments")
+    predicates = {str(p) for p in graph.objects(None, RR.predicate)}
+    assert not any("_has_order_lines" in p for p in predicates)
+    assert _object_maps(graph, tm, "shipments_order_id")
 
 
 def test_foreign_key_column_keeps_its_value() -> None:

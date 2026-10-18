@@ -14,11 +14,18 @@ ONT = Namespace(VOCAB)
 OBA = Namespace(OBA_NAMESPACE)
 
 
-def _fk(column: str, table: str, ref_column: str | None = "id") -> dict:
+def _fk(
+    column: str,
+    table: str,
+    ref_column: str | None = "id",
+    constraint: str | None = None,
+) -> dict:
+    """An FK entry as drivers report it, one per constraint unless shared."""
     return {
         "column": column,
         "referenced_table": table,
         "referenced_column": ref_column,
+        "constraint_name": constraint or f"{column}_fk",
     }
 
 
@@ -92,16 +99,41 @@ class TestForeignKeys:
         (key,) = foreign_keys(
             "shipments",
             [
-                _fk("order_id", "order_lines", "order_id"),
-                _fk("line_no", "order_lines", "line_no"),
+                _fk("order_id", "order_lines", "order_id", "line_fk"),
+                _fk("line_no", "order_lines", "line_no", "line_fk"),
             ],
         )
         assert key.local_name == "shipments_has_order_lines"
         assert key.column_pairs == [("order_id", "order_id"), ("line_no", "line_no")]
 
-    def test_unknown_referenced_columns_are_separate_keys(self) -> None:
+    def test_keys_to_different_columns_of_one_table_stay_separate(self) -> None:
+        """Two keys onto users.id and users.email are not one composite key."""
         keys = foreign_keys(
-            "orders", [_fk("a_id", "addresses", None), _fk("b_id", "addresses", None)]
+            "audits",
+            [_fk("actor_id", "users", "id"), _fk("approver_email", "users", "email")],
+        )
+        assert [k.column_pairs for k in keys] == [
+            [("actor_id", "id")],
+            [("approver_email", "email")],
+        ]
+
+    def test_entries_without_constraint_are_separate_keys(self) -> None:
+        """A schema saved before constraints were recorded: never guess."""
+        entries = [
+            _fk("order_id", "order_lines", "order_id"),
+            _fk("line_no", "order_lines", "line_no"),
+        ]
+        for entry in entries:
+            del entry["constraint_name"]
+        assert len(foreign_keys("shipments", entries)) == 2
+
+    def test_same_constraint_name_on_other_tables_is_not_merged(self) -> None:
+        keys = foreign_keys(
+            "orders",
+            [
+                _fk("a_id", "addresses", "id", "fk1"),
+                _fk("c_id", "customers", "id", "fk1"),
+            ],
         )
         assert len(keys) == 2
 
@@ -205,3 +237,34 @@ def test_r2rml_and_ontology_agree_on_keys() -> None:
         "orders_has_addresses_via_shipping_address_id",
         "addresses_has_countries",
     }
+
+
+def test_reflection_records_the_constraint_of_each_key_column() -> None:
+    from src.drivers.reflection import build_table_info
+
+    columns = [
+        {"name": c, "type": "INTEGER", "nullable": False}
+        for c in ("id", "order_id", "line_no", "actor_id")
+    ]
+    fks = [
+        {
+            "name": "line_fk",
+            "constrained_columns": ["order_id", "line_no"],
+            "referred_table": "order_lines",
+            "referred_columns": ["order_id", "line_no"],
+        },
+        {
+            "name": None,
+            "constrained_columns": ["actor_id"],
+            "referred_table": "users",
+            "referred_columns": ["id"],
+        },
+    ]
+    table = build_table_info(
+        "shipments", "public", columns, {"constrained_columns": ["id"]}, fks
+    )
+    keys = foreign_keys(table.name, table.foreign_keys)
+    assert [k.column_pairs for k in keys] == [
+        [("order_id", "order_id"), ("line_no", "line_no")],
+        [("actor_id", "id")],
+    ]
