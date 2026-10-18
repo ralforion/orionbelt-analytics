@@ -1894,6 +1894,8 @@ class TestSingleFanOutMeasure(unittest.TestCase):
                     "measure_table": "orders",
                     "fan_out_table": "order_items",
                     "tables": ["order_items", "orders"],
+                    "relationship": "order_items.order_id -> orders.id",
+                    "assumed": False,
                 }
             ],
         )

@@ -20,6 +20,7 @@ from typing import Any
 
 from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.namespace import OWL, RDF, RDFS, XSD
+from rdflib.term import Node
 from sqlglot import exp
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
@@ -235,6 +236,66 @@ def _literal(graph: Graph, subject: Any, predicate: URIRef) -> str | None:
     return str(value) if value is not None else None
 
 
+def is_composite_key(graph: Graph, prop: Node) -> bool:
+    """Whether a relationship is one key over several columns.
+
+    A property can hold several key columns for two reasons: they form one
+    composite key, or separate keys to the same table share the property
+    (billing and shipping customer, in ontologies generated before keys were
+    named apart). Only the first is a composite key, and only the ontology
+    can say which: it names the key's constraint (``oba:constraintName``)
+    exactly once.
+
+    Args:
+        graph: The ontology.
+        prop: The relationship's object property.
+
+    Returns:
+        True for a composite key the ontology identifies as one constraint.
+    """
+    columns = {str(c).lower() for c in graph.objects(prop, OBA.foreignKeyColumn)}
+    constraints = set(graph.objects(prop, OBA.constraintName))
+    return len(columns) > 1 and len(constraints) == 1
+
+
+# Why a single-column check cannot judge a relationship.
+REASON_COMPOSITE_KEY = "composite_key_not_supported"
+REASON_AMBIGUOUS_KEY = "ambiguous_key_columns"
+
+
+def why_not_checkable(graph: Graph, prop: Node) -> str | None:
+    """Why validate_relationship cannot judge this relationship, if it cannot.
+
+    The check counts one key column against one referenced column, so it can
+    only speak for a property stating exactly one key column and one
+    referenced column. A composite
+    key is unique as a tuple, which one column's values cannot show. A
+    property with several key columns and no single constraint -- as
+    ontologies generated before keys were named apart, or written by hand,
+    may hold -- says neither which column references which nor whether they
+    form one key, so any verdict could land on the wrong key.
+
+    Args:
+        graph: The ontology.
+        prop: The relationship's object property.
+
+    Returns:
+        None if checkable, else REASON_COMPOSITE_KEY or REASON_AMBIGUOUS_KEY.
+    """
+    columns = {str(c).lower() for c in graph.objects(prop, OBA.foreignKeyColumn)}
+    targets = {str(c).lower() for c in graph.objects(prop, OBA.referencedColumn)}
+    if len(columns) <= 1 and len(targets) <= 1:
+        return None
+    if len(columns) <= 1:
+        # One key column onto several referenced ones (customer_ref -> id
+        # and -> legacy_id): a verdict on one target would be read as one
+        # on all of them.
+        return REASON_AMBIGUOUS_KEY
+    return (
+        REASON_COMPOSITE_KEY if is_composite_key(graph, prop) else REASON_AMBIGUOUS_KEY
+    )
+
+
 def find_relationships(
     graph: Graph,
     from_table: str,
@@ -266,8 +327,15 @@ def find_relationships(
             continue
         if domain_table.lower() != from_table.lower():
             continue
-        if fk_column.lower() != column.lower():
+        # Any of the property's key columns: a composite key lists several.
+        fk_columns = {str(c).lower() for c in graph.objects(prop, OBA.foreignKeyColumn)}
+        if column.lower() not in fk_columns:
             continue
+        fk_column = next(
+            str(c)
+            for c in graph.objects(prop, OBA.foreignKeyColumn)
+            if str(c).lower() == column.lower()
+        )
         if to_table and ref_table.lower() != to_table.lower():
             continue
         domain_schema = _literal(graph, domain, OBA.schemaName)

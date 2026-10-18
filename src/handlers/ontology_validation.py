@@ -7,6 +7,7 @@ from functools import partial
 from typing import Any
 
 from fastmcp import Context
+from rdflib import URIRef
 
 from ..async_utils import run_db
 from ..graphrag.identity import split
@@ -17,6 +18,8 @@ from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..relationship_validation import (
+    REASON_AMBIGUOUS_KEY,
+    REASON_COMPOSITE_KEY,
     STATUS_CONFIRMED,
     STATUS_NO_DATA,
     STATUS_PARTIAL,
@@ -28,6 +31,7 @@ from ..relationship_validation import (
     classify,
     find_relationships,
     record_in_graph,
+    why_not_checkable,
 )
 from ..utils import notify_client, utc_now, write_text_file
 from .connection_scope import (
@@ -234,6 +238,37 @@ async def validate_relationship(
             "relationship_not_found",
         )
         return err
+    checkable = [
+        r
+        for r in refs
+        if why_not_checkable(generator.graph, URIRef(r.property_uri)) is None
+    ]
+    if not checkable:
+        reason = why_not_checkable(generator.graph, URIRef(refs[0].property_uri))
+        if reason == REASON_COMPOSITE_KEY:
+            # The check counts one column's values; a composite key is unique
+            # as a tuple, so a verdict on one of its columns would be wrong
+            # about it -- order_id repeats in every unique (order_id, line_no).
+            message = (
+                f"{from_table}.{column} is part of a composite key. "
+                "validate_relationship checks single-column keys only; a "
+                "verdict on one column would misstate the key, so none is "
+                "recorded."
+            )
+        else:
+            message = (
+                f"The relationship of {from_table}.{column} states several key "
+                "or referenced columns, and the ontology does not say which "
+                "column references which, or whether they form one key "
+                "(ontologies generated before keys were named apart look like "
+                "this). A verdict could land on the wrong key, so none is "
+                "recorded. Regenerate the ontology with generate_ontology, or "
+                "give each key its own property (one oba:constraintName for a "
+                "composite key)."
+            )
+        err = services.create_error_response(message, reason or REASON_AMBIGUOUS_KEY)
+        return err
+    refs = checkable
     readings = sorted(
         {
             f"{r.from_schema or ''}.{r.from_table}.{r.column} -> "

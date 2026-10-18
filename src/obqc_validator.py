@@ -19,6 +19,14 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
+from .relationship_validation import (
+    STATUS_CONFIRMED,
+    STATUS_PARTIAL,
+    STATUS_REFUTED,
+    STATUS_TARGET_NOT_UNIQUE,
+    is_composite_key,
+    why_not_checkable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -368,6 +376,15 @@ class TableSchema:
     schema_declared: bool = True
 
 
+# Column-to-column equalities of a join condition: pairs of (table, column).
+_Comparisons = frozenset[frozenset[tuple[str, str]]]
+
+# Verdicts that rest on the data: the relationship is no longer an assumption.
+_CHECKED_STATUSES = frozenset(
+    {STATUS_CONFIRMED, STATUS_PARTIAL, STATUS_TARGET_NOT_UNIQUE}
+)
+
+
 @dataclass
 class RelationshipInfo:
     """Information about a foreign key relationship."""
@@ -378,6 +395,28 @@ class RelationshipInfo:
     to_column: str
     relationship_type: str  # "many_to_one" or "one_to_many"
     join_condition: str
+    # Inferred from column names rather than declared by the database.
+    inferred: bool = False
+    # The latest validate_relationship verdict, if it was ever checked.
+    validation_status: str | None = None
+    # (key column, referenced column) for every column of a composite key.
+    # Empty for a single-column key, which from_column / to_column describe.
+    column_pairs: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def pairs(self) -> tuple[tuple[str, str], ...]:
+        """(key column, referenced column) for each column of the key."""
+        return self.column_pairs or ((self.from_column, self.to_column),)
+
+    @property
+    def assumed(self) -> bool:
+        """Whether only naming backs it: inferred, and not checked on the data."""
+        return self.inferred and self.validation_status not in _CHECKED_STATUSES
+
+    @property
+    def target_not_unique(self) -> bool:
+        """Whether the data showed the referenced column repeats values."""
+        return self.validation_status == STATUS_TARGET_NOT_UNIQUE
 
 
 @dataclass
@@ -386,6 +425,9 @@ class OntologySchema:
 
     tables: dict[str, TableSchema] = field(default_factory=dict)
     relationships: dict[str, RelationshipInfo] = field(default_factory=dict)
+    # (from table, to table), lower-cased, of relationships the data refuted.
+    # They join nothing, but say what a generated axiom was derived from.
+    refuted_links: set[tuple[str, str]] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -766,30 +808,68 @@ class OBQCValidator:
             ref_table = self._get_literal(subject, self._oba_ns.referencedTable)
             ref_column = self._get_literal(subject, self._oba_ns.referencedColumn)
             rel_type = self._get_literal(subject, self._oba_ns.relationshipType)
-            join_cond = self._get_literal(subject, self._oba_ns.sqlJoinCondition)
+            status = self._get_literal(subject, self._oba_ns.validationStatus)
+            if not (fk_column and ref_table):
+                continue
+            from_table = None
+            for domain in self._graph.objects(subject, RDFS.domain):
+                from_table = self._get_literal(domain, self._oba_ns.tableName)
+                break
+            if not from_table:
+                continue
 
-            if fk_column and ref_table:
-                # Determine from_table from domain
-                from_table = None
-                for domain in self._graph.objects(subject, RDFS.domain):
-                    from_table = self._get_literal(domain, self._oba_ns.tableName)
-                    break
+            pairs = self._key_column_pairs(subject, from_table)
+            composite = len(pairs) > 1 and is_composite_key(self._graph, subject)
+            if why_not_checkable(self._graph, subject) is not None:
+                # A verdict checks one column against one referenced column.
+                # On a composite key it says nothing about the tuple (order_id
+                # repeats in every unique (order_id, line_no)); on a property
+                # shared by separate keys it cannot say which key it is about
+                # -- refuting shipping must not remove billing.
+                status = None
+            if status == STATUS_REFUTED:
+                # The data contradicts it: no join may lean on it.
+                schema.refuted_links.add((from_table.lower(), ref_table.lower()))
+                continue
 
-                if from_table:
-                    rel_key = f"{from_table}.{fk_column}->{ref_table}.{ref_column}"
-                    schema.relationships[rel_key] = RelationshipInfo(
-                        from_table=from_table,
-                        from_column=fk_column,
-                        to_table=ref_table,
-                        to_column=ref_column or "id",
-                        relationship_type=rel_type or "many_to_one",
-                        join_condition=join_cond
-                        or f"{from_table}.{fk_column} = {ref_table}.{ref_column}",
+            # Columns that are not one constraint are separate keys sharing
+            # a property -- billing and shipping customer -- each joined alone.
+            if composite:
+                groups = [pairs]
+            elif pairs:
+                groups = [[pair] for pair in pairs]
+            else:
+                groups = [[(fk_column, ref_column or "id")]]
+
+            for group in groups:
+                first_child, first_parent = group[0]
+                rel_key = "->".join(
+                    (
+                        ",".join(f"{from_table}.{c}" for c, _ in group),
+                        ",".join(f"{ref_table}.{p}" for _, p in group),
                     )
+                )
+                schema.relationships[rel_key] = RelationshipInfo(
+                    from_table=from_table,
+                    from_column=first_child,
+                    to_table=ref_table,
+                    to_column=first_parent,
+                    relationship_type=rel_type or "many_to_one",
+                    join_condition=" AND ".join(
+                        f"{from_table}.{child} = {ref_table}.{parent}"
+                        for child, parent in group
+                    ),
+                    inferred=self._get_bool(
+                        subject, self._oba_ns.isInferredRelationship, False
+                    ),
+                    validation_status=status,
+                    column_pairs=tuple(group) if len(group) > 1 else (),
+                )
 
-                    # Update column FK info
-                    table_key = from_table.lower()
-                    col_key = fk_column.lower()
+                # Update column FK info
+                table_key = from_table.lower()
+                for child, parent in group:
+                    col_key = child.lower()
                     if (
                         table_key in schema.tables
                         and col_key in schema.tables[table_key].columns
@@ -797,9 +877,63 @@ class OBQCValidator:
                         col = schema.tables[table_key].columns[col_key]
                         col.is_foreign_key = True
                         col.fk_referenced_table = ref_table
-                        col.fk_referenced_column = ref_column
+                        col.fk_referenced_column = parent
 
         return schema
+
+    def _key_column_pairs(
+        self, subject: Node, from_table: str
+    ) -> list[tuple[str, str]]:
+        """Every (key column, referenced column) of a relationship.
+
+        A composite key is one property holding several ``oba:foreignKeyColumn``
+        and ``oba:referencedColumn`` values, which say nothing about which goes
+        with which; its ``oba:sqlJoinCondition`` values, one equality per
+        column, do. A single-column key needs no pairing.
+
+        Args:
+            subject: The relationship's object property.
+            from_table: Its key table.
+
+        Returns:
+            The pairs, sorted; empty when the key columns cannot be paired,
+            and the caller falls back to one of them.
+        """
+        if self._graph is None or self._oba_ns is None:
+            return []
+        fk_columns = [
+            str(o) for o in self._graph.objects(subject, self._oba_ns.foreignKeyColumn)
+        ]
+        ref_columns = [
+            str(o) for o in self._graph.objects(subject, self._oba_ns.referencedColumn)
+        ]
+        if len(fk_columns) == 1:
+            # One key column onto each referenced column the property names:
+            # an older ontology may hold customer_ref -> id and -> legacy_id
+            # on one property, and both joins are relationships.
+            targets = sorted({c.lower(): c for c in ref_columns}.values()) or ["id"]
+            return [(fk_columns[0], target) for target in targets]
+        wanted = {c.lower() for c in fk_columns}
+        pairs: dict[str, tuple[str, str]] = {}
+        for cond in self._graph.objects(subject, self._oba_ns.sqlJoinCondition):
+            sides = str(cond).split("=")
+            if len(sides) != 2:
+                continue
+            refs = [side.strip().rsplit(".", 1) for side in sides]
+            if any(len(ref) != 2 for ref in refs):
+                continue
+            (left_table, left), (right_table, right) = refs
+            # Written key side first; accept either order from other authors.
+            if left_table.lower() == from_table.lower() and left.lower() in wanted:
+                pairs[left.lower()] = (left, right)
+            elif right_table.lower() == from_table.lower() and right.lower() in wanted:
+                pairs[right.lower()] = (right, left)
+        if len(pairs) != len(wanted):
+            logger.debug(
+                "Cannot pair the key columns of %s; using one of them", subject
+            )
+            return []
+        return sorted(pairs.values())
 
     def _extract_disjoint_pairs(self) -> set[frozenset]:
         """Read owl:disjointWith axioms as pairs of lower-cased table names.
@@ -1377,6 +1511,11 @@ class OBQCValidator:
                     # detection needs to know which table this join attaches
                     # to, and the ON condition is the only place that says so.
                     "on_tables": [],
+                    # Column-to-column equalities the ON condition states,
+                    # each a pair of (table, column), lower-cased: which
+                    # relationship a join uses, when two tables are related
+                    # more than one way.
+                    "on_comparisons": frozenset(),
                     # Tables this SELECT sums or averages over, lower-cased.
                     "measure_tables": measure_tables,
                     "counted_tables": counted_tables,
@@ -1421,6 +1560,9 @@ class OBQCValidator:
                     join_info["on_tables"] = self._condition_tables(
                         on_clause, alias_map
                     )
+                    join_info["on_comparisons"] = self._column_comparisons(
+                        on_clause, alias_map
+                    )
                 elif join_info["table"]:
                     # A comma join states the same relationship in WHERE.
                     # Reading anchors only from ON let the identical query
@@ -1433,6 +1575,58 @@ class OBQCValidator:
                     )
 
                 result.parsed_joins.append(join_info)
+
+    @staticmethod
+    def _column_comparisons(
+        condition: exp.Expr, alias_map: dict[str, str]
+    ) -> _Comparisons:
+        """Column-to-column equalities a join condition states.
+
+        Only what is compared says which relationship a join uses: a filter
+        such as ``c.code IS NOT NULL`` next to ``o.customer_id = c.id`` names
+        the code column without joining on it. Equalities inside a subquery
+        belong to that subquery.
+
+        Args:
+            condition: The ON condition.
+            alias_map: The scope's alias -> table name map.
+
+        Returns:
+            Each equality as a pair of lower-cased (table, column).
+        """
+        scope = condition.find_ancestor(exp.Select)
+
+        def column_ref(column: exp.Column) -> tuple[str, str]:
+            table = alias_map.get(column.table.lower(), column.table)
+            return table.lower(), column.name.lower()
+
+        def holds_for_every_row(eq: exp.Expr) -> bool:
+            """Whether *eq* is a conjunct: reached through AND only.
+
+            Under OR an equality holds for some matching rows, not all, so it
+            does not say which key the join uses.
+            """
+            node = eq.parent
+            while node is not None and node is not condition.parent:
+                if not isinstance(node, (exp.And, exp.Paren)):
+                    return False
+                node = node.parent
+            return True
+
+        comparisons = set()
+        for eq in condition.find_all(exp.EQ):
+            if eq.find_ancestor(exp.Select) is not scope:
+                continue
+            if not holds_for_every_row(eq):
+                continue
+            # (c.id) is c.id: parentheses do not change what is compared.
+            left, right = eq.this.unnest(), eq.expression.unnest()
+            if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
+                continue
+            if not (left.table and right.table):
+                continue
+            comparisons.add(frozenset({column_ref(left), column_ref(right)}))
+        return frozenset(comparisons)
 
     @staticmethod
     def _condition_tables(condition: exp.Expr, alias_map: dict[str, str]) -> list[str]:
@@ -1486,7 +1680,8 @@ class OBQCValidator:
             # An equality inside a nested subquery belongs to that scope.
             if eq.find_ancestor(exp.Select) is not select:
                 continue
-            left, right = eq.this, eq.expression
+            # (c.id) is c.id: parentheses do not change what is compared.
+            left, right = eq.this.unnest(), eq.expression.unnest()
             if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
                 continue
             qualifiers = {side.table.lower() for side in (left, right) if side.table}
@@ -1564,7 +1759,7 @@ class OBQCValidator:
         return columns
 
     @classmethod
-    def _condition_columns(cls, agg: exp.Expr) -> list[exp.Column]:
+    def _condition_comparisons(cls, agg: exp.Expr) -> list[exp.Column]:
         """Columns an aggregate only tests, rather than reads a value from.
 
         Includes a trailing ``FILTER (WHERE ...)``, which lives on the parent
@@ -1622,7 +1817,7 @@ class OBQCValidator:
             if self._value_columns(agg):
                 continue
             condition_tables: set[str] = set()
-            for column in self._condition_columns(agg):
+            for column in self._condition_comparisons(agg):
                 if column.table:
                     resolved = alias_map.get(column.table.lower())
                     if resolved:
@@ -2369,7 +2564,8 @@ class OBQCValidator:
             # A comparison in a nested subquery belongs to that scope.
             if eq.find_ancestor(exp.Select) is not select:
                 continue
-            left, right = eq.this, eq.expression
+            # (c.id) is c.id: parentheses do not change what is compared.
+            left, right = eq.this.unnest(), eq.expression.unnest()
             if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
                 continue
             if left.table and right.table and left.table.lower() != right.table.lower():
@@ -2452,12 +2648,14 @@ class OBQCValidator:
         for rel_info in self._schema_cache.relationships.values():
             # Relationship must involve the join table AND the condition must
             # reference both of its FK columns.
+            # Every column of a composite key: joining on part of it matches
+            # many rows.
             if (
                 rel_info.from_table.lower() == join_table_lower
                 or rel_info.to_table.lower() == join_table_lower
-            ) and (
-                rel_info.from_column.lower() in on_lower
-                and rel_info.to_column.lower() in on_lower
+            ) and all(
+                child.lower() in on_lower and parent.lower() in on_lower
+                for child, parent in rel_info.pairs
             ):
                 return True
         return False
@@ -2853,26 +3051,119 @@ class OBQCValidator:
     def _join_fans_out(self, join_table: str, anchor_table: str) -> bool:
         """Whether joining *join_table* onto *anchor_table* multiplies rows.
 
-        True when the ontology puts *join_table* on the "many" side of the
+        See :meth:`_fan_out_relationship`.
+        """
+        return self._fan_out_relationship(join_table, anchor_table) is not None
+
+    def _join_relationships(
+        self,
+        table_a: str,
+        table_b: str,
+        on_comparisons: _Comparisons = frozenset(),
+    ) -> list[RelationshipInfo]:
+        """The relationships a join between two tables uses.
+
+        Two tables may be related more than one way (``orders.customer_id``
+        -> ``customers.id`` and another key onto ``customers.code``), each
+        with its own evidence, so the join's own columns decide which. Only
+        when it compares no column of any of them -- or its columns are
+        unknown, as for a comma join -- do all relationships between the
+        tables count.
+
+        Args:
+            table_a: One table of the join.
+            table_b: The other.
+            on_comparisons: Column equalities the join condition states.
+
+        Returns:
+            The relationships, possibly empty.
+        """
+        between = self._relationships_between(table_a, table_b)
+        return self._used_relationships(between, on_comparisons) or between
+
+    def _relationships_between(
+        self, table_a: str, table_b: str
+    ) -> list[RelationshipInfo]:
+        """Every relationship between two tables, in either direction."""
+        if self._schema_cache is None:
+            return []
+        pair = {table_a.lower(), table_b.lower()}
+        return [
+            rel
+            for rel in self._schema_cache.relationships.values()
+            if {rel.from_table.lower(), rel.to_table.lower()} == pair
+        ]
+
+    @staticmethod
+    def _used_relationships(
+        between: list[RelationshipInfo], on_comparisons: _Comparisons
+    ) -> list[RelationshipInfo]:
+        """Those of *between* whose every column pair the join compares."""
+        return [
+            rel
+            for rel in between
+            if all(
+                frozenset(
+                    {
+                        (rel.from_table.lower(), child.lower()),
+                        (rel.to_table.lower(), parent.lower()),
+                    }
+                )
+                in on_comparisons
+                for child, parent in rel.pairs
+            )
+        ]
+
+    def _fan_out_relationship(
+        self,
+        join_table: str,
+        anchor_table: str,
+        on_comparisons: _Comparisons = frozenset(),
+    ) -> RelationshipInfo | None:
+        """The relationship by which joining *join_table* multiplies rows.
+
+        Found when the ontology puts *join_table* on the "many" side of the
         relationship between the two: one anchor row can match many joined
-        rows, so any measure taken from the anchor side is repeated.
+        rows, so any measure taken from the anchor side is repeated. A
+        relationship whose target the data showed to repeat values fans out
+        from both ends.
 
         Args:
             join_table: Table introduced by the JOIN.
             anchor_table: Table its ON condition attaches to.
+            on_comparisons: Column equalities the join condition states,
+                which pick the relationship the join actually uses.
 
         Returns:
-            True if the join can duplicate anchor rows. False when the joined
-            table is the "one" side (a dimension lookup), or when the two are
-            not related in the ontology at all.
+            The relationship, preferring one declared or checked on the data
+            over one only inferred from names. None when the joined table is
+            the "one" side (a dimension lookup), or when the two are not
+            related in the ontology at all.
         """
         if self._schema_cache is None:
-            return False
+            return None
 
         joined = join_table.lower()
         anchor = anchor_table.lower()
+        assumed: RelationshipInfo | None = None
 
-        for rel in self._schema_cache.relationships.values():
+        between = self._relationships_between(join_table, anchor_table)
+        used = self._used_relationships(between, on_comparisons)
+        # Parents the join reaches through a key it compares in full and that
+        # is not known to repeat: each row then matches at most one parent
+        # row, and further equalities in the same ON can only narrow that.
+        # "o.customer_id = c.id AND o.customer_code = c.code" multiplies
+        # nothing, however often customers.code repeats.
+        bounded = {
+            rel.to_table.lower()
+            for rel in used
+            if rel.relationship_type == "many_to_one" and not rel.target_not_unique
+            # A guessed key cannot outweigh a checked one: if customers.id
+            # only looks unique, customers.code repeating still multiplies.
+            and not rel.assumed
+        }
+
+        for rel in used or between:
             from_t = rel.from_table.lower()
             to_t = rel.to_table.lower()
 
@@ -2884,10 +3175,124 @@ class OBQCValidator:
             else:
                 continue
 
-            if {many, one} == {joined, anchor} and many == joined:
-                return True
+            if {many, one} != {joined, anchor}:
+                continue
+            if many != joined and not rel.target_not_unique:
+                continue
+            if many != joined and one in bounded:
+                continue
+            if not rel.assumed:
+                return rel
+            assumed = assumed or rel
 
-        return False
+        return assumed
+
+    def _disjointness_assumed(self, pair: frozenset[str]) -> bool:
+        """Whether a disjointness axiom rests on guessed relationships alone.
+
+        The generator declares two tables disjoint when both reference the
+        same table, inferred relationships included. The axiom is firm when
+        some shared parent is reached from both by relationships that are
+        declared or checked. It is a guess when the only shared parents are
+        reached through guessed or refuted ones. An axiom that no shared
+        parent explains was written by hand, and stands.
+
+        Args:
+            pair: The two disjoint tables, lower-cased.
+
+        Returns:
+            True if only guesses back it.
+        """
+        if self._schema_cache is None or len(pair) != 2:
+            return False
+        firm: dict[str, set[str]] = {table: set() for table in pair}
+        guessed: dict[str, set[str]] = {table: set() for table in pair}
+        for rel in self._schema_cache.relationships.values():
+            child = rel.from_table.lower()
+            if child not in pair or rel.relationship_type != "many_to_one":
+                continue
+            (guessed if rel.assumed else firm)[child].add(rel.to_table.lower())
+        for child, parent in self._schema_cache.refuted_links:
+            if child in pair:
+                guessed[child].add(parent)
+        a, b = sorted(pair)
+        if firm[a] & firm[b]:
+            return False
+        return bool((firm[a] | guessed[a]) & (firm[b] | guessed[b]))
+
+    @staticmethod
+    def _describe(rel: RelationshipInfo) -> str:
+        """A relationship as ``from.column -> to.column``."""
+        children = ", ".join(child for child, _ in rel.pairs)
+        parents = ", ".join(parent for _, parent in rel.pairs)
+        if len(rel.pairs) > 1:
+            children, parents = f"({children})", f"({parents})"
+        return f"{rel.from_table}.{children} -> {rel.to_table}.{parents}"
+
+    def _note_assumed_keys(self, result: OBQCResult) -> None:
+        """Note aggregates that rely on a key only assumed to be unique.
+
+        Without declared keys, relationships come from names: ``customer_id``
+        -> ``customers.id`` assumes one customers row per id. A measure joined
+        to that "one" side is safe only if so; a history or snapshot table
+        holding several rows per id inflates it, and nothing in the ontology
+        can tell. Not a finding -- the join is usually right -- but the
+        assumption is said aloud, with the check that settles it.
+
+        Args:
+            result: Result carrying the extracted joins.
+        """
+        if self._schema_cache is None:
+            return
+        noted: set[str] = set()
+        for join_info in result.parsed_joins:
+            if not join_info.get("scope_sensitive"):
+                continue
+            join_table = join_info.get("table")
+            measures = join_info.get("measure_tables") or set()
+            if not join_table or not measures:
+                continue
+            anchors = {
+                t.lower()
+                for t in join_info.get("on_tables", [])
+                if t.lower() != join_table.lower()
+            }
+            on_comparisons = join_info.get("on_comparisons", frozenset())
+            used = [
+                rel
+                for anchor in sorted(anchors)
+                for rel in self._join_relationships(join_table, anchor, on_comparisons)
+            ]
+            for rel in used:
+                if not rel.assumed or rel.relationship_type != "many_to_one":
+                    continue
+                if rel.from_table.lower() not in measures:
+                    continue
+                described = self._describe(rel)
+                if described in noted:
+                    continue
+                noted.add(described)
+                result.issues.append(
+                    OBQCIssue(
+                        issue_type=OBQCIssueType.FAN_TRAP_DETECTED,
+                        severity=OBQCSeverity.INFO,
+                        message=(
+                            f"Assumes {rel.to_table}.{rel.to_column} is unique: "
+                            f"{described} was inferred from column names, not "
+                            f"declared or checked. If {rel.to_table} holds "
+                            f"several rows per {rel.to_column} (history, "
+                            f"snapshots), this join inflates {rel.from_table} "
+                            "measures."
+                        ),
+                        location=f"JOIN {join_table}",
+                        suggestion=(
+                            f"validate_relationship('{rel.from_table}', "
+                            f"'{rel.from_column}') checks it once and records "
+                            "the answer."
+                        ),
+                        related_entities=[rel.from_table, rel.to_table],
+                    )
+                )
 
     def _inflated_measures(
         self,
@@ -2921,8 +3326,10 @@ class OBQCValidator:
         Returns:
             One finding per (measure table, fan-out table) pair, deduplicated.
         """
-        findings: list[dict[str, Any]] = []
-        seen: set[tuple[str, str]] = set()
+        # One finding per (measure table, fan-out table). The same pair may
+        # be joined by different keys in different SELECTs; the firmest
+        # evidence is kept, so a guessed branch cannot hide a confirmed one.
+        findings: dict[tuple[str, str], dict[str, Any]] = {}
 
         for join_info in result.parsed_joins:
             if not join_info.get("scope_aggregates"):
@@ -2949,23 +3356,30 @@ class OBQCValidator:
                 ):
                     if measure_table.lower() not in measures:
                         continue
-                    if not self._join_fans_out(other, measure_table):
+                    rel = self._fan_out_relationship(
+                        other,
+                        measure_table,
+                        join_info.get("on_comparisons", frozenset()),
+                    )
+                    if rel is None:
                         continue
 
                     pair = (measure_table.lower(), other.lower())
-                    if pair in seen:
+                    if pair in findings and not (
+                        findings[pair]["assumed"] and not rel.assumed
+                    ):
                         continue
-                    seen.add(pair)
-                    findings.append(
-                        {
-                            "kind": kind,
-                            "measure_table": measure_table,
-                            "fan_out_table": other,
-                            "tables": sorted({measure_table, other}),
-                        }
-                    )
+                    findings[pair] = {
+                        "kind": kind,
+                        "measure_table": measure_table,
+                        "fan_out_table": other,
+                        "tables": sorted({measure_table, other}),
+                        "relationship": self._describe(rel),
+                        # Only naming backs it: reported, never blocking.
+                        "assumed": rel.assumed,
+                    }
 
-        return findings
+        return list(findings.values())
 
     def _detect_fan_trap(self, result: OBQCResult, blocking: bool = True) -> None:
         """Rule: Detect fan-trap patterns.
@@ -2991,12 +3405,23 @@ class OBQCValidator:
         """
         severity = OBQCSeverity.ERROR if blocking else OBQCSeverity.WARNING
 
-        def record(finding: dict[str, Any]) -> None:
-            """Note a finding of a kind that blocks unless allow_fan_out was set."""
+        def record(finding: dict[str, Any], blocks: bool = True) -> None:
+            """Note a finding of a kind that blocks unless allow_fan_out was set.
+
+            ``blocks`` is False for a finding resting on a relationship only
+            inferred from names, which never blocks, so allow_fan_out did not
+            override anything.
+            """
             result.fan_trap_risk = True
             result.fan_trap_findings.append(finding)
-            if not blocking:
+            if not blocking and blocks:
                 result.fan_trap_overridden = True
+
+        def assumption(rel: str) -> str:
+            return (
+                f" This rests on {rel}, inferred from column names and not "
+                "checked on the data, so it is reported without blocking."
+            )
 
         # Only joins whose own SELECT aggregates can inflate a total. The
         # query-wide flag is true if an aggregate appears anywhere, so an
@@ -3017,6 +3442,8 @@ class OBQCValidator:
         if self._schema_cache is None:
             return
 
+        self._note_assumed_keys(result)
+
         # --- Measure multiplied by a fan-out join ----------------------------
         #
         # The most direct evidence there is: a table is summed, and a join in
@@ -3024,18 +3451,20 @@ class OBQCValidator:
         inflated = self._inflated_measures(result)
         if inflated:
             for finding in inflated:
-                record(finding)
+                assumed = finding["assumed"]
+                record(finding, blocks=not assumed)
                 measure = anchor = finding["measure_table"]
                 fanning = finding["fan_out_table"]
                 result.issues.append(
                     OBQCIssue(
                         issue_type=OBQCIssueType.FAN_TRAP_DETECTED,
-                        severity=severity,
+                        severity=OBQCSeverity.WARNING if assumed else severity,
                         message=(
                             f"Fan-trap: aggregating '{measure}' across the join to "
                             f"'{fanning}', which the ontology puts on the many side of "
                             f"'{anchor}'. Each {anchor} row is repeated once per "
                             f"matching {fanning} row, so the total is inflated."
+                            + (assumption(finding["relationship"]) if assumed else "")
                         ),
                         location="Query structure",
                         suggestion=(
@@ -3047,7 +3476,10 @@ class OBQCValidator:
                         related_entities=sorted({measure, fanning, anchor}),
                     )
                 )
-            return
+            # A finding that only warns settles nothing: a check below may
+            # still block the same query on firmer evidence.
+            if any(not finding["assumed"] for finding in inflated):
+                return
 
         # --- Axiom-grounded path: disjoint sibling facts in one SELECT --------
         #
@@ -3062,15 +3494,22 @@ class OBQCValidator:
             disjoint_hits |= {pair for pair in self._disjoint_pairs if pair <= queried}
         if disjoint_hits:
             involved = sorted({t for pair in disjoint_hits for t in pair})
-            record({"kind": KIND_DISJOINT_FACTS, "tables": involved})
+            # Blocks when one pair's axiom stands on firm ground; generated
+            # from guessed relationships alone, it is a guess as well.
+            assumed = all(self._disjointness_assumed(pair) for pair in disjoint_hits)
+            record(
+                {"kind": KIND_DISJOINT_FACTS, "tables": involved, "assumed": assumed},
+                blocks=not assumed,
+            )
             result.issues.append(
                 OBQCIssue(
                     issue_type=OBQCIssueType.FAN_TRAP_DETECTED,
-                    severity=severity,
+                    severity=OBQCSeverity.WARNING if assumed else severity,
                     message=(
                         "Potential fan-trap: query aggregates across tables the ontology "
                         f"declares disjoint (sibling facts sharing a dimension): "
                         f"{', '.join(involved)}"
+                        + (assumption("relationships") if assumed else "")
                     ),
                     location="Query structure",
                     suggestion=(
@@ -3081,7 +3520,8 @@ class OBQCValidator:
                     related_entities=involved,
                 )
             )
-            return
+            if not assumed:
+                return
 
         # --- Heuristic fallback: count fan-out joins (no disjointness axioms)
         #
@@ -3100,7 +3540,8 @@ class OBQCValidator:
         # are multiplied by joins in the same query, so two subqueries that
         # fan out once each are two safe aggregations -- summing them reported
         # a fan-trap that exists in neither.
-        fan_outs_by_scope: dict[Any, list[str]] = {}
+        # (joined table, whether only naming says it fans out) per join.
+        fan_outs_by_scope: dict[Any, list[tuple[str, bool]]] = {}
 
         # Only joins sitting in an aggregating SELECT; a subquery's joins
         # cannot multiply rows the outer query aggregates.
@@ -3119,9 +3560,17 @@ class OBQCValidator:
                 # condition naming no other table); nothing to judge.
                 continue
 
-            if any(self._join_fans_out(join_table, anchor) for anchor in anchors):
+            on_comparisons = join_info.get("on_comparisons", frozenset())
+            rels = [
+                self._fan_out_relationship(join_table, a, on_comparisons)
+                for a in anchors
+            ]
+            found = [r for r in rels if r is not None]
+            if found:
                 scope_id = join_info.get("scope_id")
-                fan_outs_by_scope.setdefault(scope_id, []).append(join_table)
+                fan_outs_by_scope.setdefault(scope_id, []).append(
+                    (join_table, all(r.assumed for r in found))
+                )
 
         # Ambiguous counts, reported but never blocking -- see _counted_tables
         # for why the same shape is both a bug and a common correct idiom.
@@ -3151,9 +3600,21 @@ class OBQCValidator:
                 )
             )
 
-        worst_scope = max(fan_outs_by_scope.values(), key=len, default=[])
+        # Each scope is judged on its own evidence: a SELECT blocks when at
+        # least two of its fan-outs are not mere guesses. The one reported is
+        # a blocking scope if there is one, then the one with most fan-outs --
+        # so a guessed scope with more joins cannot hide a confirmed one.
+        def scope_blocks(fan_outs: list[tuple[str, bool]]) -> bool:
+            return sum(1 for _, is_assumed in fan_outs if not is_assumed) >= 2
+
+        worst_scope = max(
+            fan_outs_by_scope.values(),
+            key=lambda fan_outs: (scope_blocks(fan_outs), len(fan_outs)),
+            default=[],
+        )
         one_to_many_count = len(worst_scope)
-        involved_tables = worst_scope
+        involved_tables = [table for table, _ in worst_scope]
+        assumed = not scope_blocks(worst_scope)
 
         if one_to_many_count >= 2:
             record(
@@ -3161,13 +3622,19 @@ class OBQCValidator:
                     "kind": KIND_MULTIPLE_FAN_OUT_JOINS,
                     "tables": sorted(set(involved_tables)),
                     "join_count": one_to_many_count,
-                }
+                    "assumed": assumed,
+                },
+                blocks=not assumed,
             )
             result.issues.append(
                 OBQCIssue(
                     issue_type=OBQCIssueType.FAN_TRAP_DETECTED,
-                    severity=severity,
-                    message=f"Potential fan-trap: {one_to_many_count} one-to-many joins with aggregation",
+                    severity=OBQCSeverity.WARNING if assumed else severity,
+                    message=(
+                        f"Potential fan-trap: {one_to_many_count} one-to-many "
+                        "joins with aggregation"
+                        + (assumption("relationships") if assumed else "")
+                    ),
                     location="Query structure",
                     suggestion=(
                         "Use UNION ALL pattern for separate aggregations per fact table, "

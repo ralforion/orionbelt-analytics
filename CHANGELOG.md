@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **OBQC weighs relationships by their evidence.** In schemas without
+  declared keys -- most warehouses -- relationships are inferred from column
+  names, and OBQC treated those guesses exactly like declared constraints. A
+  fan-trap finding that rests only on an inferred, unchecked relationship now
+  warns instead of blocking, and says so. `validate_relationship` verdicts
+  now count: `confirmed` / `partial` make an inferred relationship block like
+  a declared one, `target_not_unique` makes the join fan out from both ends
+  (a lookup into a history table multiplies rows), and `refuted` removes the
+  relationship. An aggregate joined to the "one" side of a guessed key gets an
+  INFO note naming the assumption and the check that settles it. Evidence is
+  taken from the relationship the join's columns use, disjointness axioms
+  generated from guesses only warn, each SELECT is judged on its own, and a
+  finding that only warns never stops a firmer one from blocking. Fan-trap
+  findings carry `relationship` and `assumed`.
 - **The R2RML mapping now speaks the ontology's vocabulary.** It named
   classes and properties on its own (`base:Orders`, `base:customer_id`), so
   an engine reading the mapping next to the ontology, such as Ontop, saw two
@@ -16,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mapping's output changes: anything consuming the old IRIs must be updated.
 
 ### Fixed
+- **OBQC reads every column of a composite key.** It took one of a
+  relationship's key columns and ignored the rest, so a join on part of a
+  composite key passed as valid. Columns are paired from the relationship's
+  join conditions; a join must compare all of them to match, and fan-out
+  evidence and suggestions use the whole key. A property is a composite key
+  only when it names one constraint (`oba:constraintName`); separate keys
+  sharing a property stay separate. `validate_relationship` refuses composite
+  keys rather than record a one-column verdict for them, and refuses
+  properties with several key columns but no constraint name, or one key
+  column onto several referenced columns -- as ontologies saved by earlier
+  versions hold -- since which key a verdict is about is
+  unknown there; OBQC ignores verdicts already recorded on such properties.
 - **Two foreign keys to the same table are two relationships.** Both were
   named `orders_has_addresses`, so billing and shipping address became one
   object property with two key columns, of which OBQC saw only one -- a join

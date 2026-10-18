@@ -15,7 +15,8 @@ from typing import Any
 import pytest
 import sqlglot
 from fastmcp import Client
-from rdflib import Graph, Literal, Namespace
+from rdflib import Graph, Literal, Namespace, URIRef
+from rdflib.namespace import OWL, RDF, RDFS
 from sqlglot import exp
 
 import src.main as main_module
@@ -32,6 +33,8 @@ from src.relationship_validation import (
     RelationshipRef,
     build_check_queries,
     classify,
+    find_relationships,
+    is_composite_key,
     relationship_key,
 )
 from src.server_state import ServerState
@@ -232,7 +235,11 @@ def shop(monkeypatch, tmp_path):
     con.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER)")
     con.execute("INSERT INTO orders VALUES (20,1),(21,7),(22,8),(23,9)")
     con.close()
+    yield from _serve_duckdb(monkeypatch, tmp_path, path)
 
+
+def _serve_duckdb(monkeypatch, tmp_path, path):
+    """Point a fresh server at the DuckDB file *path*, workspace in tmp_path."""
     fresh = ServerState()
     monkeypatch.setattr(state_module, "_server_state", fresh)
     monkeypatch.setattr(main_module, "_server_state", fresh)
@@ -534,3 +541,121 @@ async def test_background_generation_leaves_an_active_uploads_graph(shop, monkey
 
     assert verdict["recorded_in"]["active_ontology"] == "uploaded"
     assert verdict["recorded_in"]["rdf_graph"] == upload_graph
+
+
+def _composite_relationship(constraints: list[str]) -> Graph:
+    """shipments (order_id, line_no) -> order_lines, with given constraints."""
+    graph = Graph()
+    shipments = URIRef("http://example.com/ontology/shipments")
+    prop = URIRef("http://example.com/ontology/shipments_has_order_lines")
+    graph.add((shipments, OBA.tableName, Literal("shipments")))
+    graph.add((prop, RDF.type, OWL.ObjectProperty))
+    graph.add((prop, RDFS.domain, shipments))
+    graph.add((prop, OBA.referencedTable, Literal("order_lines")))
+    for column in ("order_id", "line_no"):
+        graph.add((prop, OBA.foreignKeyColumn, Literal(column)))
+        graph.add((prop, OBA.referencedColumn, Literal(column)))
+    for name in constraints:
+        graph.add((prop, OBA.constraintName, Literal(name)))
+    return graph
+
+
+def test_composite_key_is_recognised_by_its_single_constraint():
+    prop = URIRef("http://example.com/ontology/shipments_has_order_lines")
+    assert is_composite_key(_composite_relationship(["line_fk"]), prop)
+    # Without a constraint, or with several, the columns are separate keys.
+    assert not is_composite_key(_composite_relationship([]), prop)
+    assert not is_composite_key(_composite_relationship(["a_fk", "b_fk"]), prop)
+
+
+def test_any_key_column_finds_its_relationship():
+    graph = _composite_relationship(["line_fk"])
+    for column in ("order_id", "LINE_NO"):
+        (ref,) = find_relationships(graph, "shipments", column)
+        assert ref.column.lower() == column.lower()
+
+
+@pytest.fixture
+def lines(monkeypatch, tmp_path):
+    """A DuckDB file with a declared two-column foreign key."""
+    import duckdb
+
+    path = tmp_path / "lines.duckdb"
+    con = duckdb.connect(str(path))
+    con.execute(
+        "CREATE TABLE order_lines (order_id INTEGER, line_no INTEGER, "
+        "qty INTEGER, PRIMARY KEY (order_id, line_no))"
+    )
+    con.execute("INSERT INTO order_lines VALUES (1,1,5),(1,2,3),(2,1,4)")
+    con.execute(
+        "CREATE TABLE shipments (id INTEGER PRIMARY KEY, order_id INTEGER, "
+        "line_no INTEGER, FOREIGN KEY (order_id, line_no) "
+        "REFERENCES order_lines (order_id, line_no))"
+    )
+    con.execute("INSERT INTO shipments VALUES (10,1,1),(11,1,2),(12,2,1)")
+    con.close()
+    yield from _serve_duckdb(monkeypatch, tmp_path, path)
+
+
+async def test_a_composite_key_is_one_key_end_to_end(lines):
+    """Generated, read by OBQC as one key, and not validated by one column."""
+    from src.obqc_validator import OBQCValidator
+
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool("generate_ontology", {**on, "schema_name": "main"})
+
+        refused = await client.call_tool(
+            "validate_relationship",
+            {**on, "from_table": "shipments", "column": "line_no"},
+            raise_on_error=False,
+        )
+
+    # order_id repeats in this unique key: a one-column check would have
+    # recorded target_not_unique and condemned every join on the full key.
+    assert "composite_key_not_supported" in _text(refused)
+    graph = _active_ontology(lines)
+    assert _status_of(graph, "order_id") is None
+
+    validator = OBQCValidator()
+    validator.load_ontology(graph, "http://example.com/ontology/")
+    (rel,) = validator._schema_cache.relationships.values()
+    assert rel.pairs == (("line_no", "line_no"), ("order_id", "order_id"))
+
+
+async def test_a_saved_composite_key_without_its_constraint_is_refused(lines):
+    """Older ontologies lack oba:constraintName; one column must not decide."""
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {**on, "schema_name": "main", "auto_persist": False}
+        )
+        legacy = _active_ontology(lines)
+        legacy.remove((None, OBA.constraintName, None))
+        await client.call_tool(
+            "load_my_ontology",
+            {
+                **on,
+                "ontology_content": legacy.serialize(format="turtle"),
+                "file_name": "saved.ttl",
+                "import_folder": str(lines / "import"),
+            },
+        )
+
+        refused = await client.call_tool(
+            "validate_relationship",
+            {**on, "from_table": "shipments", "column": "order_id"},
+            raise_on_error=False,
+        )
+
+    assert "ambiguous_key_columns" in _text(refused)
+    assert all(
+        _status_of(_active_ontology(lines), column) is None
+        for column in ("order_id", "line_no")
+    )
