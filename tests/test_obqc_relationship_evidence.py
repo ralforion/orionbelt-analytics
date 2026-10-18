@@ -465,3 +465,23 @@ def test_unpairable_composite_key_falls_back_to_one_column() -> None:
     validator.load_ontology(graph, VOCAB)
     (rel,) = validator._schema_cache.relationships.values()
     assert len(rel.pairs) == 1
+
+
+def test_parenthesized_join_columns_are_still_compared() -> None:
+    """o.customer_id = (c.id) is the same join as without parentheses."""
+    graph = _load(DECLARED)
+    _add_relationship(graph, "customer_code", "code", status="target_not_unique")
+    wrapped = BY_ID.replace("= customers.id", "= (customers.id)")
+    assert _validate(graph, wrapped).is_valid
+
+
+def test_unique_key_equality_bounds_the_whole_conjunction() -> None:
+    """With customer_id = id in the ON, the code equality multiplies nothing."""
+    graph = _load(DECLARED)
+    _add_relationship(graph, "customer_code", "code", status="target_not_unique")
+    both = BY_ID.replace(
+        "orders.customer_id = customers.id",
+        "orders.customer_id = customers.id AND orders.customer_code = customers.code",
+    )
+    result = _validate(graph, both)
+    assert result.is_valid and not result.fan_trap_risk

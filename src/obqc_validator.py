@@ -1594,7 +1594,8 @@ class OBQCValidator:
         for eq in condition.find_all(exp.EQ):
             if eq.find_ancestor(exp.Select) is not scope:
                 continue
-            left, right = eq.this, eq.expression
+            # (c.id) is c.id: parentheses do not change what is compared.
+            left, right = eq.this.unnest(), eq.expression.unnest()
             if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
                 continue
             if not (left.table and right.table):
@@ -1654,7 +1655,8 @@ class OBQCValidator:
             # An equality inside a nested subquery belongs to that scope.
             if eq.find_ancestor(exp.Select) is not select:
                 continue
-            left, right = eq.this, eq.expression
+            # (c.id) is c.id: parentheses do not change what is compared.
+            left, right = eq.this.unnest(), eq.expression.unnest()
             if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
                 continue
             qualifiers = {side.table.lower() for side in (left, right) if side.table}
@@ -2537,7 +2539,8 @@ class OBQCValidator:
             # A comparison in a nested subquery belongs to that scope.
             if eq.find_ancestor(exp.Select) is not select:
                 continue
-            left, right = eq.this, eq.expression
+            # (c.id) is c.id: parentheses do not change what is compared.
+            left, right = eq.this.unnest(), eq.expression.unnest()
             if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
                 continue
             if left.table and right.table and left.table.lower() != right.table.lower():
@@ -3050,15 +3053,28 @@ class OBQCValidator:
         Returns:
             The relationships, possibly empty.
         """
+        between = self._relationships_between(table_a, table_b)
+        return self._used_relationships(between, on_comparisons) or between
+
+    def _relationships_between(
+        self, table_a: str, table_b: str
+    ) -> list[RelationshipInfo]:
+        """Every relationship between two tables, in either direction."""
         if self._schema_cache is None:
             return []
         pair = {table_a.lower(), table_b.lower()}
-        between = [
+        return [
             rel
             for rel in self._schema_cache.relationships.values()
             if {rel.from_table.lower(), rel.to_table.lower()} == pair
         ]
-        used = [
+
+    @staticmethod
+    def _used_relationships(
+        between: list[RelationshipInfo], on_comparisons: _Comparisons
+    ) -> list[RelationshipInfo]:
+        """Those of *between* whose every column pair the join compares."""
+        return [
             rel
             for rel in between
             if all(
@@ -3072,7 +3088,6 @@ class OBQCValidator:
                 for child, parent in rel.pairs
             )
         ]
-        return used or between
 
     def _fan_out_relationship(
         self,
@@ -3107,7 +3122,20 @@ class OBQCValidator:
         anchor = anchor_table.lower()
         assumed: RelationshipInfo | None = None
 
-        for rel in self._join_relationships(join_table, anchor_table, on_comparisons):
+        between = self._relationships_between(join_table, anchor_table)
+        used = self._used_relationships(between, on_comparisons)
+        # Parents the join reaches through a key it compares in full and that
+        # is not known to repeat: each row then matches at most one parent
+        # row, and further equalities in the same ON can only narrow that.
+        # "o.customer_id = c.id AND o.customer_code = c.code" multiplies
+        # nothing, however often customers.code repeats.
+        bounded = {
+            rel.to_table.lower()
+            for rel in used
+            if rel.relationship_type == "many_to_one" and not rel.target_not_unique
+        }
+
+        for rel in used or between:
             from_t = rel.from_table.lower()
             to_t = rel.to_table.lower()
 
@@ -3122,6 +3150,8 @@ class OBQCValidator:
             if {many, one} != {joined, anchor}:
                 continue
             if many != joined and not rel.target_not_unique:
+                continue
+            if many != joined and one in bounded:
                 continue
             if not rel.assumed:
                 return rel
