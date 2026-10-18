@@ -30,7 +30,7 @@ from ..security import (
 )
 from ..serialization import serialize_rows
 from .base import DatabaseDriver
-from .reflection import reflect_tables
+from .reflection import column_fk_entries, reflect_tables
 
 logger = logging.getLogger(__name__)
 
@@ -277,38 +277,14 @@ class MySQLDriver(DatabaseDriver):
                     column_name = col_info["name"]
                     is_pk = column_name.upper() in primary_keys_upper
 
-                    fk_table = None
-                    fk_column = None
-                    is_fk = False
-                    for fk in table_fks:
-                        constrained_cols_upper = [
-                            c.upper() for c in fk.get("constrained_columns", [])
-                        ]
-                        if column_name.upper() in constrained_cols_upper:
-                            is_fk = True
-                            fk_idx = constrained_cols_upper.index(column_name.upper())
-                            fk_table = fk.get("referred_table")
-                            referred_cols = fk.get("referred_columns", [])
-                            fk_column = (
-                                referred_cols[fk_idx]
-                                if fk_idx < len(referred_cols)
-                                else None
-                            )
-                            fk_schema = fk.get("referred_schema")
-                            if fk_table:
-                                foreign_keys.append(
-                                    {
-                                        "column": column_name,
-                                        "referenced_table": fk_table,
-                                        "referenced_column": fk_column,
-                                        "referenced_schema": fk_schema,
-                                    }
-                                )
-                                logger.debug(
-                                    f"Added FK: {column_name} -> "
-                                    f"{fk_schema}.{fk_table}.{fk_column}"
-                                )
-                            break
+                    fk_entries = column_fk_entries(column_name, table_fks)
+                    foreign_keys.extend(fk_entries)
+                    # A column in several keys names the first on the column itself.
+                    is_fk = bool(fk_entries)
+                    fk_table = fk_entries[0]["referenced_table"] if fk_entries else None
+                    fk_column = (
+                        fk_entries[0]["referenced_column"] if fk_entries else None
+                    )
 
                     columns.append(
                         ColumnInfo(
