@@ -374,6 +374,9 @@ class TableSchema:
     schema_declared: bool = True
 
 
+# Column-to-column equalities of a join condition: pairs of (table, column).
+_Comparisons = frozenset[frozenset[tuple[str, str]]]
+
 # Verdicts that rest on the data: the relationship is no longer an assumption.
 _CHECKED_STATUSES = frozenset(
     {STATUS_CONFIRMED, STATUS_PARTIAL, STATUS_TARGET_NOT_UNIQUE}
@@ -1424,10 +1427,11 @@ class OBQCValidator:
                     # detection needs to know which table this join attaches
                     # to, and the ON condition is the only place that says so.
                     "on_tables": [],
-                    # (table, column) pairs the ON condition compares,
-                    # lower-cased: which relationship a join uses, when two
-                    # tables are related more than one way.
-                    "on_columns": frozenset(),
+                    # Column-to-column equalities the ON condition states,
+                    # each a pair of (table, column), lower-cased: which
+                    # relationship a join uses, when two tables are related
+                    # more than one way.
+                    "on_comparisons": frozenset(),
                     # Tables this SELECT sums or averages over, lower-cased.
                     "measure_tables": measure_tables,
                     "counted_tables": counted_tables,
@@ -1472,13 +1476,8 @@ class OBQCValidator:
                     join_info["on_tables"] = self._condition_tables(
                         on_clause, alias_map
                     )
-                    join_info["on_columns"] = frozenset(
-                        (
-                            alias_map.get(c.table.lower(), c.table).lower(),
-                            c.name.lower(),
-                        )
-                        for c in on_clause.find_all(exp.Column)
-                        if c.table
+                    join_info["on_comparisons"] = self._column_comparisons(
+                        on_clause, alias_map
                     )
                 elif join_info["table"]:
                     # A comma join states the same relationship in WHERE.
@@ -1492,6 +1491,42 @@ class OBQCValidator:
                     )
 
                 result.parsed_joins.append(join_info)
+
+    @staticmethod
+    def _column_comparisons(
+        condition: exp.Expr, alias_map: dict[str, str]
+    ) -> _Comparisons:
+        """Column-to-column equalities a join condition states.
+
+        Only what is compared says which relationship a join uses: a filter
+        such as ``c.code IS NOT NULL`` next to ``o.customer_id = c.id`` names
+        the code column without joining on it. Equalities inside a subquery
+        belong to that subquery.
+
+        Args:
+            condition: The ON condition.
+            alias_map: The scope's alias -> table name map.
+
+        Returns:
+            Each equality as a pair of lower-cased (table, column).
+        """
+        scope = condition.find_ancestor(exp.Select)
+
+        def column_ref(column: exp.Column) -> tuple[str, str]:
+            table = alias_map.get(column.table.lower(), column.table)
+            return table.lower(), column.name.lower()
+
+        comparisons = set()
+        for eq in condition.find_all(exp.EQ):
+            if eq.find_ancestor(exp.Select) is not scope:
+                continue
+            left, right = eq.this, eq.expression
+            if not (isinstance(left, exp.Column) and isinstance(right, exp.Column)):
+                continue
+            if not (left.table and right.table):
+                continue
+            comparisons.add(frozenset({column_ref(left), column_ref(right)}))
+        return frozenset(comparisons)
 
     @staticmethod
     def _condition_tables(condition: exp.Expr, alias_map: dict[str, str]) -> list[str]:
@@ -1623,7 +1658,7 @@ class OBQCValidator:
         return columns
 
     @classmethod
-    def _condition_columns(cls, agg: exp.Expr) -> list[exp.Column]:
+    def _condition_comparisons(cls, agg: exp.Expr) -> list[exp.Column]:
         """Columns an aggregate only tests, rather than reads a value from.
 
         Includes a trailing ``FILTER (WHERE ...)``, which lives on the parent
@@ -1681,7 +1716,7 @@ class OBQCValidator:
             if self._value_columns(agg):
                 continue
             condition_tables: set[str] = set()
-            for column in self._condition_columns(agg):
+            for column in self._condition_comparisons(agg):
                 if column.table:
                     resolved = alias_map.get(column.table.lower())
                     if resolved:
@@ -2920,7 +2955,7 @@ class OBQCValidator:
         self,
         table_a: str,
         table_b: str,
-        on_columns: frozenset[tuple[str, str]] = frozenset(),
+        on_comparisons: _Comparisons = frozenset(),
     ) -> list[RelationshipInfo]:
         """The relationships a join between two tables uses.
 
@@ -2934,7 +2969,7 @@ class OBQCValidator:
         Args:
             table_a: One table of the join.
             table_b: The other.
-            on_columns: (table, column) pairs the join condition compares.
+            on_comparisons: Column equalities the join condition states.
 
         Returns:
             The relationships, possibly empty.
@@ -2950,8 +2985,13 @@ class OBQCValidator:
         used = [
             rel
             for rel in between
-            if (rel.from_table.lower(), rel.from_column.lower()) in on_columns
-            and (rel.to_table.lower(), rel.to_column.lower()) in on_columns
+            if frozenset(
+                {
+                    (rel.from_table.lower(), rel.from_column.lower()),
+                    (rel.to_table.lower(), rel.to_column.lower()),
+                }
+            )
+            in on_comparisons
         ]
         return used or between
 
@@ -2959,7 +2999,7 @@ class OBQCValidator:
         self,
         join_table: str,
         anchor_table: str,
-        on_columns: frozenset[tuple[str, str]] = frozenset(),
+        on_comparisons: _Comparisons = frozenset(),
     ) -> RelationshipInfo | None:
         """The relationship by which joining *join_table* multiplies rows.
 
@@ -2972,7 +3012,7 @@ class OBQCValidator:
         Args:
             join_table: Table introduced by the JOIN.
             anchor_table: Table its ON condition attaches to.
-            on_columns: (table, column) pairs the join condition compares,
+            on_comparisons: Column equalities the join condition states,
                 which pick the relationship the join actually uses.
 
         Returns:
@@ -2988,7 +3028,7 @@ class OBQCValidator:
         anchor = anchor_table.lower()
         assumed: RelationshipInfo | None = None
 
-        for rel in self._join_relationships(join_table, anchor_table, on_columns):
+        for rel in self._join_relationships(join_table, anchor_table, on_comparisons):
             from_t = rel.from_table.lower()
             to_t = rel.to_table.lower()
 
@@ -3076,11 +3116,11 @@ class OBQCValidator:
                 for t in join_info.get("on_tables", [])
                 if t.lower() != join_table.lower()
             }
-            on_columns = join_info.get("on_columns", frozenset())
+            on_comparisons = join_info.get("on_comparisons", frozenset())
             used = [
                 rel
                 for anchor in sorted(anchors)
-                for rel in self._join_relationships(join_table, anchor, on_columns)
+                for rel in self._join_relationships(join_table, anchor, on_comparisons)
             ]
             for rel in used:
                 if not rel.assumed or rel.relationship_type != "many_to_one":
@@ -3145,8 +3185,10 @@ class OBQCValidator:
         Returns:
             One finding per (measure table, fan-out table) pair, deduplicated.
         """
-        findings: list[dict[str, Any]] = []
-        seen: set[tuple[str, str]] = set()
+        # One finding per (measure table, fan-out table). The same pair may
+        # be joined by different keys in different SELECTs; the firmest
+        # evidence is kept, so a guessed branch cannot hide a confirmed one.
+        findings: dict[tuple[str, str], dict[str, Any]] = {}
 
         for join_info in result.parsed_joins:
             if not join_info.get("scope_aggregates"):
@@ -3174,28 +3216,29 @@ class OBQCValidator:
                     if measure_table.lower() not in measures:
                         continue
                     rel = self._fan_out_relationship(
-                        other, measure_table, join_info.get("on_columns", frozenset())
+                        other,
+                        measure_table,
+                        join_info.get("on_comparisons", frozenset()),
                     )
                     if rel is None:
                         continue
 
                     pair = (measure_table.lower(), other.lower())
-                    if pair in seen:
+                    if pair in findings and not (
+                        findings[pair]["assumed"] and not rel.assumed
+                    ):
                         continue
-                    seen.add(pair)
-                    findings.append(
-                        {
-                            "kind": kind,
-                            "measure_table": measure_table,
-                            "fan_out_table": other,
-                            "tables": sorted({measure_table, other}),
-                            "relationship": self._describe(rel),
-                            # Only naming backs it: reported, never blocking.
-                            "assumed": rel.assumed,
-                        }
-                    )
+                    findings[pair] = {
+                        "kind": kind,
+                        "measure_table": measure_table,
+                        "fan_out_table": other,
+                        "tables": sorted({measure_table, other}),
+                        "relationship": self._describe(rel),
+                        # Only naming backs it: reported, never blocking.
+                        "assumed": rel.assumed,
+                    }
 
-        return findings
+        return list(findings.values())
 
     def _detect_fan_trap(self, result: OBQCResult, blocking: bool = True) -> None:
         """Rule: Detect fan-trap patterns.
@@ -3376,9 +3419,10 @@ class OBQCValidator:
                 # condition naming no other table); nothing to judge.
                 continue
 
-            on_columns = join_info.get("on_columns", frozenset())
+            on_comparisons = join_info.get("on_comparisons", frozenset())
             rels = [
-                self._fan_out_relationship(join_table, a, on_columns) for a in anchors
+                self._fan_out_relationship(join_table, a, on_comparisons)
+                for a in anchors
             ]
             found = [r for r in rels if r is not None]
             if found:

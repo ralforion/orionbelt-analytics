@@ -206,8 +206,12 @@ def _validate(graph, sql: str):
 
 # Declared: customers <- orders <- order_items, and customers <- returns.
 DECLARED = [
-    _table("customers", ["id", "name"]),
-    _table("orders", ["id", "customer_id", "total"], {"customer_id": "customers"}),
+    _table("customers", ["id", "name", "code"]),
+    _table(
+        "orders",
+        ["id", "customer_id", "customer_code", "referrer_id", "total"],
+        {"customer_id": "customers"},
+    ),
     _table("returns", ["id", "customer_id"], {"customer_id": "customers"}),
     _table("order_items", ["id", "order_id"], {"order_id": "orders"}),
 ]
@@ -256,30 +260,79 @@ def test_larger_guessed_scope_does_not_hide_a_firm_one() -> None:
     assert not result.is_valid and result.fan_trap_blocking
 
 
-def test_verdict_applies_to_the_columns_the_join_uses() -> None:
-    """A non-unique customers.code must not condemn a join on customers.id."""
-    graph = _load(DECLARED)
-    by_code = URIRef(VOCAB + "orders_has_customers_by_code")
-    for p, o in (
+def _add_relationship(
+    graph,
+    column: str,
+    to_column: str,
+    status: str | None = None,
+    inferred: bool = False,
+) -> None:
+    """A further orders -> customers relationship, on other columns."""
+    prop = URIRef(VOCAB + f"orders_has_customers_by_{column}")
+    triples = [
         (RDF.type, OWL.ObjectProperty),
         (RDFS.domain, URIRef(VOCAB + "orders")),
         (RDFS.range, URIRef(VOCAB + "customers")),
-        (OBA.foreignKeyColumn, Literal("customer_code")),
+        (OBA.foreignKeyColumn, Literal(column)),
         (OBA.referencedTable, Literal("customers")),
-        (OBA.referencedColumn, Literal("code")),
+        (OBA.referencedColumn, Literal(to_column)),
         (OBA.relationshipType, Literal("many_to_one")),
-        (OBA.validationStatus, Literal("target_not_unique")),
-    ):
-        graph.add((by_code, p, o))
-    by_id = (
-        "SELECT customers.name, SUM(orders.total) FROM orders "
-        "JOIN customers ON orders.customer_id = customers.id GROUP BY customers.name"
-    )
-    assert _validate(graph, by_id).is_valid
-    by_code_sql = by_id.replace(
+    ]
+    if status:
+        triples.append((OBA.validationStatus, Literal(status)))
+    if inferred:
+        triples.append((OBA.isInferredRelationship, Literal(True)))
+    for p, o in triples:
+        graph.add((prop, p, o))
+
+
+BY_ID = (
+    "SELECT customers.name, SUM(orders.total) FROM orders "
+    "JOIN customers ON orders.customer_id = customers.id GROUP BY customers.name"
+)
+
+
+def test_verdict_applies_to_the_columns_the_join_uses() -> None:
+    """A non-unique customers.code must not condemn a join on customers.id."""
+    graph = _load(DECLARED)
+    _add_relationship(graph, "customer_code", "code", status="target_not_unique")
+    assert _validate(graph, BY_ID).is_valid
+    by_code = BY_ID.replace(
         "orders.customer_id = customers.id", "orders.customer_code = customers.code"
     )
-    assert _validate(graph, by_code_sql).fan_trap_blocking
+    assert _validate(graph, by_code).fan_trap_blocking
+
+
+def test_filters_in_on_are_not_the_join() -> None:
+    """Naming the code columns in IS NOT NULL filters joins nothing on them."""
+    graph = _load(DECLARED)
+    _add_relationship(graph, "customer_code", "code", status="target_not_unique")
+    filtered = BY_ID.replace(
+        "orders.customer_id = customers.id",
+        "orders.customer_id = customers.id "
+        "AND orders.customer_code IS NOT NULL AND customers.code IS NOT NULL",
+    )
+    assert _validate(graph, filtered).is_valid
+
+
+def test_guessed_branch_does_not_hide_a_firm_one_on_the_same_tables() -> None:
+    """Same two tables, different keys: the firm finding wins in any order."""
+    graph = _load(DECLARED)
+    _add_relationship(graph, "referrer_id", "id", inferred=True)
+    guessed = (
+        "SELECT SUM(customers.id) FROM customers "
+        "JOIN orders ON orders.referrer_id = customers.id"
+    )
+    firm = (
+        "SELECT SUM(customers.id) FROM customers "
+        "JOIN orders ON orders.customer_id = customers.id"
+    )
+    assert not _validate(graph, guessed).fan_trap_blocking
+    for sql in (f"{guessed} UNION ALL {firm}", f"{firm} UNION ALL {guessed}"):
+        result = _validate(graph, sql)
+        assert result.fan_trap_blocking, sql
+        (finding,) = result.fan_trap_findings
+        assert finding["relationship"] == "orders.customer_id -> customers.id"
 
 
 def test_disjointness_generated_from_guesses_only_warns() -> None:
