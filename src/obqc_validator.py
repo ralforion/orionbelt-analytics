@@ -25,6 +25,7 @@ from .relationship_validation import (
     STATUS_REFUTED,
     STATUS_TARGET_NOT_UNIQUE,
     is_composite_key,
+    why_not_checkable,
 )
 
 logger = logging.getLogger(__name__)
@@ -819,10 +820,12 @@ class OBQCValidator:
 
             pairs = self._key_column_pairs(subject, from_table)
             composite = len(pairs) > 1 and is_composite_key(self._graph, subject)
-            if composite:
-                # validate_relationship counts one column's values, and
-                # order_id repeats in every unique (order_id, line_no) key:
-                # a verdict on one column says nothing about the tuple.
+            if why_not_checkable(self._graph, subject) is not None:
+                # A verdict checks one column against one referenced column.
+                # On a composite key it says nothing about the tuple (order_id
+                # repeats in every unique (order_id, line_no)); on a property
+                # shared by separate keys it cannot say which key it is about
+                # -- refuting shipping must not remove billing.
                 status = None
             if status == STATUS_REFUTED:
                 # The data contradicts it: no join may lean on it.

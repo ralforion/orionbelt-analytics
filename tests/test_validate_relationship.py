@@ -624,3 +624,38 @@ async def test_a_composite_key_is_one_key_end_to_end(lines):
     validator.load_ontology(graph, "http://example.com/ontology/")
     (rel,) = validator._schema_cache.relationships.values()
     assert rel.pairs == (("line_no", "line_no"), ("order_id", "order_id"))
+
+
+async def test_a_saved_composite_key_without_its_constraint_is_refused(lines):
+    """Older ontologies lack oba:constraintName; one column must not decide."""
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool(
+            "generate_ontology", {**on, "schema_name": "main", "auto_persist": False}
+        )
+        legacy = _active_ontology(lines)
+        legacy.remove((None, OBA.constraintName, None))
+        await client.call_tool(
+            "load_my_ontology",
+            {
+                **on,
+                "ontology_content": legacy.serialize(format="turtle"),
+                "file_name": "saved.ttl",
+                "import_folder": str(lines / "import"),
+            },
+        )
+
+        refused = await client.call_tool(
+            "validate_relationship",
+            {**on, "from_table": "shipments", "column": "order_id"},
+            raise_on_error=False,
+        )
+
+    assert "ambiguous_key_columns" in _text(refused)
+    assert all(
+        _status_of(_active_ontology(lines), column) is None
+        for column in ("order_id", "line_no")
+    )

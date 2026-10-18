@@ -532,3 +532,58 @@ def test_unique_key_equality_bounds_the_whole_conjunction() -> None:
     )
     result = _validate(graph, both)
     assert result.is_valid and not result.fan_trap_risk
+
+
+# --- Ontologies saved before keys were named apart ----------------------------
+
+
+def _legacy_shared_property(status: str | None = None):
+    """Billing and shipping customer on one property, as older generators did."""
+    generator = OntologyGenerator(base_uri=VOCAB)
+    generator.generate_from_schema(
+        [
+            _table("customers", ["id", "name", "credit"]),
+            _table("orders", ["id", "billing_customer_id", "shipping_customer_id"]),
+        ],
+        include_inferred_relationships=False,
+    )
+    graph = generator.graph
+    prop = URIRef(VOCAB + "orders_has_customers")
+    graph.add((prop, RDF.type, OWL.ObjectProperty))
+    graph.add((prop, RDFS.domain, URIRef(VOCAB + "orders")))
+    graph.add((prop, RDFS.range, URIRef(VOCAB + "customers")))
+    graph.add((prop, OBA.referencedTable, Literal("customers")))
+    graph.add((prop, OBA.referencedColumn, Literal("id")))
+    graph.add((prop, OBA.relationshipType, Literal("many_to_one")))
+    for column in ("billing_customer_id", "shipping_customer_id"):
+        graph.add((prop, OBA.foreignKeyColumn, Literal(column)))
+        graph.add(
+            (prop, OBA.sqlJoinCondition, Literal(f"orders.{column} = customers.id"))
+        )
+    if status:
+        graph.add((prop, OBA.validationStatus, Literal(status)))
+    return graph
+
+
+def test_verdict_on_a_shared_property_does_not_remove_its_other_keys() -> None:
+    """Refuting shipping must leave billing standing, fan-out and all."""
+    graph = _legacy_shared_property(status="refuted")
+    validator = OBQCValidator()
+    validator.load_ontology(graph, VOCAB)
+    assert len(validator._schema_cache.relationships) == 2
+    result = _validate(
+        graph,
+        "SELECT SUM(customers.credit) FROM customers "
+        "JOIN orders ON orders.billing_customer_id = customers.id",
+    )
+    assert result.fan_trap_blocking
+
+
+def test_shared_property_with_different_targets_is_not_checkable() -> None:
+    """customer_id -> id and customer_code -> code: no single pairing is known."""
+    from src.relationship_validation import REASON_AMBIGUOUS_KEY, why_not_checkable
+
+    graph = _legacy_shared_property()
+    prop = URIRef(VOCAB + "orders_has_customers")
+    graph.add((prop, OBA.referencedColumn, Literal("code")))
+    assert why_not_checkable(graph, prop) == REASON_AMBIGUOUS_KEY

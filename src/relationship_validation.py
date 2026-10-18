@@ -258,6 +258,37 @@ def is_composite_key(graph: Graph, prop: Node) -> bool:
     return len(columns) > 1 and len(constraints) == 1
 
 
+# Why a single-column check cannot judge a relationship.
+REASON_COMPOSITE_KEY = "composite_key_not_supported"
+REASON_AMBIGUOUS_KEY = "ambiguous_key_columns"
+
+
+def why_not_checkable(graph: Graph, prop: Node) -> str | None:
+    """Why validate_relationship cannot judge this relationship, if it cannot.
+
+    The check counts one key column against one referenced column, so it can
+    only speak for a property stating exactly one key column. A composite
+    key is unique as a tuple, which one column's values cannot show. A
+    property with several key columns and no single constraint -- as
+    ontologies generated before keys were named apart, or written by hand,
+    may hold -- says neither which column references which nor whether they
+    form one key, so any verdict could land on the wrong key.
+
+    Args:
+        graph: The ontology.
+        prop: The relationship's object property.
+
+    Returns:
+        None if checkable, else REASON_COMPOSITE_KEY or REASON_AMBIGUOUS_KEY.
+    """
+    columns = {str(c).lower() for c in graph.objects(prop, OBA.foreignKeyColumn)}
+    if len(columns) <= 1:
+        return None
+    return (
+        REASON_COMPOSITE_KEY if is_composite_key(graph, prop) else REASON_AMBIGUOUS_KEY
+    )
+
+
 def find_relationships(
     graph: Graph,
     from_table: str,
