@@ -954,7 +954,7 @@ class OntologyGenerator:
         # Named by the key it belongs to: the columns of a composite key share
         # one property, while two keys to the same table get one each.
         prop_uri = self.base_uri[key.local_name]
-        via_label = f" via {key.via_column}" if key.via_column else ""
+        via_label = f" via {key.via}" if key.via else ""
         referenced_table_uri = self.base_uri[self._clean_name(referenced_table)]
 
         referenced_column = fk.get("referenced_column", "id")

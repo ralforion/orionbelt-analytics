@@ -20,9 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   named `orders_has_addresses`, so billing and shipping address became one
   object property with two key columns, of which OBQC saw only one -- a join
   on the other could be judged against the wrong column. When a table has
-  several keys to one table, each is now named after its column
-  (`orders_has_addresses_via_billing_address_id`), in the ontology and the
-  R2RML mapping alike; single keys keep their names. Relationship
+  several keys to one table, each is now named after its columns
+  (`orders_has_addresses_via_billing_address_id`,
+  `orders_has_addresses_via_tenant_id_shipping_code`), and after the columns
+  it references when even those are shared (`…_via_actor_to_email`), in the
+  ontology and the R2RML mapping alike; single keys keep their names. Relationship
   descriptions keyed by column reach the right key, an enrichment naming only
   the two tables of such a pair is no longer applied to an arbitrary one, and
   no property chain is built through an ambiguous hop. Semantic names saved
@@ -41,9 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **R2RML: a composite foreign key is one join, and only one.** Drivers now
   record which constraint each key column belongs to (`constraint_name`), so
   the columns of one key are joined together and two keys onto the same table
-  (`users.id`, `users.email`) stay apart. Schemas saved before this carry no
+  (`users.id`, `users.email`) stay apart. A column in several keys belongs to
+  each of them: drivers stopped at the first, so a `tenant_id` shared by a
+  billing and a shipping key was missing from the shipping join, which then
+  matched other tenants' rows. Schemas saved before this carry no
   constraint; their key columns are taken one by one, and a join onto part of
-  a composite key is left out rather than matching many rows.
+  a composite key is left out rather than matching many rows. A declared key
+  onto a unique column under a wider primary key is mapped.
 - **R2RML: a `#` vocabulary namespace is kept as given,** instead of
   becoming `#/` and missing the ontology's classes.
 - **R2RML: table and column names keep their case.** They are delimited

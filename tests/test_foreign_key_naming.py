@@ -80,7 +80,7 @@ class TestForeignKeys:
         (key,) = foreign_keys("orders", [_fk("customer_id", "customers")])
         assert key.local_name == "orders_has_customers"
         assert key.inverse_local_name == "customers_referenced_by_orders"
-        assert key.via_column is None
+        assert key.via is None
 
     def test_two_keys_to_one_table_are_named_by_column(self) -> None:
         keys = foreign_keys(
@@ -268,3 +268,122 @@ def test_reflection_records_the_constraint_of_each_key_column() -> None:
         [("order_id", "order_id"), ("line_no", "line_no")],
         [("actor_id", "id")],
     ]
+
+
+def _tenant_orders() -> TableInfo:
+    """Billing and shipping keys that share their tenant_id column."""
+    from src.drivers.reflection import build_table_info
+
+    columns = [
+        {"name": c, "type": "INTEGER", "nullable": False}
+        for c in ("id", "tenant_id", "billing_code", "shipping_code")
+    ]
+    fks = [
+        {
+            "name": "billing_fk",
+            "constrained_columns": ["tenant_id", "billing_code"],
+            "referred_table": "addresses",
+            "referred_columns": ["tenant_id", "code"],
+        },
+        {
+            "name": "shipping_fk",
+            "constrained_columns": ["tenant_id", "shipping_code"],
+            "referred_table": "addresses",
+            "referred_columns": ["tenant_id", "code"],
+        },
+    ]
+    return build_table_info(
+        "orders", "public", columns, {"constrained_columns": ["id"]}, fks
+    )
+
+
+def test_shared_column_belongs_to_every_key_it_is_in() -> None:
+    """Without tenant_id, the shipping join would match other tenants' rows."""
+    keys = foreign_keys("orders", _tenant_orders().foreign_keys)
+    assert [k.column_pairs for k in keys] == [
+        [("tenant_id", "tenant_id"), ("billing_code", "code")],
+        [("tenant_id", "tenant_id"), ("shipping_code", "code")],
+    ]
+
+
+def test_composite_keys_sharing_a_first_column_get_distinct_names() -> None:
+    keys = foreign_keys("orders", _tenant_orders().foreign_keys)
+    assert [k.local_name for k in keys] == [
+        "orders_has_addresses_via_tenant_id_billing_code",
+        "orders_has_addresses_via_tenant_id_shipping_code",
+    ]
+
+
+def test_keys_on_the_same_column_are_named_by_what_they_reference() -> None:
+    keys = foreign_keys(
+        "audits",
+        [
+            _fk("actor", "users", "id", "actor_id_fk"),
+            _fk("actor", "users", "email", "actor_email_fk"),
+        ],
+    )
+    assert [k.local_name for k in keys] == [
+        "audits_has_users_via_actor_to_id",
+        "audits_has_users_via_actor_to_email",
+    ]
+
+
+def test_r2rml_joins_shared_column_into_each_key() -> None:
+    from src.r2rml_generator import R2RMLGenerator
+
+    addresses = TableInfo(
+        name="addresses",
+        schema="public",
+        columns=[
+            ColumnInfo("tenant_id", "integer", False, True, False),
+            ColumnInfo("code", "integer", False, True, False),
+        ],
+        primary_keys=["tenant_id", "code"],
+        foreign_keys=[],
+    )
+    rr = Namespace("http://www.w3.org/ns/r2rml#")
+    mapping = Graph()
+    mapping.parse(
+        data=R2RMLGenerator(vocabulary_iri=VOCAB).generate_from_schema(
+            [addresses, _tenant_orders()]
+        ),
+        format="turtle",
+        publicID="http://mapping/",
+    )
+    joins: dict[str, set[tuple[str, str]]] = {}
+    for pom in mapping.objects(None, rr.predicateObjectMap):
+        om = mapping.value(pom, rr.objectMap)
+        conditions = list(mapping.objects(om, rr.joinCondition))
+        if conditions:
+            name = str(mapping.value(pom, rr.predicate)).removeprefix(VOCAB)
+            joins[name] = {
+                (str(mapping.value(j, rr.child)), str(mapping.value(j, rr.parent)))
+                for j in conditions
+            }
+    assert joins == {
+        "orders_has_addresses_via_tenant_id_billing_code": {
+            ('"tenant_id"', '"tenant_id"'),
+            ('"billing_code"', '"code"'),
+        },
+        "orders_has_addresses_via_tenant_id_shipping_code": {
+            ('"tenant_id"', '"tenant_id"'),
+            ('"shipping_code"', '"code"'),
+        },
+    }
+
+
+def test_declared_key_onto_a_unique_column_is_mapped() -> None:
+    """PRIMARY KEY (tenant_id, id) with UNIQUE (id): a key onto id is valid."""
+    from src.r2rml_generator import R2RMLGenerator
+
+    accounts = _table("accounts", ["tenant_id", "id"], ["tenant_id", "id"], [])
+    invoices = _table(
+        "invoices",
+        ["id", "account_id"],
+        ["id"],
+        [_fk("account_id", "accounts", "id", "invoice_account_fk")],
+    )
+    ttl = R2RMLGenerator(vocabulary_iri=VOCAB).generate_from_schema(
+        [accounts, invoices]
+    )
+    assert "ont:invoices_has_accounts" in ttl

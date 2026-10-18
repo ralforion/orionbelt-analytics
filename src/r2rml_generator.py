@@ -272,9 +272,12 @@ class R2RMLGenerator:
                 if parent_column:
                     pairs.append((child, parent_column))
             parent_columns = {parent_col for _, parent_col in pairs}
-            if parent_columns < set(parent_key):
+            if not key.declared and parent_columns < set(parent_key):
                 # Part of a composite key, from a schema that did not record
                 # which columns form one key: the join would match many rows.
+                # A declared key may reference fewer columns than the primary
+                # key -- a unique column such as id under (tenant_id, id) --
+                # and is the whole key, so it is mapped.
                 logger.debug(
                     f"FK {table_info.name} -> {key.referenced_table}: covers "
                     "part of a composite key, keeping the column values only"

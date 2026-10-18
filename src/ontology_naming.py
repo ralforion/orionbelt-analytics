@@ -61,7 +61,9 @@ class ForeignKey:
 
     referenced_table: str
     entries: list[dict[str, Any]] = field(default_factory=list)
-    via_column: str | None = None
+    # What tells this key apart from other keys to the same table, if any:
+    # its columns, and if those are shared too, the columns it references.
+    via: str | None = None
     local_name: str = ""
     inverse_local_name: str = ""
 
@@ -69,6 +71,15 @@ class ForeignKey:
     def column_pairs(self) -> list[tuple[str, str | None]]:
         """(key column, referenced column) for each column of the key."""
         return [(e["column"], e.get("referenced_column")) for e in self.entries]
+
+    @property
+    def declared(self) -> bool:
+        """Whether the driver said which constraint each column belongs to.
+
+        Only then are the entries known to be the whole key; a schema saved
+        before constraints were recorded may hold part of a composite key.
+        """
+        return all(e.get("constraint_name") for e in self.entries)
 
 
 def foreign_keys(table_name: str, fk_entries: list[dict[str, Any]]) -> list[ForeignKey]:
@@ -102,19 +113,47 @@ def foreign_keys(table_name: str, fk_entries: list[dict[str, Any]]) -> list[Fore
         by_constraint[group].entries.append(entry)
     keys = list(by_constraint.values())
 
-    per_target: dict[str, int] = {}
+    per_target: dict[str, list[ForeignKey]] = {}
     for key in keys:
-        per_target[key.referenced_table] = per_target.get(key.referenced_table, 0) + 1
+        per_target.setdefault(key.referenced_table, []).append(key)
+    for siblings in per_target.values():
+        if len(siblings) > 1:
+            _name_apart(siblings)
     for key in keys:
-        if per_target[key.referenced_table] > 1:
-            key.via_column = key.entries[0]["column"]
         key.local_name = relationship_local_name(
-            table_name, key.referenced_table, key.via_column
+            table_name, key.referenced_table, key.via
         )
         key.inverse_local_name = inverse_relationship_local_name(
-            table_name, key.referenced_table, key.via_column
+            table_name, key.referenced_table, key.via
         )
     return keys
+
+
+def _name_apart(siblings: list[ForeignKey]) -> None:
+    """Give keys to the same table a ``via`` that no two of them share.
+
+    By their columns: ``(tenant_id, billing_code)`` and ``(tenant_id,
+    shipping_code)`` differ although both start with ``tenant_id``. Keys on
+    the same columns differ in what they reference (``a`` -> ``users.id`` and
+    ``a`` -> ``users.email``); identical keys, which only a duplicated
+    constraint makes, are numbered.
+    """
+    for key in siblings:
+        key.via = "_".join(child for child, _ in key.column_pairs)
+    for stage in ("referenced", "numbered"):
+        seen: dict[str, list[ForeignKey]] = {}
+        for key in siblings:
+            seen.setdefault(key.via or "", []).append(key)
+        clashes = [group for group in seen.values() if len(group) > 1]
+        if not clashes:
+            return
+        for group in clashes:
+            for n, key in enumerate(group, start=1):
+                if stage == "referenced":
+                    parents = "_".join(p or "" for _, p in key.column_pairs)
+                    key.via = f"{key.via}_to_{parents}"
+                else:
+                    key.via = f"{key.via}_{n}"
 
 
 def assumed_key_column(table_name: str, column_names: list[str]) -> str | None:
