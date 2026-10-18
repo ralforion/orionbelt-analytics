@@ -397,6 +397,14 @@ class RelationshipInfo:
     inferred: bool = False
     # The latest validate_relationship verdict, if it was ever checked.
     validation_status: str | None = None
+    # (key column, referenced column) for every column of a composite key.
+    # Empty for a single-column key, which from_column / to_column describe.
+    column_pairs: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def pairs(self) -> tuple[tuple[str, str], ...]:
+        """(key column, referenced column) for each column of the key."""
+        return self.column_pairs or ((self.from_column, self.to_column),)
 
     @property
     def assumed(self) -> bool:
@@ -822,7 +830,21 @@ class OBQCValidator:
                     break
 
                 if from_table:
-                    rel_key = f"{from_table}.{fk_column}->{ref_table}.{ref_column}"
+                    pairs = self._key_column_pairs(subject, from_table)
+                    if pairs:
+                        fk_column, ref_column = pairs[0]
+                        join_cond = " AND ".join(
+                            f"{from_table}.{child} = {ref_table}.{parent}"
+                            for child, parent in pairs
+                        )
+                    rel_key = "->".join(
+                        (
+                            ",".join(f"{from_table}.{c}" for c, _ in pairs)
+                            or f"{from_table}.{fk_column}",
+                            ",".join(f"{ref_table}.{p}" for _, p in pairs)
+                            or f"{ref_table}.{ref_column}",
+                        )
+                    )
                     schema.relationships[rel_key] = RelationshipInfo(
                         from_table=from_table,
                         from_column=fk_column,
@@ -835,21 +857,73 @@ class OBQCValidator:
                             subject, self._oba_ns.isInferredRelationship, False
                         ),
                         validation_status=status,
+                        column_pairs=tuple(pairs) if len(pairs) > 1 else (),
                     )
 
                     # Update column FK info
                     table_key = from_table.lower()
-                    col_key = fk_column.lower()
-                    if (
-                        table_key in schema.tables
-                        and col_key in schema.tables[table_key].columns
-                    ):
-                        col = schema.tables[table_key].columns[col_key]
-                        col.is_foreign_key = True
-                        col.fk_referenced_table = ref_table
-                        col.fk_referenced_column = ref_column
+                    for child, parent in pairs or [(fk_column, ref_column or "id")]:
+                        col_key = child.lower()
+                        if (
+                            table_key in schema.tables
+                            and col_key in schema.tables[table_key].columns
+                        ):
+                            col = schema.tables[table_key].columns[col_key]
+                            col.is_foreign_key = True
+                            col.fk_referenced_table = ref_table
+                            col.fk_referenced_column = parent
 
         return schema
+
+    def _key_column_pairs(
+        self, subject: Node, from_table: str
+    ) -> list[tuple[str, str]]:
+        """Every (key column, referenced column) of a relationship.
+
+        A composite key is one property holding several ``oba:foreignKeyColumn``
+        and ``oba:referencedColumn`` values, which say nothing about which goes
+        with which; its ``oba:sqlJoinCondition`` values, one equality per
+        column, do. A single-column key needs no pairing.
+
+        Args:
+            subject: The relationship's object property.
+            from_table: Its key table.
+
+        Returns:
+            The pairs, sorted; empty when the key columns cannot be paired,
+            and the caller falls back to one of them.
+        """
+        if self._graph is None or self._oba_ns is None:
+            return []
+        fk_columns = [
+            str(o) for o in self._graph.objects(subject, self._oba_ns.foreignKeyColumn)
+        ]
+        ref_columns = [
+            str(o) for o in self._graph.objects(subject, self._oba_ns.referencedColumn)
+        ]
+        if len(fk_columns) == 1:
+            return [(fk_columns[0], ref_columns[0] if ref_columns else "id")]
+        wanted = {c.lower() for c in fk_columns}
+        pairs: dict[str, tuple[str, str]] = {}
+        for cond in self._graph.objects(subject, self._oba_ns.sqlJoinCondition):
+            sides = str(cond).split("=")
+            if len(sides) != 2:
+                continue
+            refs = [side.strip().rsplit(".", 1) for side in sides]
+            if any(len(ref) != 2 for ref in refs):
+                continue
+            (left_table, left), (right_table, right) = refs
+            # Written key side first; accept either order from other authors.
+            if left_table.lower() == from_table.lower() and left.lower() in wanted:
+                pairs[left.lower()] = (left, right)
+            elif right_table.lower() == from_table.lower() and right.lower() in wanted:
+                pairs[right.lower()] = (right, left)
+        if len(pairs) != len(wanted):
+            logger.debug(
+                "Cannot pair the key columns of %s; using one of them", subject
+            )
+            return []
+        return sorted(pairs.values())
 
     def _extract_disjoint_pairs(self) -> set[frozenset]:
         """Read owl:disjointWith axioms as pairs of lower-cased table names.
@@ -2546,12 +2620,14 @@ class OBQCValidator:
         for rel_info in self._schema_cache.relationships.values():
             # Relationship must involve the join table AND the condition must
             # reference both of its FK columns.
+            # Every column of a composite key: joining on part of it matches
+            # many rows.
             if (
                 rel_info.from_table.lower() == join_table_lower
                 or rel_info.to_table.lower() == join_table_lower
-            ) and (
-                rel_info.from_column.lower() in on_lower
-                and rel_info.to_column.lower() in on_lower
+            ) and all(
+                child.lower() in on_lower and parent.lower() in on_lower
+                for child, parent in rel_info.pairs
             ):
                 return True
         return False
@@ -2985,13 +3061,16 @@ class OBQCValidator:
         used = [
             rel
             for rel in between
-            if frozenset(
-                {
-                    (rel.from_table.lower(), rel.from_column.lower()),
-                    (rel.to_table.lower(), rel.to_column.lower()),
-                }
+            if all(
+                frozenset(
+                    {
+                        (rel.from_table.lower(), child.lower()),
+                        (rel.to_table.lower(), parent.lower()),
+                    }
+                )
+                in on_comparisons
+                for child, parent in rel.pairs
             )
-            in on_comparisons
         ]
         return used or between
 
@@ -3086,7 +3165,11 @@ class OBQCValidator:
     @staticmethod
     def _describe(rel: RelationshipInfo) -> str:
         """A relationship as ``from.column -> to.column``."""
-        return f"{rel.from_table}.{rel.from_column} -> {rel.to_table}.{rel.to_column}"
+        children = ", ".join(child for child, _ in rel.pairs)
+        parents = ", ".join(parent for _, parent in rel.pairs)
+        if len(rel.pairs) > 1:
+            children, parents = f"({children})", f"({parents})"
+        return f"{rel.from_table}.{children} -> {rel.to_table}.{parents}"
 
     def _note_assumed_keys(self, result: OBQCResult) -> None:
         """Note aggregates that rely on a key only assumed to be unique.

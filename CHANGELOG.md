@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generated from guesses only warn, each SELECT is judged on its own, and a
   finding that only warns never stops a firmer one from blocking. Fan-trap
   findings carry `relationship` and `assumed`.
+- **OBQC reads every column of a composite key.** It took one of a
+  relationship's key columns and ignored the rest, so a join on part of a
+  composite key passed as valid. Columns are paired from the relationship's
+  join conditions; a join must compare all of them to match, and fan-out
+  evidence and suggestions use the whole key.
 
 ## [2.1.1] - 2026-10-05
 

@@ -376,3 +376,92 @@ def test_hand_written_disjointness_still_blocks() -> None:
         graph, "SELECT COUNT(*) FROM orders JOIN returns ON returns.id = orders.id"
     )
     assert result.fan_trap_blocking
+
+
+# --- Composite keys: every column of the key counts --------------------------
+
+
+def _composite_graph():
+    """shipments (order_id, line_no) -> order_lines (order_id, line_no)."""
+    order_lines = TableInfo(
+        name="order_lines",
+        schema="sales",
+        columns=[_col("order_id"), _col("line_no"), _col("qty", "decimal")],
+        primary_keys=["order_id", "line_no"],
+        foreign_keys=[],
+    )
+    shipments = TableInfo(
+        name="shipments",
+        schema="sales",
+        columns=[_col("id"), _col("order_id", fk=True), _col("line_no", fk=True)],
+        primary_keys=["id"],
+        foreign_keys=[
+            {
+                "column": c,
+                "referenced_table": "order_lines",
+                "referenced_column": c,
+                "constraint_name": "shipment_line_fk",
+            }
+            for c in ("order_id", "line_no")
+        ],
+    )
+    return _load([order_lines, shipments])
+
+
+FULL_KEY = (
+    "SELECT SUM(order_lines.qty) FROM order_lines JOIN shipments "
+    "ON shipments.order_id = order_lines.order_id "
+    "AND shipments.line_no = order_lines.line_no"
+)
+
+
+def test_composite_key_is_one_relationship_with_all_its_columns() -> None:
+    validator = OBQCValidator()
+    validator.load_ontology(_composite_graph(), VOCAB)
+    (rel,) = validator._schema_cache.relationships.values()
+    assert rel.pairs == (("line_no", "line_no"), ("order_id", "order_id"))
+    assert rel.join_condition == (
+        "shipments.line_no = order_lines.line_no AND "
+        "shipments.order_id = order_lines.order_id"
+    )
+
+
+def test_join_on_the_whole_composite_key_is_valid_and_fans_out() -> None:
+    result = _validate(_composite_graph(), FULL_KEY)
+    assert not any(i.issue_type.name == "INVALID_JOIN" for i in result.issues)
+    (finding,) = result.fan_trap_findings
+    assert finding["relationship"] == (
+        "shipments.(line_no, order_id) -> order_lines.(line_no, order_id)"
+    )
+    assert result.fan_trap_blocking
+
+
+def test_join_on_part_of_a_composite_key_is_flagged() -> None:
+    """Joining on order_id alone matches every line of the order."""
+    partial = FULL_KEY.replace(" AND shipments.line_no = order_lines.line_no", "")
+    result = _validate(_composite_graph(), partial)
+    (issue,) = [i for i in result.issues if i.issue_type.name == "INVALID_JOIN"]
+    assert "shipments.order_id = order_lines.order_id" in issue.suggestion
+    assert "shipments.line_no = order_lines.line_no" in issue.suggestion
+
+
+def test_verdict_on_a_composite_key_applies_to_its_full_join() -> None:
+    graph = _composite_graph()
+    (prop,) = set(graph.subjects(OBA.foreignKeyColumn, Literal("order_id")))
+    graph.add((prop, OBA.validationStatus, Literal("target_not_unique")))
+    lookup = (
+        "SELECT SUM(shipments.id) FROM shipments JOIN order_lines "
+        "ON shipments.order_id = order_lines.order_id "
+        "AND shipments.line_no = order_lines.line_no"
+    )
+    assert _validate(graph, lookup).fan_trap_blocking
+
+
+def test_unpairable_composite_key_falls_back_to_one_column() -> None:
+    """A hand-written ontology may give columns but no join conditions."""
+    graph = _composite_graph()
+    graph.remove((None, OBA.sqlJoinCondition, None))
+    validator = OBQCValidator()
+    validator.load_ontology(graph, VOCAB)
+    (rel,) = validator._schema_cache.relationships.values()
+    assert len(rel.pairs) == 1
