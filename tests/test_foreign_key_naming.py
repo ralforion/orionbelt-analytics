@@ -387,3 +387,44 @@ def test_declared_key_onto_a_unique_column_is_mapped() -> None:
         [accounts, invoices]
     )
     assert "ont:invoices_has_accounts" in ttl
+
+
+def test_each_key_records_its_one_constraint() -> None:
+    """Readers tell a composite key from separate keys by its constraint."""
+    generator = OntologyGenerator(base_uri=VOCAB)
+    generator.generate_from_schema(
+        [
+            _table("addresses", ["tenant_id", "code"], ["tenant_id", "code"], []),
+            _tenant_orders(),
+        ],
+        include_inferred_relationships=False,
+    )
+    graph = generator.graph
+    names = {
+        str(p).removeprefix(VOCAB): {
+            str(c) for c in graph.objects(p, OBA.constraintName)
+        }
+        for p in graph.subjects(OBA.foreignKeyColumn, None)
+    }
+    assert names == {
+        "orders_has_addresses_via_tenant_id_billing_code": {"billing_fk"},
+        "orders_has_addresses_via_tenant_id_shipping_code": {"shipping_fk"},
+    }
+
+
+def test_unnamed_constraint_is_named_within_its_table() -> None:
+    generator = OntologyGenerator(base_uri=VOCAB)
+    generator.generate_from_schema(
+        [
+            _table("customers", ["id"], ["id"], []),
+            _table(
+                "orders",
+                ["id", "customer_id"],
+                ["id"],
+                [_fk("customer_id", "customers", "id", "#0")],
+            ),
+        ],
+        include_inferred_relationships=False,
+    )
+    (name,) = set(generator.graph.objects(None, OBA.constraintName))
+    assert str(name) == "orders#0"

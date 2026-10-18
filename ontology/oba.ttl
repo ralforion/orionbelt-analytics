@@ -121,6 +121,11 @@ oba:referencedColumn a owl:AnnotationProperty ;
     rdfs:comment "Name of the column in the target table (usually its primary key)." ;
     rdfs:range xsd:string .
 
+oba:constraintName a owl:AnnotationProperty ;
+    rdfs:label "constraint name" ;
+    rdfs:comment "Name of the foreign-key constraint a relationship states.  A relationship listing several oba:foreignKeyColumn values with exactly one constraint name is one composite key, whose columns are joined together; without one (or with several) the columns are separate keys that share the property.  Unnamed constraints are named <table>#<n>." ;
+    rdfs:range xsd:string .
+
 oba:referencedSchema a owl:AnnotationProperty ;
     rdfs:label "referenced schema" ;
     rdfs:comment "Database schema of the referenced table.  Only emitted for cross-schema foreign keys." ;

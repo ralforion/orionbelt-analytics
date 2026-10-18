@@ -976,6 +976,15 @@ class OntologyGenerator:
 
         # Add comprehensive database-specific annotations for foreign keys
         self.graph.add((prop_uri, self.oba_ns.foreignKeyColumn, Literal(fk_column)))
+        constraint = fk.get("constraint_name")
+        if constraint:
+            # Says the property's columns are one key: a reader cannot tell a
+            # composite key from separate keys by its columns. An unnamed
+            # constraint is numbered within its table ("#1"), so the table
+            # makes it unique.
+            if constraint.startswith("#"):
+                constraint = f"{table_name}{constraint}"
+            self.graph.add((prop_uri, self.oba_ns.constraintName, Literal(constraint)))
         self.graph.add(
             (prop_uri, self.oba_ns.referencedTable, Literal(referenced_table))
         )

@@ -49,7 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched other tenants' rows. Schemas saved before this carry no
   constraint; their key columns are taken one by one, and a join onto part of
   a composite key is left out rather than matching many rows. A declared key
-  onto a unique column under a wider primary key is mapped.
+  onto a unique column under a wider primary key is mapped. The ontology
+  records each key's constraint (`oba:constraintName`), so readers such as
+  OBQC can tell a composite key from separate keys sharing a property.
 - **R2RML: a `#` vocabulary namespace is kept as given,** instead of
   becoming `#/` and missing the ontology's classes.
 - **R2RML: table and column names keep their case.** They are delimited
