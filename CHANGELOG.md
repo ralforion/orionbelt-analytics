@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **OBQC weighs relationships by their evidence.** In schemas without
+  declared keys -- most warehouses -- relationships are inferred from column
+  names, and OBQC treated those guesses exactly like declared constraints. A
+  fan-trap finding that rests only on an inferred, unchecked relationship now
+  warns instead of blocking, and says so. `validate_relationship` verdicts
+  now count: `confirmed` / `partial` make an inferred relationship block like
+  a declared one, `target_not_unique` makes the join fan out from both ends
+  (a lookup into a history table multiplies rows), and `refuted` removes the
+  relationship. An aggregate joined to the "one" side of a guessed key gets an
+  INFO note naming the assumption and the check that settles it. Fan-trap
+  findings carry `relationship` and `assumed`.
+
 ## [2.1.1] - 2026-10-05
 
 ### Fixed

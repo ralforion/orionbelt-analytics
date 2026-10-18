@@ -262,6 +262,21 @@ Only conditions naming a single table qualify. One that also names the child cou
 
 Fan-out is judged per join, against the table that join's `ON` condition attaches to -- not by asking whether a table sits on the many side of some relationship elsewhere in the schema. Walking a chain of many-to-one lookups (`sales` -> `clients` -> `countries`) duplicates nothing and is not flagged, however many foreign keys those dimensions carry.
 
+#### Declared, checked or guessed relationships
+
+Fan-out needs to know which side of a join is the "one" side, and that comes from keys. Warehouses rarely declare them (ClickHouse has no foreign keys at all), so there the ontology's relationships are inferred from column names: `orders.customer_id` -> `customers.id`, which assumes one `customers` row per `id`. OBQC weighs each relationship by what backs it:
+
+| Relationship | Fan-trap finding resting on it |
+|---|---|
+| Declared by the database, or inferred and `confirmed` / `partial` by `validate_relationship` | Blocks, as above |
+| Inferred, never checked (or `no_data`) | WARNING, never blocks; the message names the relationship and says it is a guess |
+| `target_not_unique` | Fans out from **both** ends: the lookup `orders JOIN customers` multiplies orders too, and blocks |
+| `refuted` | Ignored: it is no relationship to join on, and the join is reported as not matching one |
+
+The dangerous case in a warehouse is the one no finding can see: a history or snapshot table with several rows per `id`, joined as if it were a lookup. When an aggregating query crosses to the "one" side of a relationship that is only guessed, OBQC adds an INFO note -- "Assumes `customers.id` is unique ..." -- naming the `validate_relationship` call that settles it. The verdict is recorded in the ontology, so the note disappears once the key is confirmed, and a `target_not_unique` verdict turns the same query into a blocking finding.
+
+Each `measure_across_fan_out` finding says which relationship it rests on (`relationship`) and whether it is only a guess (`assumed`); `multiple_fan_out_joins` blocks only when at least two of its fan-outs are not guesses.
+
 #### The structured verdict
 
 Every `execute_sql_query` response carries `obqc_fan_trap`, whatever the outcome:
@@ -276,7 +291,9 @@ Every `execute_sql_query` response carries `obqc_fan_trap`, whatever the outcome
       "kind": "measure_across_fan_out",
       "measure_table": "sales",
       "fan_out_table": "shipments",
-      "tables": ["sales", "shipments"]
+      "tables": ["sales", "shipments"],
+      "relationship": "shipments.sale_id -> sales.id",
+      "assumed": false
     }
   ]
 }
@@ -284,7 +301,7 @@ Every `execute_sql_query` response carries `obqc_fan_trap`, whatever the outcome
 
 `kind` is one of `measure_across_fan_out`, `conditional_row_count`, `disjoint_facts`, or `multiple_fan_out_joins`.
 
-`blocking` says whether this verdict actually stopped the query, not what the caller asked for: it is `false` for a clean query, `false` when `allow_fan_out` was passed, `false` for a `conditional_row_count`, which reports without blocking even under the default policy, and `false` whenever `evaluated` is `false`, since a run that never checked blocked nothing. A clean query reports `detected: false` -- so "no fan-trap" is an answer to read rather than the absence of a sentence.
+`blocking` says whether this verdict actually stopped the query, not what the caller asked for: it is `false` for a clean query, `false` when `allow_fan_out` was passed, `false` for a `conditional_row_count`, which reports without blocking even under the default policy, `false` for a finding that rests only on a guessed relationship, and `false` whenever `evaluated` is `false`, since a run that never checked blocked nothing. A clean query reports `detected: false` -- so "no fan-trap" is an answer to read rather than the absence of a sentence.
 
 `evaluated` separates *checked and clean* from *never checked*, which are not the same answer. It is `false` when the rules never ran: no ontology loaded, an ontology without `oba:` annotations, or a request that failed before validation (no connection, bad limit, empty SQL, checklist not confirmed). **A caller must treat `evaluated: false` as "unknown", not as a clean bill of health** -- a query can run and return inflated numbers with `detected: false` when no ontology was loaded to check it against.
 

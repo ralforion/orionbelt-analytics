@@ -19,6 +19,12 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
+from .relationship_validation import (
+    STATUS_CONFIRMED,
+    STATUS_PARTIAL,
+    STATUS_REFUTED,
+    STATUS_TARGET_NOT_UNIQUE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -368,6 +374,12 @@ class TableSchema:
     schema_declared: bool = True
 
 
+# Verdicts that rest on the data: the relationship is no longer an assumption.
+_CHECKED_STATUSES = frozenset(
+    {STATUS_CONFIRMED, STATUS_PARTIAL, STATUS_TARGET_NOT_UNIQUE}
+)
+
+
 @dataclass
 class RelationshipInfo:
     """Information about a foreign key relationship."""
@@ -378,6 +390,20 @@ class RelationshipInfo:
     to_column: str
     relationship_type: str  # "many_to_one" or "one_to_many"
     join_condition: str
+    # Inferred from column names rather than declared by the database.
+    inferred: bool = False
+    # The latest validate_relationship verdict, if it was ever checked.
+    validation_status: str | None = None
+
+    @property
+    def assumed(self) -> bool:
+        """Whether only naming backs it: inferred, and not checked on the data."""
+        return self.inferred and self.validation_status not in _CHECKED_STATUSES
+
+    @property
+    def target_not_unique(self) -> bool:
+        """Whether the data showed the referenced column repeats values."""
+        return self.validation_status == STATUS_TARGET_NOT_UNIQUE
 
 
 @dataclass
@@ -767,6 +793,10 @@ class OBQCValidator:
             ref_column = self._get_literal(subject, self._oba_ns.referencedColumn)
             rel_type = self._get_literal(subject, self._oba_ns.relationshipType)
             join_cond = self._get_literal(subject, self._oba_ns.sqlJoinCondition)
+            status = self._get_literal(subject, self._oba_ns.validationStatus)
+            if status == STATUS_REFUTED:
+                # The data contradicts it: no join may lean on it.
+                continue
 
             if fk_column and ref_table:
                 # Determine from_table from domain
@@ -785,6 +815,10 @@ class OBQCValidator:
                         relationship_type=rel_type or "many_to_one",
                         join_condition=join_cond
                         or f"{from_table}.{fk_column} = {ref_table}.{ref_column}",
+                        inferred=self._get_bool(
+                            subject, self._oba_ns.isInferredRelationship, False
+                        ),
+                        validation_status=status,
                     )
 
                     # Update column FK info
@@ -2853,24 +2887,37 @@ class OBQCValidator:
     def _join_fans_out(self, join_table: str, anchor_table: str) -> bool:
         """Whether joining *join_table* onto *anchor_table* multiplies rows.
 
-        True when the ontology puts *join_table* on the "many" side of the
+        See :meth:`_fan_out_relationship`.
+        """
+        return self._fan_out_relationship(join_table, anchor_table) is not None
+
+    def _fan_out_relationship(
+        self, join_table: str, anchor_table: str
+    ) -> RelationshipInfo | None:
+        """The relationship by which joining *join_table* multiplies rows.
+
+        Found when the ontology puts *join_table* on the "many" side of the
         relationship between the two: one anchor row can match many joined
-        rows, so any measure taken from the anchor side is repeated.
+        rows, so any measure taken from the anchor side is repeated. A
+        relationship whose target the data showed to repeat values fans out
+        from both ends.
 
         Args:
             join_table: Table introduced by the JOIN.
             anchor_table: Table its ON condition attaches to.
 
         Returns:
-            True if the join can duplicate anchor rows. False when the joined
-            table is the "one" side (a dimension lookup), or when the two are
-            not related in the ontology at all.
+            The relationship, preferring one declared or checked on the data
+            over one only inferred from names. None when the joined table is
+            the "one" side (a dimension lookup), or when the two are not
+            related in the ontology at all.
         """
         if self._schema_cache is None:
-            return False
+            return None
 
         joined = join_table.lower()
         anchor = anchor_table.lower()
+        assumed: RelationshipInfo | None = None
 
         for rel in self._schema_cache.relationships.values():
             from_t = rel.from_table.lower()
@@ -2884,10 +2931,78 @@ class OBQCValidator:
             else:
                 continue
 
-            if {many, one} == {joined, anchor} and many == joined:
-                return True
+            if {many, one} != {joined, anchor}:
+                continue
+            if many != joined and not rel.target_not_unique:
+                continue
+            if not rel.assumed:
+                return rel
+            assumed = assumed or rel
 
-        return False
+        return assumed
+
+    @staticmethod
+    def _describe(rel: RelationshipInfo) -> str:
+        """A relationship as ``from.column -> to.column``."""
+        return f"{rel.from_table}.{rel.from_column} -> {rel.to_table}.{rel.to_column}"
+
+    def _note_assumed_keys(self, result: OBQCResult) -> None:
+        """Note aggregates that rely on a key only assumed to be unique.
+
+        Without declared keys, relationships come from names: ``customer_id``
+        -> ``customers.id`` assumes one customers row per id. A measure joined
+        to that "one" side is safe only if so; a history or snapshot table
+        holding several rows per id inflates it, and nothing in the ontology
+        can tell. Not a finding -- the join is usually right -- but the
+        assumption is said aloud, with the check that settles it.
+
+        Args:
+            result: Result carrying the extracted joins.
+        """
+        if self._schema_cache is None:
+            return
+        noted: set[str] = set()
+        for join_info in result.parsed_joins:
+            if not join_info.get("scope_sensitive"):
+                continue
+            join_table = join_info.get("table")
+            measures = join_info.get("measure_tables") or set()
+            if not join_table or not measures:
+                continue
+            ends = {join_table.lower()} | {
+                t.lower() for t in join_info.get("on_tables", [])
+            }
+            for rel in self._schema_cache.relationships.values():
+                if not rel.assumed or rel.relationship_type != "many_to_one":
+                    continue
+                child, parent = rel.from_table.lower(), rel.to_table.lower()
+                if not {child, parent} <= ends or child not in measures:
+                    continue
+                described = self._describe(rel)
+                if described in noted:
+                    continue
+                noted.add(described)
+                result.issues.append(
+                    OBQCIssue(
+                        issue_type=OBQCIssueType.FAN_TRAP_DETECTED,
+                        severity=OBQCSeverity.INFO,
+                        message=(
+                            f"Assumes {rel.to_table}.{rel.to_column} is unique: "
+                            f"{described} was inferred from column names, not "
+                            f"declared or checked. If {rel.to_table} holds "
+                            f"several rows per {rel.to_column} (history, "
+                            f"snapshots), this join inflates {rel.from_table} "
+                            "measures."
+                        ),
+                        location=f"JOIN {join_table}",
+                        suggestion=(
+                            f"validate_relationship('{rel.from_table}', "
+                            f"'{rel.from_column}') checks it once and records "
+                            "the answer."
+                        ),
+                        related_entities=[rel.from_table, rel.to_table],
+                    )
+                )
 
     def _inflated_measures(
         self,
@@ -2949,7 +3064,8 @@ class OBQCValidator:
                 ):
                     if measure_table.lower() not in measures:
                         continue
-                    if not self._join_fans_out(other, measure_table):
+                    rel = self._fan_out_relationship(other, measure_table)
+                    if rel is None:
                         continue
 
                     pair = (measure_table.lower(), other.lower())
@@ -2962,6 +3078,9 @@ class OBQCValidator:
                             "measure_table": measure_table,
                             "fan_out_table": other,
                             "tables": sorted({measure_table, other}),
+                            "relationship": self._describe(rel),
+                            # Only naming backs it: reported, never blocking.
+                            "assumed": rel.assumed,
                         }
                     )
 
@@ -2991,12 +3110,23 @@ class OBQCValidator:
         """
         severity = OBQCSeverity.ERROR if blocking else OBQCSeverity.WARNING
 
-        def record(finding: dict[str, Any]) -> None:
-            """Note a finding of a kind that blocks unless allow_fan_out was set."""
+        def record(finding: dict[str, Any], blocks: bool = True) -> None:
+            """Note a finding of a kind that blocks unless allow_fan_out was set.
+
+            ``blocks`` is False for a finding resting on a relationship only
+            inferred from names, which never blocks, so allow_fan_out did not
+            override anything.
+            """
             result.fan_trap_risk = True
             result.fan_trap_findings.append(finding)
-            if not blocking:
+            if not blocking and blocks:
                 result.fan_trap_overridden = True
+
+        def assumption(rel: str) -> str:
+            return (
+                f" This rests on {rel}, inferred from column names and not "
+                "checked on the data, so it is reported without blocking."
+            )
 
         # Only joins whose own SELECT aggregates can inflate a total. The
         # query-wide flag is true if an aggregate appears anywhere, so an
@@ -3017,6 +3147,8 @@ class OBQCValidator:
         if self._schema_cache is None:
             return
 
+        self._note_assumed_keys(result)
+
         # --- Measure multiplied by a fan-out join ----------------------------
         #
         # The most direct evidence there is: a table is summed, and a join in
@@ -3024,18 +3156,20 @@ class OBQCValidator:
         inflated = self._inflated_measures(result)
         if inflated:
             for finding in inflated:
-                record(finding)
+                assumed = finding["assumed"]
+                record(finding, blocks=not assumed)
                 measure = anchor = finding["measure_table"]
                 fanning = finding["fan_out_table"]
                 result.issues.append(
                     OBQCIssue(
                         issue_type=OBQCIssueType.FAN_TRAP_DETECTED,
-                        severity=severity,
+                        severity=OBQCSeverity.WARNING if assumed else severity,
                         message=(
                             f"Fan-trap: aggregating '{measure}' across the join to "
                             f"'{fanning}', which the ontology puts on the many side of "
                             f"'{anchor}'. Each {anchor} row is repeated once per "
                             f"matching {fanning} row, so the total is inflated."
+                            + (assumption(finding["relationship"]) if assumed else "")
                         ),
                         location="Query structure",
                         suggestion=(
@@ -3100,7 +3234,8 @@ class OBQCValidator:
         # are multiplied by joins in the same query, so two subqueries that
         # fan out once each are two safe aggregations -- summing them reported
         # a fan-trap that exists in neither.
-        fan_outs_by_scope: dict[Any, list[str]] = {}
+        # (joined table, whether only naming says it fans out) per join.
+        fan_outs_by_scope: dict[Any, list[tuple[str, bool]]] = {}
 
         # Only joins sitting in an aggregating SELECT; a subquery's joins
         # cannot multiply rows the outer query aggregates.
@@ -3119,9 +3254,13 @@ class OBQCValidator:
                 # condition naming no other table); nothing to judge.
                 continue
 
-            if any(self._join_fans_out(join_table, anchor) for anchor in anchors):
+            rels = [self._fan_out_relationship(join_table, a) for a in anchors]
+            found = [r for r in rels if r is not None]
+            if found:
                 scope_id = join_info.get("scope_id")
-                fan_outs_by_scope.setdefault(scope_id, []).append(join_table)
+                fan_outs_by_scope.setdefault(scope_id, []).append(
+                    (join_table, all(r.assumed for r in found))
+                )
 
         # Ambiguous counts, reported but never blocking -- see _counted_tables
         # for why the same shape is both a bug and a common correct idiom.
@@ -3153,7 +3292,9 @@ class OBQCValidator:
 
         worst_scope = max(fan_outs_by_scope.values(), key=len, default=[])
         one_to_many_count = len(worst_scope)
-        involved_tables = worst_scope
+        involved_tables = [table for table, _ in worst_scope]
+        # Blocks only when at least two of the fan-outs are not mere guesses.
+        assumed = sum(1 for _, is_assumed in worst_scope if not is_assumed) < 2
 
         if one_to_many_count >= 2:
             record(
@@ -3161,13 +3302,19 @@ class OBQCValidator:
                     "kind": KIND_MULTIPLE_FAN_OUT_JOINS,
                     "tables": sorted(set(involved_tables)),
                     "join_count": one_to_many_count,
-                }
+                    "assumed": assumed,
+                },
+                blocks=not assumed,
             )
             result.issues.append(
                 OBQCIssue(
                     issue_type=OBQCIssueType.FAN_TRAP_DETECTED,
-                    severity=severity,
-                    message=f"Potential fan-trap: {one_to_many_count} one-to-many joins with aggregation",
+                    severity=OBQCSeverity.WARNING if assumed else severity,
+                    message=(
+                        f"Potential fan-trap: {one_to_many_count} one-to-many "
+                        "joins with aggregation"
+                        + (assumption("relationships") if assumed else "")
+                    ),
                     location="Query structure",
                     suggestion=(
                         "Use UNION ALL pattern for separate aggregations per fact table, "
