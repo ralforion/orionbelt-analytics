@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generated from guesses only warn, each SELECT is judged on its own, and a
   finding that only warns never stops a firmer one from blocking. Fan-trap
   findings carry `relationship` and `assumed`.
+- **The R2RML mapping now speaks the ontology's vocabulary.** It named
+  classes and properties on its own (`base:Orders`, `base:customer_id`), so
+  an engine reading the mapping next to the ontology, such as Ontop, saw two
+  unrelated vocabularies. Classes and properties are now the ontology's own
+  (`ONTOLOGY_BASE_URI`); `R2RML_BASE_IRI` still names the row resources. The
+  mapping's output changes: anything consuming the old IRIs must be updated.
+
+### Fixed
 - **OBQC reads every column of a composite key.** It took one of a
   relationship's key columns and ignored the rest, so a join on part of a
   composite key passed as valid. Columns are paired from the relationship's
@@ -30,6 +38,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only when it names one constraint (`oba:constraintName`); separate keys
   sharing a property stay separate. `validate_relationship` refuses composite
   keys rather than record a one-column verdict for them.
+- **Two foreign keys to the same table are two relationships.** Both were
+  named `orders_has_addresses`, so billing and shipping address became one
+  object property with two key columns, of which OBQC saw only one -- a join
+  on the other could be judged against the wrong column. When a table has
+  several keys to one table, each is now named after its columns
+  (`orders_has_addresses_via_billing_address_id`,
+  `orders_has_addresses_via_tenant_id_shipping_code`), and after the columns
+  it references when even those are shared (`…_via_actor_to_email`), in the
+  ontology and the R2RML mapping alike; single keys keep their names. Relationship
+  descriptions keyed by column reach the right key, an enrichment naming only
+  the two tables of such a pair is no longer applied to an arbitrary one, and
+  no property chain is built through an ambiguous hop. Semantic names saved
+  for such a pair under the old name do not carry over.
+- **R2RML: every column keeps a predicate of its own.** Columns were named
+  after the column alone, so all tables' `id` columns shared one predicate.
+- **R2RML: foreign keys are joins.** They are referencing object maps onto
+  the parent table's mapping, so composite keys and keys onto non-key columns
+  map correctly, and the key column's value is mapped as well as the link.
+- **R2RML: tables without a primary key no longer merge rows.** Their rows
+  were IRIs built from the first column, whatever it held. Since warehouses
+  rarely declare keys, a key-like column (`id`, `<table>_id`, `<table>_sk`) is
+  now taken as the key -- the assumption relationship inference already makes
+  -- and marked in the mapping as inferred. A table with neither is left out
+  of the mapping, with a comment saying so.
+- **R2RML: a composite foreign key is one join, and only one.** Drivers now
+  record which constraint each key column belongs to (`constraint_name`), so
+  the columns of one key are joined together and two keys onto the same table
+  (`users.id`, `users.email`) stay apart. A column in several keys belongs to
+  each of them: drivers stopped at the first, so a `tenant_id` shared by a
+  billing and a shipping key was missing from the shipping join, which then
+  matched other tenants' rows. Schemas saved before this carry no
+  constraint; their key columns are taken one by one, and a join onto part of
+  a composite key is left out rather than matching many rows. A declared key
+  onto a unique column under a wider primary key is mapped. The ontology
+  records each key's constraint (`oba:constraintName`), so readers such as
+  OBQC can tell a composite key from separate keys sharing a property.
+- **R2RML: a `#` vocabulary namespace is kept as given,** instead of
+  becoming `#/` and missing the ontology's classes.
+- **R2RML: table and column names keep their case.** They are delimited
+  identifiers (`rr:tableName "\"SALES\".\"ORDERS\""`) instead of an unquoted
+  `SELECT *`, which broke on case-sensitive names, e.g. on Snowflake.
+- **R2RML: composite key parts are separated by `/`,** which R2RML encodes
+  inside a value, instead of `-`, which it does not.
 
 ## [2.1.1] - 2026-10-05
 

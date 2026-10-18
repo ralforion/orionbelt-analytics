@@ -157,7 +157,8 @@ MCP_MASTER_PASSWORD=MySecurePassword123!@
 ONTOLOGY_BASE_URI=http://example.com/ontology/
 
 # R2RML Mapping settings
-# Base IRI for R2RML subject templates (schema name will be appended)
+# Base IRI for R2RML subject templates (schema name will be appended).
+# Classes and properties in the mapping use ONTOLOGY_BASE_URI.
 R2RML_BASE_IRI=http://mycompany.com/
 
 # Output directory for generated files (schema JSON, ontology TTL, R2RML, etc.)
@@ -278,7 +279,7 @@ DATABRICKS_SCHEMA=default
 | `ONTOLOGY_KEEP_VERSIONS` | `5` | Archived ontology versions kept per schema |
 | `ONTOLOGY_MAX_AGE_DAYS` | `60` | Age past which an archived ontology version may be deleted |
 | `ONTOLOGY_BASE_URI` | `http://example.com/ontology/` | Base URI for generated RDF ontologies |
-| `R2RML_BASE_IRI` | `http://mycompany.com/` | Base IRI for R2RML subject templates |
+| `R2RML_BASE_IRI` | `http://mycompany.com/` | Base IRI for R2RML subject templates (row resources); classes and properties use `ONTOLOGY_BASE_URI` |
 | `OUTPUT_DIR` | `tmp` | Directory for generated files (relative to project root) |
 | `MCP_TRANSPORT` | `http` | MCP transport mode: `http`, or `sse` (deprecated) |
 | `MCP_CACHE_TTL_SECONDS` | `300` | How long a client on MCP 2026-07-28 may cache the tool list, the resource list and resource reads. Sent as a `private` cache hint; `0` sends none. Raise it for fewer round trips, lower it while developing tools |

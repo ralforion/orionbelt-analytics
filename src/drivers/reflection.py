@@ -17,6 +17,7 @@ the same ``str(type)`` -- and a test asserts the two agree table by table.
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from sqlalchemy import inspect
@@ -25,6 +26,47 @@ from sqlalchemy.engine import Engine
 from ..database_manager import ColumnInfo, TableInfo
 
 logger = logging.getLogger(__name__)
+
+
+def column_fk_entries(
+    column_name: str, table_fks: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Every foreign key a column belongs to, one entry per membership.
+
+    A column can belong to several keys -- ``tenant_id`` in both a billing
+    and a shipping address key -- and each of them joins on it, so stopping
+    at the first would leave the others short of a join column.
+
+    Args:
+        column_name: The column.
+        table_fks: Reflected foreign-key constraints of its table.
+
+    Returns:
+        One entry per constraint naming the column, tagged with the
+        constraint so the columns of a composite key stay one key.
+    """
+    entries: list[dict[str, Any]] = []
+    for index, fk in enumerate(table_fks):
+        constrained_cols_upper = [c.upper() for c in fk.get("constrained_columns", [])]
+        if column_name.upper() not in constrained_cols_upper:
+            continue
+        fk_table = fk.get("referred_table")
+        if not fk_table:
+            continue
+        fk_idx = constrained_cols_upper.index(column_name.upper())
+        referred_cols = fk.get("referred_columns", [])
+        entries.append(
+            {
+                "column": column_name,
+                "referenced_table": fk_table,
+                "referenced_column": (
+                    referred_cols[fk_idx] if fk_idx < len(referred_cols) else None
+                ),
+                "referenced_schema": fk.get("referred_schema"),
+                "constraint_name": fk.get("name") or f"#{index}",
+            }
+        )
+    return entries
 
 
 def build_table_info(
@@ -56,32 +98,12 @@ def build_table_info(
         column_name = col_info["name"]
         is_pk = column_name.upper() in primary_keys_upper
 
-        fk_table = None
-        fk_column = None
-        is_fk = False
-        for fk in table_fks:
-            constrained_cols_upper = [
-                c.upper() for c in fk.get("constrained_columns", [])
-            ]
-            if column_name.upper() in constrained_cols_upper:
-                is_fk = True
-                fk_idx = constrained_cols_upper.index(column_name.upper())
-                fk_table = fk.get("referred_table")
-                referred_cols = fk.get("referred_columns", [])
-                fk_column = (
-                    referred_cols[fk_idx] if fk_idx < len(referred_cols) else None
-                )
-                fk_schema = fk.get("referred_schema")
-                if fk_table:
-                    foreign_keys.append(
-                        {
-                            "column": column_name,
-                            "referenced_table": fk_table,
-                            "referenced_column": fk_column,
-                            "referenced_schema": fk_schema,
-                        }
-                    )
-                break
+        fk_entries = column_fk_entries(column_name, table_fks)
+        foreign_keys.extend(fk_entries)
+        # A column in several keys names the first on the column itself.
+        is_fk = bool(fk_entries)
+        fk_table = fk_entries[0]["referenced_table"] if fk_entries else None
+        fk_column = fk_entries[0]["referenced_column"] if fk_entries else None
 
         columns.append(
             ColumnInfo(
