@@ -275,7 +275,11 @@ Fan-out needs to know which side of a join is the "one" side, and that comes fro
 
 The dangerous case in a warehouse is the one no finding can see: a history or snapshot table with several rows per `id`, joined as if it were a lookup. When an aggregating query crosses to the "one" side of a relationship that is only guessed, OBQC adds an INFO note -- "Assumes `customers.id` is unique ..." -- naming the `validate_relationship` call that settles it. The verdict is recorded in the ontology, so the note disappears once the key is confirmed, and a `target_not_unique` verdict turns the same query into a blocking finding.
 
-Each `measure_across_fan_out` finding says which relationship it rests on (`relationship`) and whether it is only a guess (`assumed`); `multiple_fan_out_joins` blocks only when at least two of its fan-outs are not guesses.
+Evidence is taken from the relationship the join actually uses: when two tables are related more than one way, the columns in the `ON` condition pick it, so a verdict on `customers.code` says nothing about a join on `customers.id`.
+
+The same weighing applies to the other findings. Disjointness axioms are generated for tables that reference a common table, guessed relationships included: such an axiom blocks when some shared parent is reached from both tables by declared or checked relationships, and only warns when guesses alone explain it. An axiom no shared parent explains was written by hand and blocks. `multiple_fan_out_joins` is judged per SELECT and blocks when one of them has at least two fan-outs that are not guesses. A finding that only warns never ends the check: a firmer finding elsewhere in the query still blocks it.
+
+Each `measure_across_fan_out` finding says which relationship it rests on (`relationship`); it, `disjoint_facts` and `multiple_fan_out_joins` say whether they rest on guesses only (`assumed`).
 
 #### The structured verdict
 

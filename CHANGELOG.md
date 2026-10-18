@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a declared one, `target_not_unique` makes the join fan out from both ends
   (a lookup into a history table multiplies rows), and `refuted` removes the
   relationship. An aggregate joined to the "one" side of a guessed key gets an
-  INFO note naming the assumption and the check that settles it. Fan-trap
+  INFO note naming the assumption and the check that settles it. Evidence is
+  taken from the relationship the join's columns use, disjointness axioms
+  generated from guesses only warn, each SELECT is judged on its own, and a
+  finding that only warns never stops a firmer one from blocking. Fan-trap
   findings carry `relationship` and `assumed`.
 
 ## [2.1.1] - 2026-10-05

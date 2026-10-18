@@ -412,6 +412,9 @@ class OntologySchema:
 
     tables: dict[str, TableSchema] = field(default_factory=dict)
     relationships: dict[str, RelationshipInfo] = field(default_factory=dict)
+    # (from table, to table), lower-cased, of relationships the data refuted.
+    # They join nothing, but say what a generated axiom was derived from.
+    refuted_links: set[tuple[str, str]] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -796,6 +799,16 @@ class OBQCValidator:
             status = self._get_literal(subject, self._oba_ns.validationStatus)
             if status == STATUS_REFUTED:
                 # The data contradicts it: no join may lean on it.
+                domain = (
+                    self._graph.value(subject, RDFS.domain) if self._graph else None
+                )
+                refuted_from = (
+                    self._get_literal(domain, self._oba_ns.tableName)
+                    if domain
+                    else None
+                )
+                if refuted_from and ref_table:
+                    schema.refuted_links.add((refuted_from.lower(), ref_table.lower()))
                 continue
 
             if fk_column and ref_table:
@@ -1411,6 +1424,10 @@ class OBQCValidator:
                     # detection needs to know which table this join attaches
                     # to, and the ON condition is the only place that says so.
                     "on_tables": [],
+                    # (table, column) pairs the ON condition compares,
+                    # lower-cased: which relationship a join uses, when two
+                    # tables are related more than one way.
+                    "on_columns": frozenset(),
                     # Tables this SELECT sums or averages over, lower-cased.
                     "measure_tables": measure_tables,
                     "counted_tables": counted_tables,
@@ -1454,6 +1471,14 @@ class OBQCValidator:
                     join_info["on_condition"] = on_clause.sql()
                     join_info["on_tables"] = self._condition_tables(
                         on_clause, alias_map
+                    )
+                    join_info["on_columns"] = frozenset(
+                        (
+                            alias_map.get(c.table.lower(), c.table).lower(),
+                            c.name.lower(),
+                        )
+                        for c in on_clause.find_all(exp.Column)
+                        if c.table
                     )
                 elif join_info["table"]:
                     # A comma join states the same relationship in WHERE.
@@ -2891,8 +2916,50 @@ class OBQCValidator:
         """
         return self._fan_out_relationship(join_table, anchor_table) is not None
 
+    def _join_relationships(
+        self,
+        table_a: str,
+        table_b: str,
+        on_columns: frozenset[tuple[str, str]] = frozenset(),
+    ) -> list[RelationshipInfo]:
+        """The relationships a join between two tables uses.
+
+        Two tables may be related more than one way (``orders.customer_id``
+        -> ``customers.id`` and another key onto ``customers.code``), each
+        with its own evidence, so the join's own columns decide which. Only
+        when it compares no column of any of them -- or its columns are
+        unknown, as for a comma join -- do all relationships between the
+        tables count.
+
+        Args:
+            table_a: One table of the join.
+            table_b: The other.
+            on_columns: (table, column) pairs the join condition compares.
+
+        Returns:
+            The relationships, possibly empty.
+        """
+        if self._schema_cache is None:
+            return []
+        pair = {table_a.lower(), table_b.lower()}
+        between = [
+            rel
+            for rel in self._schema_cache.relationships.values()
+            if {rel.from_table.lower(), rel.to_table.lower()} == pair
+        ]
+        used = [
+            rel
+            for rel in between
+            if (rel.from_table.lower(), rel.from_column.lower()) in on_columns
+            and (rel.to_table.lower(), rel.to_column.lower()) in on_columns
+        ]
+        return used or between
+
     def _fan_out_relationship(
-        self, join_table: str, anchor_table: str
+        self,
+        join_table: str,
+        anchor_table: str,
+        on_columns: frozenset[tuple[str, str]] = frozenset(),
     ) -> RelationshipInfo | None:
         """The relationship by which joining *join_table* multiplies rows.
 
@@ -2905,6 +2972,8 @@ class OBQCValidator:
         Args:
             join_table: Table introduced by the JOIN.
             anchor_table: Table its ON condition attaches to.
+            on_columns: (table, column) pairs the join condition compares,
+                which pick the relationship the join actually uses.
 
         Returns:
             The relationship, preferring one declared or checked on the data
@@ -2919,7 +2988,7 @@ class OBQCValidator:
         anchor = anchor_table.lower()
         assumed: RelationshipInfo | None = None
 
-        for rel in self._schema_cache.relationships.values():
+        for rel in self._join_relationships(join_table, anchor_table, on_columns):
             from_t = rel.from_table.lower()
             to_t = rel.to_table.lower()
 
@@ -2940,6 +3009,39 @@ class OBQCValidator:
             assumed = assumed or rel
 
         return assumed
+
+    def _disjointness_assumed(self, pair: frozenset[str]) -> bool:
+        """Whether a disjointness axiom rests on guessed relationships alone.
+
+        The generator declares two tables disjoint when both reference the
+        same table, inferred relationships included. The axiom is firm when
+        some shared parent is reached from both by relationships that are
+        declared or checked. It is a guess when the only shared parents are
+        reached through guessed or refuted ones. An axiom that no shared
+        parent explains was written by hand, and stands.
+
+        Args:
+            pair: The two disjoint tables, lower-cased.
+
+        Returns:
+            True if only guesses back it.
+        """
+        if self._schema_cache is None or len(pair) != 2:
+            return False
+        firm: dict[str, set[str]] = {table: set() for table in pair}
+        guessed: dict[str, set[str]] = {table: set() for table in pair}
+        for rel in self._schema_cache.relationships.values():
+            child = rel.from_table.lower()
+            if child not in pair or rel.relationship_type != "many_to_one":
+                continue
+            (guessed if rel.assumed else firm)[child].add(rel.to_table.lower())
+        for child, parent in self._schema_cache.refuted_links:
+            if child in pair:
+                guessed[child].add(parent)
+        a, b = sorted(pair)
+        if firm[a] & firm[b]:
+            return False
+        return bool((firm[a] | guessed[a]) & (firm[b] | guessed[b]))
 
     @staticmethod
     def _describe(rel: RelationshipInfo) -> str:
@@ -2969,14 +3071,21 @@ class OBQCValidator:
             measures = join_info.get("measure_tables") or set()
             if not join_table or not measures:
                 continue
-            ends = {join_table.lower()} | {
-                t.lower() for t in join_info.get("on_tables", [])
+            anchors = {
+                t.lower()
+                for t in join_info.get("on_tables", [])
+                if t.lower() != join_table.lower()
             }
-            for rel in self._schema_cache.relationships.values():
+            on_columns = join_info.get("on_columns", frozenset())
+            used = [
+                rel
+                for anchor in sorted(anchors)
+                for rel in self._join_relationships(join_table, anchor, on_columns)
+            ]
+            for rel in used:
                 if not rel.assumed or rel.relationship_type != "many_to_one":
                     continue
-                child, parent = rel.from_table.lower(), rel.to_table.lower()
-                if not {child, parent} <= ends or child not in measures:
+                if rel.from_table.lower() not in measures:
                     continue
                 described = self._describe(rel)
                 if described in noted:
@@ -3064,7 +3173,9 @@ class OBQCValidator:
                 ):
                     if measure_table.lower() not in measures:
                         continue
-                    rel = self._fan_out_relationship(other, measure_table)
+                    rel = self._fan_out_relationship(
+                        other, measure_table, join_info.get("on_columns", frozenset())
+                    )
                     if rel is None:
                         continue
 
@@ -3181,7 +3292,10 @@ class OBQCValidator:
                         related_entities=sorted({measure, fanning, anchor}),
                     )
                 )
-            return
+            # A finding that only warns settles nothing: a check below may
+            # still block the same query on firmer evidence.
+            if any(not finding["assumed"] for finding in inflated):
+                return
 
         # --- Axiom-grounded path: disjoint sibling facts in one SELECT --------
         #
@@ -3196,15 +3310,22 @@ class OBQCValidator:
             disjoint_hits |= {pair for pair in self._disjoint_pairs if pair <= queried}
         if disjoint_hits:
             involved = sorted({t for pair in disjoint_hits for t in pair})
-            record({"kind": KIND_DISJOINT_FACTS, "tables": involved})
+            # Blocks when one pair's axiom stands on firm ground; generated
+            # from guessed relationships alone, it is a guess as well.
+            assumed = all(self._disjointness_assumed(pair) for pair in disjoint_hits)
+            record(
+                {"kind": KIND_DISJOINT_FACTS, "tables": involved, "assumed": assumed},
+                blocks=not assumed,
+            )
             result.issues.append(
                 OBQCIssue(
                     issue_type=OBQCIssueType.FAN_TRAP_DETECTED,
-                    severity=severity,
+                    severity=OBQCSeverity.WARNING if assumed else severity,
                     message=(
                         "Potential fan-trap: query aggregates across tables the ontology "
                         f"declares disjoint (sibling facts sharing a dimension): "
                         f"{', '.join(involved)}"
+                        + (assumption("relationships") if assumed else "")
                     ),
                     location="Query structure",
                     suggestion=(
@@ -3215,7 +3336,8 @@ class OBQCValidator:
                     related_entities=involved,
                 )
             )
-            return
+            if not assumed:
+                return
 
         # --- Heuristic fallback: count fan-out joins (no disjointness axioms)
         #
@@ -3254,7 +3376,10 @@ class OBQCValidator:
                 # condition naming no other table); nothing to judge.
                 continue
 
-            rels = [self._fan_out_relationship(join_table, a) for a in anchors]
+            on_columns = join_info.get("on_columns", frozenset())
+            rels = [
+                self._fan_out_relationship(join_table, a, on_columns) for a in anchors
+            ]
             found = [r for r in rels if r is not None]
             if found:
                 scope_id = join_info.get("scope_id")
@@ -3290,11 +3415,21 @@ class OBQCValidator:
                 )
             )
 
-        worst_scope = max(fan_outs_by_scope.values(), key=len, default=[])
+        # Each scope is judged on its own evidence: a SELECT blocks when at
+        # least two of its fan-outs are not mere guesses. The one reported is
+        # a blocking scope if there is one, then the one with most fan-outs --
+        # so a guessed scope with more joins cannot hide a confirmed one.
+        def scope_blocks(fan_outs: list[tuple[str, bool]]) -> bool:
+            return sum(1 for _, is_assumed in fan_outs if not is_assumed) >= 2
+
+        worst_scope = max(
+            fan_outs_by_scope.values(),
+            key=lambda fan_outs: (scope_blocks(fan_outs), len(fan_outs)),
+            default=[],
+        )
         one_to_many_count = len(worst_scope)
         involved_tables = [table for table, _ in worst_scope]
-        # Blocks only when at least two of the fan-outs are not mere guesses.
-        assumed = sum(1 for _, is_assumed in worst_scope if not is_assumed) < 2
+        assumed = not scope_blocks(worst_scope)
 
         if one_to_many_count >= 2:
             record(
