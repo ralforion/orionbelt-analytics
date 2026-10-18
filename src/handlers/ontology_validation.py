@@ -7,6 +7,7 @@ from functools import partial
 from typing import Any
 
 from fastmcp import Context
+from rdflib import URIRef
 
 from ..async_utils import run_db
 from ..graphrag.identity import split
@@ -27,6 +28,7 @@ from ..relationship_validation import (
     build_check_queries,
     classify,
     find_relationships,
+    is_composite_key,
     record_in_graph,
 )
 from ..utils import notify_client, utc_now, write_text_file
@@ -232,6 +234,17 @@ async def validate_relationship(
             + ". Only relationships in the ontology (declared, inferred or "
             "uploaded) can be validated.",
             "relationship_not_found",
+        )
+        return err
+    if all(is_composite_key(generator.graph, URIRef(r.property_uri)) for r in refs):
+        # The check counts one column's values; a composite key is unique as
+        # a tuple, so a verdict on one of its columns would be wrong about it
+        # -- order_id repeats in every unique (order_id, line_no) key.
+        err = services.create_error_response(
+            f"{from_table}.{column} is part of a composite key. "
+            "validate_relationship checks single-column keys only; a verdict "
+            "on one column would misstate the key, so none is recorded.",
+            "composite_key_not_supported",
         )
         return err
     readings = sorted(

@@ -405,7 +405,11 @@ def _composite_graph():
             for c in ("order_id", "line_no")
         ],
     )
-    return _load([order_lines, shipments])
+    graph = _load([order_lines, shipments])
+    # One constraint, as the generator records it: the columns form one key.
+    for prop in set(graph.subjects(OBA.foreignKeyColumn, Literal("order_id"))):
+        graph.add((prop, OBA.constraintName, Literal("shipment_line_fk")))
+    return graph
 
 
 FULL_KEY = (
@@ -445,16 +449,59 @@ def test_join_on_part_of_a_composite_key_is_flagged() -> None:
     assert "shipments.line_no = order_lines.line_no" in issue.suggestion
 
 
-def test_verdict_on_a_composite_key_applies_to_its_full_join() -> None:
+COMPOSITE_LOOKUP = (
+    "SELECT SUM(shipments.id) FROM shipments JOIN order_lines "
+    "ON shipments.order_id = order_lines.order_id "
+    "AND shipments.line_no = order_lines.line_no"
+)
+
+
+def test_single_column_verdict_is_not_composite_key_evidence() -> None:
+    """order_id repeats in a unique (order_id, line_no) key: that says nothing."""
     graph = _composite_graph()
     (prop,) = set(graph.subjects(OBA.foreignKeyColumn, Literal("order_id")))
     graph.add((prop, OBA.validationStatus, Literal("target_not_unique")))
-    lookup = (
-        "SELECT SUM(shipments.id) FROM shipments JOIN order_lines "
-        "ON shipments.order_id = order_lines.order_id "
-        "AND shipments.line_no = order_lines.line_no"
+    result = _validate(graph, COMPOSITE_LOOKUP)
+    assert result.is_valid and not result.fan_trap_risk
+
+
+def test_columns_of_separate_keys_on_one_property_are_separate_keys() -> None:
+    """Billing and shipping customer on one property are not one composite key."""
+    graph = _composite_graph()
+    graph.remove((None, OBA.constraintName, None))
+    validator = OBQCValidator()
+    validator.load_ontology(graph, VOCAB)
+    keys = sorted(r.pairs for r in validator._schema_cache.relationships.values())
+    assert keys == [(("line_no", "line_no"),), (("order_id", "order_id"),)]
+    single = FULL_KEY.replace(" AND shipments.line_no = order_lines.line_no", "")
+    assert not any(
+        i.issue_type.name == "INVALID_JOIN" for i in _validate(graph, single).issues
     )
-    assert _validate(graph, lookup).fan_trap_blocking
+
+
+def test_or_does_not_pick_the_unique_key() -> None:
+    """id = id OR code = code may match several customers per order."""
+    graph = _load(DECLARED)
+    _add_relationship(graph, "customer_code", "code", status="target_not_unique")
+    either = BY_ID.replace(
+        "orders.customer_id = customers.id",
+        "orders.customer_id = customers.id OR orders.customer_code = customers.code",
+    )
+    assert _validate(graph, either).fan_trap_blocking
+
+
+def test_guessed_unique_key_does_not_outweigh_a_checked_repeat() -> None:
+    keyless = [
+        _keyless("customers", ["id", "name", "code"]),
+        _keyless("orders", ["id", "customer_id", "customer_code", "total"]),
+    ]
+    graph = _load(keyless)
+    _add_relationship(graph, "customer_code", "code", status="target_not_unique")
+    both = BY_ID.replace(
+        "orders.customer_id = customers.id",
+        "orders.customer_id = customers.id AND orders.customer_code = customers.code",
+    )
+    assert _validate(graph, both).fan_trap_blocking
 
 
 def test_unpairable_composite_key_falls_back_to_one_column() -> None:

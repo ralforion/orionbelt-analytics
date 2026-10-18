@@ -26,7 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relationship's key columns and ignored the rest, so a join on part of a
   composite key passed as valid. Columns are paired from the relationship's
   join conditions; a join must compare all of them to match, and fan-out
-  evidence and suggestions use the whole key.
+  evidence and suggestions use the whole key. A property is a composite key
+  only when it names one constraint (`oba:constraintName`); separate keys
+  sharing a property stay separate. `validate_relationship` refuses composite
+  keys rather than record a one-column verdict for them.
 
 ## [2.1.1] - 2026-10-05
 

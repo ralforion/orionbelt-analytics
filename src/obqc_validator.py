@@ -24,6 +24,7 @@ from .relationship_validation import (
     STATUS_PARTIAL,
     STATUS_REFUTED,
     STATUS_TARGET_NOT_UNIQUE,
+    is_composite_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -806,72 +807,74 @@ class OBQCValidator:
             ref_table = self._get_literal(subject, self._oba_ns.referencedTable)
             ref_column = self._get_literal(subject, self._oba_ns.referencedColumn)
             rel_type = self._get_literal(subject, self._oba_ns.relationshipType)
-            join_cond = self._get_literal(subject, self._oba_ns.sqlJoinCondition)
             status = self._get_literal(subject, self._oba_ns.validationStatus)
-            if status == STATUS_REFUTED:
-                # The data contradicts it: no join may lean on it.
-                domain = (
-                    self._graph.value(subject, RDFS.domain) if self._graph else None
-                )
-                refuted_from = (
-                    self._get_literal(domain, self._oba_ns.tableName)
-                    if domain
-                    else None
-                )
-                if refuted_from and ref_table:
-                    schema.refuted_links.add((refuted_from.lower(), ref_table.lower()))
+            if not (fk_column and ref_table):
+                continue
+            from_table = None
+            for domain in self._graph.objects(subject, RDFS.domain):
+                from_table = self._get_literal(domain, self._oba_ns.tableName)
+                break
+            if not from_table:
                 continue
 
-            if fk_column and ref_table:
-                # Determine from_table from domain
-                from_table = None
-                for domain in self._graph.objects(subject, RDFS.domain):
-                    from_table = self._get_literal(domain, self._oba_ns.tableName)
-                    break
+            pairs = self._key_column_pairs(subject, from_table)
+            composite = len(pairs) > 1 and is_composite_key(self._graph, subject)
+            if composite:
+                # validate_relationship counts one column's values, and
+                # order_id repeats in every unique (order_id, line_no) key:
+                # a verdict on one column says nothing about the tuple.
+                status = None
+            if status == STATUS_REFUTED:
+                # The data contradicts it: no join may lean on it.
+                schema.refuted_links.add((from_table.lower(), ref_table.lower()))
+                continue
 
-                if from_table:
-                    pairs = self._key_column_pairs(subject, from_table)
-                    if pairs:
-                        fk_column, ref_column = pairs[0]
-                        join_cond = " AND ".join(
-                            f"{from_table}.{child} = {ref_table}.{parent}"
-                            for child, parent in pairs
-                        )
-                    rel_key = "->".join(
-                        (
-                            ",".join(f"{from_table}.{c}" for c, _ in pairs)
-                            or f"{from_table}.{fk_column}",
-                            ",".join(f"{ref_table}.{p}" for _, p in pairs)
-                            or f"{ref_table}.{ref_column}",
-                        )
-                    )
-                    schema.relationships[rel_key] = RelationshipInfo(
-                        from_table=from_table,
-                        from_column=fk_column,
-                        to_table=ref_table,
-                        to_column=ref_column or "id",
-                        relationship_type=rel_type or "many_to_one",
-                        join_condition=join_cond
-                        or f"{from_table}.{fk_column} = {ref_table}.{ref_column}",
-                        inferred=self._get_bool(
-                            subject, self._oba_ns.isInferredRelationship, False
-                        ),
-                        validation_status=status,
-                        column_pairs=tuple(pairs) if len(pairs) > 1 else (),
-                    )
+            # Columns that are not one constraint are separate keys sharing
+            # a property -- billing and shipping customer -- each joined alone.
+            if composite:
+                groups = [pairs]
+            elif pairs:
+                groups = [[pair] for pair in pairs]
+            else:
+                groups = [[(fk_column, ref_column or "id")]]
 
-                    # Update column FK info
-                    table_key = from_table.lower()
-                    for child, parent in pairs or [(fk_column, ref_column or "id")]:
-                        col_key = child.lower()
-                        if (
-                            table_key in schema.tables
-                            and col_key in schema.tables[table_key].columns
-                        ):
-                            col = schema.tables[table_key].columns[col_key]
-                            col.is_foreign_key = True
-                            col.fk_referenced_table = ref_table
-                            col.fk_referenced_column = parent
+            for group in groups:
+                first_child, first_parent = group[0]
+                rel_key = "->".join(
+                    (
+                        ",".join(f"{from_table}.{c}" for c, _ in group),
+                        ",".join(f"{ref_table}.{p}" for _, p in group),
+                    )
+                )
+                schema.relationships[rel_key] = RelationshipInfo(
+                    from_table=from_table,
+                    from_column=first_child,
+                    to_table=ref_table,
+                    to_column=first_parent,
+                    relationship_type=rel_type or "many_to_one",
+                    join_condition=" AND ".join(
+                        f"{from_table}.{child} = {ref_table}.{parent}"
+                        for child, parent in group
+                    ),
+                    inferred=self._get_bool(
+                        subject, self._oba_ns.isInferredRelationship, False
+                    ),
+                    validation_status=status,
+                    column_pairs=tuple(group) if len(group) > 1 else (),
+                )
+
+                # Update column FK info
+                table_key = from_table.lower()
+                for child, parent in group:
+                    col_key = child.lower()
+                    if (
+                        table_key in schema.tables
+                        and col_key in schema.tables[table_key].columns
+                    ):
+                        col = schema.tables[table_key].columns[col_key]
+                        col.is_foreign_key = True
+                        col.fk_referenced_table = ref_table
+                        col.fk_referenced_column = parent
 
         return schema
 
@@ -1590,9 +1593,24 @@ class OBQCValidator:
             table = alias_map.get(column.table.lower(), column.table)
             return table.lower(), column.name.lower()
 
+        def holds_for_every_row(eq: exp.Expr) -> bool:
+            """Whether *eq* is a conjunct: reached through AND only.
+
+            Under OR an equality holds for some matching rows, not all, so it
+            does not say which key the join uses.
+            """
+            node = eq.parent
+            while node is not None and node is not condition.parent:
+                if not isinstance(node, (exp.And, exp.Paren)):
+                    return False
+                node = node.parent
+            return True
+
         comparisons = set()
         for eq in condition.find_all(exp.EQ):
             if eq.find_ancestor(exp.Select) is not scope:
+                continue
+            if not holds_for_every_row(eq):
                 continue
             # (c.id) is c.id: parentheses do not change what is compared.
             left, right = eq.this.unnest(), eq.expression.unnest()
@@ -3133,6 +3151,9 @@ class OBQCValidator:
             rel.to_table.lower()
             for rel in used
             if rel.relationship_type == "many_to_one" and not rel.target_not_unique
+            # A guessed key cannot outweigh a checked one: if customers.id
+            # only looks unique, customers.code repeating still multiplies.
+            and not rel.assumed
         }
 
         for rel in used or between:

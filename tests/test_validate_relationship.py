@@ -15,7 +15,8 @@ from typing import Any
 import pytest
 import sqlglot
 from fastmcp import Client
-from rdflib import Graph, Literal, Namespace
+from rdflib import Graph, Literal, Namespace, URIRef
+from rdflib.namespace import OWL, RDF, RDFS
 from sqlglot import exp
 
 import src.main as main_module
@@ -32,6 +33,8 @@ from src.relationship_validation import (
     RelationshipRef,
     build_check_queries,
     classify,
+    find_relationships,
+    is_composite_key,
     relationship_key,
 )
 from src.server_state import ServerState
@@ -534,3 +537,35 @@ async def test_background_generation_leaves_an_active_uploads_graph(shop, monkey
 
     assert verdict["recorded_in"]["active_ontology"] == "uploaded"
     assert verdict["recorded_in"]["rdf_graph"] == upload_graph
+
+
+def _composite_relationship(constraints: list[str]) -> Graph:
+    """shipments (order_id, line_no) -> order_lines, with given constraints."""
+    graph = Graph()
+    shipments = URIRef("http://example.com/ontology/shipments")
+    prop = URIRef("http://example.com/ontology/shipments_has_order_lines")
+    graph.add((shipments, OBA.tableName, Literal("shipments")))
+    graph.add((prop, RDF.type, OWL.ObjectProperty))
+    graph.add((prop, RDFS.domain, shipments))
+    graph.add((prop, OBA.referencedTable, Literal("order_lines")))
+    for column in ("order_id", "line_no"):
+        graph.add((prop, OBA.foreignKeyColumn, Literal(column)))
+        graph.add((prop, OBA.referencedColumn, Literal(column)))
+    for name in constraints:
+        graph.add((prop, OBA.constraintName, Literal(name)))
+    return graph
+
+
+def test_composite_key_is_recognised_by_its_single_constraint():
+    prop = URIRef("http://example.com/ontology/shipments_has_order_lines")
+    assert is_composite_key(_composite_relationship(["line_fk"]), prop)
+    # Without a constraint, or with several, the columns are separate keys.
+    assert not is_composite_key(_composite_relationship([]), prop)
+    assert not is_composite_key(_composite_relationship(["a_fk", "b_fk"]), prop)
+
+
+def test_any_key_column_finds_its_relationship():
+    graph = _composite_relationship(["line_fk"])
+    for column in ("order_id", "LINE_NO"):
+        (ref,) = find_relationships(graph, "shipments", column)
+        assert ref.column.lower() == column.lower()
