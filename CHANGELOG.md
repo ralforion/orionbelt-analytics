@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The R2RML mapping now speaks the ontology's vocabulary.** It named
+  classes and properties on its own (`base:Orders`, `base:customer_id`), so
+  an engine reading the mapping next to the ontology, such as Ontop, saw two
+  unrelated vocabularies. Classes and properties are now the ontology's own
+  (`ONTOLOGY_BASE_URI`); `R2RML_BASE_IRI` still names the row resources. The
+  mapping's output changes: anything consuming the old IRIs must be updated.
+
+### Fixed
+- **R2RML: every column keeps a predicate of its own.** Columns were named
+  after the column alone, so all tables' `id` columns shared one predicate.
+- **R2RML: foreign keys are joins.** They are referencing object maps onto
+  the parent table's mapping, so composite keys and keys onto non-key columns
+  map correctly, and the key column's value is mapped as well as the link.
+- **R2RML: tables without a primary key no longer merge rows.** Their rows
+  were IRIs built from the first column; they are now blank nodes keyed on
+  the non-null columns.
+- **R2RML: table and column names keep their case.** They are delimited
+  identifiers (`rr:tableName "\"SALES\".\"ORDERS\""`) instead of an unquoted
+  `SELECT *`, which broke on case-sensitive names, e.g. on Snowflake.
+- **R2RML: composite key parts are separated by `/`,** which R2RML encodes
+  inside a value, instead of `-`, which it does not.
+
 ## [2.1.1] - 2026-10-05
 
 ### Fixed

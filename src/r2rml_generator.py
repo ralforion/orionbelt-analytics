@@ -9,14 +9,39 @@ R2RML mappings enable:
 - Semantic integration of database content
 - SPARQL querying over relational databases
 - Linked Data publication from databases
+
+The mapping uses the same vocabulary as the generated OWL ontology (see
+``ontology_naming``), so a virtual knowledge graph engine such as Ontop can
+serve the database through the mapping and the ontology together.
 """
 
 import logging
-import re
+from typing import Any
 
-from .database_manager import ColumnInfo, TableInfo
+from .constants import DEFAULT_BASE_URI
+from .database_manager import TableInfo
+from .ontology_naming import (
+    class_local_name,
+    column_property_local_name,
+    relationship_local_name,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _sql_identifier(name: str) -> str:
+    """Delimited SQL identifier, so case and special characters are kept."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _turtle_string(value: str) -> str:
+    """Turtle string literal for ``value``."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _template_text(text: str) -> str:
+    """Escape text that appears literally in an R2RML string template."""
+    return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
 
 
 class R2RMLGenerator:
@@ -28,20 +53,31 @@ class R2RMLGenerator:
     This generator creates TriplesMap definitions that include:
     - Subject maps with IRI templates based on primary keys
     - Predicate-object maps for column values
-    - Reference object maps for foreign key relationships
+    - Referencing object maps (join conditions) for foreign key relationships
+
+    Classes and properties are named in the ontology vocabulary; only the
+    resources for individual rows live under ``base_iri``.
     """
 
     def __init__(
-        self, base_iri: str = "http://example.com/", database_name: str = "database"
+        self,
+        base_iri: str = "http://example.com/",
+        database_name: str = "database",
+        vocabulary_iri: str = DEFAULT_BASE_URI,
     ):
         """Initialize the R2RML generator.
 
         Args:
             base_iri: Base IRI for generated RDF resources (must end with /)
             database_name: Name of the database (used in comments)
+            vocabulary_iri: Base URI of the ontology whose classes and
+                properties the mapping uses
         """
         self.base_iri = base_iri if base_iri.endswith("/") else base_iri + "/"
         self.database_name = database_name
+        self.vocabulary_iri = (
+            vocabulary_iri if vocabulary_iri.endswith("/") else vocabulary_iri + "/"
+        )
 
     def generate_from_schema(
         self, tables_info: list[TableInfo], schema_name: str | None = None
@@ -81,10 +117,14 @@ class R2RMLGenerator:
         """Generate R2RML prefix declarations."""
         prefixes = [
             "@prefix rr: <http://www.w3.org/ns/r2rml#> .",
-            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
-            f"@prefix base: <{self.base_iri}> .",
+            f"@prefix ont: <{self.vocabulary_iri}> .",
         ]
         return prefixes
+
+    @staticmethod
+    def _map_name(table_name: str) -> str:
+        """Relative IRI of the TriplesMap for a table."""
+        return f"<#{class_local_name(table_name)}Mapping>"
 
     def _generate_triples_map(
         self,
@@ -104,246 +144,173 @@ class R2RMLGenerator:
         """
         lines = []
 
-        # Generate mapping name (safe identifier)
-        map_name = self._safe_identifier(table_info.name.capitalize()) + "Mapping"
         table_name = table_info.name
         effective_schema = schema_name or table_info.schema
 
-        # Full table reference with schema
-        if effective_schema and effective_schema != "public":
-            full_table_ref = f"{effective_schema}.{table_name}"
+        # Delimited identifiers keep the catalog's exact case, which matters
+        # on case-sensitive dialects such as Snowflake.
+        if effective_schema:
+            full_table_ref = (
+                f"{_sql_identifier(effective_schema)}.{_sql_identifier(table_name)}"
+            )
         else:
-            full_table_ref = table_name
+            full_table_ref = _sql_identifier(table_name)
 
-        # Generate subject template based on primary keys
-        subject_template = self._generate_subject_template(table_info, effective_schema)
-
-        # Class name for rr:class
-        class_name = self._safe_identifier(table_name.capitalize())
-
-        lines.append(f"<#{map_name}>")
+        lines.append(self._map_name(table_name))
         lines.append("    a rr:TriplesMap ;")
-
-        # Logical table with SQL query (R2RML)
-        lines.append("    rr:logicalTable [")
-        lines.append("        a rr:LogicalTable ;")
-        lines.append(f'        rr:sqlQuery "SELECT * FROM {full_table_ref} " ;')
-        lines.append("        rr:sqlVersion rr:SQL2008")
-        lines.append("    ] ;")
-
-        # Subject map
         lines.append(
-            f'    rr:subjectMap [ rr:template "{subject_template}" ; rr:class base:{class_name} ] ;'
+            f"    rr:logicalTable [ rr:tableName {_turtle_string(full_table_ref)} ] ;"
         )
 
-        # Build FK lookup for this table
-        fk_columns = {}
-        for fk_entry in table_info.foreign_keys:
-            fk_columns[fk_entry["column"]] = fk_entry
+        # Subject map
+        lines.append("    rr:subjectMap [")
+        lines.extend(self._generate_subject_map(table_info))
+        lines.append(f"        rr:class ont:{class_local_name(table_name)}")
+        lines.append("    ] ;")
 
-        # Predicate-object maps for each column
+        # Every column is a datatype property, foreign keys included: the
+        # ontology declares one for each column next to the object property.
         for column in table_info.columns:
-            fk = fk_columns.get(column.name)
-            if fk:
-                # Foreign key column - generate object property with IRI reference
-                lines.extend(
-                    self._generate_fk_predicate_object_map(
-                        column, fk, effective_schema, table_lookup
-                    )
+            predicate = column_property_local_name(table_name, column.name)
+            column_ref = _turtle_string(_sql_identifier(column.name))
+            lines.append(
+                f"    rr:predicateObjectMap [ rr:predicate ont:{predicate} ; "
+                f"rr:objectMap [ rr:column {column_ref} ] ] ;"
+            )
+
+        for ref_table, fk_columns in self._group_foreign_keys(table_info, table_lookup):
+            lines.extend(
+                self._generate_fk_predicate_object_map(
+                    table_name, ref_table, fk_columns
                 )
-            else:
-                # Regular column - generate data property with literal value
-                lines.extend(self._generate_predicate_object_map(column, table_name))
+            )
 
         # Remove trailing semicolon from last predicate-object map and add period
         if lines and lines[-1].endswith(" ;"):
             lines[-1] = lines[-1][:-2] + " ."
-        elif lines and lines[-1].strip() == "] ;":
-            lines[-1] = "    ] ."
 
         return lines
 
-    def _generate_subject_template(
-        self, table_info: TableInfo, schema_name: str | None
-    ) -> str:
-        """Generate subject IRI template based on primary keys.
+    def _generate_subject_map(self, table_info: TableInfo) -> list[str]:
+        """Generate the term lines of a table's subject map.
+
+        A table with a primary key gets an IRI per row. Without one there is
+        no column that identifies a row, so the row becomes a blank node keyed
+        on its non-null columns rather than an IRI that may merge rows.
 
         Args:
             table_info: TableInfo object
-            schema_name: Optional schema name
 
         Returns:
-            Subject template string with placeholders for PK values
+            Turtle lines for the subject map's term
         """
-        table_name = table_info.name
         pk_columns = table_info.primary_keys
-
-        if len(pk_columns) == 1:
-            # Single primary key
-            return f"{self.base_iri}{table_name}/{{{pk_columns[0]}}}"
-        elif len(pk_columns) > 1:
-            # Composite primary key - join with hyphen
-            pk_template = "-".join([f"{{{pk}}}" for pk in pk_columns])
-            return f"{self.base_iri}{table_name}/{pk_template}"
+        if pk_columns:
+            key_columns = pk_columns
         else:
-            # No primary key defined - use all columns as fallback (not ideal)
-            # Try to find an 'id' column
-            id_col = next(
-                (
-                    c.name
-                    for c in table_info.columns
-                    if c.name.lower() in ["id", "rowid", "_id"]
-                ),
-                None,
+            key_columns = [c.name for c in table_info.columns if not c.is_nullable]
+            if not key_columns:
+                key_columns = [c.name for c in table_info.columns]
+            logger.warning(
+                f"Table '{table_info.name}' has no primary key; "
+                "mapping its rows to blank nodes"
             )
-            if id_col:
-                return f"{self.base_iri}{table_name}/{{{id_col}}}"
-            else:
-                # Last resort: use first column
-                first_col = table_info.columns[0].name if table_info.columns else "id"
-                logger.warning(
-                    f"Table '{table_name}' has no primary key, using column '{first_col}' for subject template"
-                )
-                return f"{self.base_iri}{table_name}/{{{first_col}}}"
 
-    def _generate_predicate_object_map(
-        self, column: ColumnInfo, table_name: str
-    ) -> list[str]:
-        """Generate predicate-object map for a regular column.
+        # R2RML percent-encodes "/" inside a column value, so "/" separates
+        # the parts of a composite key unambiguously.
+        placeholders = "/".join(
+            "{" + _template_text(_sql_identifier(c)) + "}" for c in key_columns
+        )
+        if pk_columns:
+            prefix = _template_text(
+                f"{self.base_iri}{class_local_name(table_info.name)}/"
+            )
+            return [f"        rr:template {_turtle_string(prefix + placeholders)} ;"]
+        return [
+            f"        rr:template {_turtle_string(placeholders)} ;",
+            "        rr:termType rr:BlankNode ;",
+        ]
+
+    @staticmethod
+    def _group_foreign_keys(
+        table_info: TableInfo, table_lookup: dict[str, TableInfo]
+    ) -> list[tuple[str, list[tuple[str, str]]]]:
+        """Group a table's foreign key columns into foreign keys.
+
+        Drivers report one entry per FK column and no constraint name, so a
+        composite key arrives as several entries naming the same table. They
+        are taken as one key when each references a different column; when
+        they repeat a referenced column (two keys to the same table, such as
+        billing and shipping address) each entry is a key of its own.
 
         Args:
-            column: ColumnInfo object for the column
-            table_name: Name of the containing table
+            table_info: TableInfo object of the referencing table
+            table_lookup: Dict mapping table names to TableInfo
+
+        Returns:
+            One (referenced table, [(child column, parent column)]) per key
+        """
+        by_target: dict[tuple[str, Any], list[dict[str, str]]] = {}
+        for fk in table_info.foreign_keys:
+            key = (fk["referenced_table"], fk.get("referenced_schema"))
+            by_target.setdefault(key, []).append(fk)
+
+        groups: list[tuple[str, list[tuple[str, str]]]] = []
+        for (ref_table, _), entries in by_target.items():
+            parent = table_lookup.get(ref_table)
+            if parent is None:
+                # Mapping a join needs the parent's TriplesMap, which only
+                # exists for tables of this mapping.
+                logger.debug(
+                    f"FK {table_info.name} -> {ref_table}: parent table not in "
+                    "mapping, keeping the column value only"
+                )
+                continue
+            pairs = []
+            for fk in entries:
+                parent_column = fk.get("referenced_column")
+                if not parent_column and len(parent.primary_keys) == 1:
+                    parent_column = parent.primary_keys[0]
+                if parent_column:
+                    pairs.append((fk["column"], parent_column))
+            if not pairs:
+                continue
+            if len({parent_col for _, parent_col in pairs}) == len(pairs):
+                groups.append((ref_table, pairs))
+            else:
+                groups.extend((ref_table, [pair]) for pair in pairs)
+        return groups
+
+    def _generate_fk_predicate_object_map(
+        self, table_name: str, ref_table: str, fk_columns: list[tuple[str, str]]
+    ) -> list[str]:
+        """Generate the object property map for one foreign key.
+
+        A referencing object map joins to the parent table's TriplesMap, so
+        the object is exactly the parent row's subject, whatever its key.
+
+        Args:
+            table_name: Name of the referencing table
+            ref_table: Name of the referenced table
+            fk_columns: (child column, parent column) pairs of the key
 
         Returns:
             List of Turtle lines for the predicate-object map
         """
-        lines = []
-        predicate_name = self._safe_identifier(column.name)
-        xsd_type = self._map_sql_to_xsd(column.data_type)
-
-        lines.append("    rr:predicateObjectMap [")
-        lines.append(f"        rr:predicate base:{predicate_name} ;")
-        lines.append("        rr:objectMap [")
-        lines.append(f'            rr:column "{column.name}" ;')
-        lines.append(f"            rr:datatype {xsd_type} ;")
-        lines.append("        ] ;")
+        predicate = relationship_local_name(table_name, ref_table)
+        lines = [
+            "    rr:predicateObjectMap [",
+            f"        rr:predicate ont:{predicate} ;",
+            "        rr:objectMap [",
+            f"            rr:parentTriplesMap {self._map_name(ref_table)} ;",
+        ]
+        for i, (child, parent) in enumerate(fk_columns):
+            end = " ;" if i < len(fk_columns) - 1 else ""
+            lines.append(
+                "            rr:joinCondition [ "
+                f"rr:child {_turtle_string(_sql_identifier(child))} ; "
+                f"rr:parent {_turtle_string(_sql_identifier(parent))} ]{end}"
+            )
+        lines.append("        ]")
         lines.append("    ] ;")
-
         return lines
-
-    def _generate_fk_predicate_object_map(
-        self,
-        column: ColumnInfo,
-        fk: dict[str, str],
-        schema_name: str | None,
-        table_lookup: dict[str, TableInfo],
-    ) -> list[str]:
-        """Generate predicate-object map for a foreign key column.
-
-        Foreign key columns are mapped as object properties that reference
-        IRIs of the related table's resources.
-
-        Args:
-            column: ColumnInfo object for the FK column
-            fk: Foreign key info dict with 'referenced_table' and 'referenced_column'
-            schema_name: Optional schema name
-            table_lookup: Dict mapping table names to TableInfo
-
-        Returns:
-            List of Turtle lines for the FK predicate-object map
-        """
-        lines = []
-        predicate_name = self._safe_identifier(column.name)
-        ref_table = fk["referenced_table"]
-
-        # Build the referenced IRI template
-        # Use the FK column value to construct the referenced resource IRI
-        ref_template = f"{self.base_iri}{ref_table}/{{{column.name}}}"
-
-        lines.append("    rr:predicateObjectMap [")
-        lines.append(f"        rr:predicate base:{predicate_name} ;")
-        lines.append("        rr:objectMap [")
-        lines.append(f'            rr:template "{ref_template}" ;')
-        lines.append("            rr:termType rr:IRI ;")
-        lines.append("        ] ;")
-        lines.append("    ] ;")
-
-        return lines
-
-    def _map_sql_to_xsd(self, sql_type: str) -> str:
-        """Map SQL data types to XSD Schema datatypes.
-
-        Args:
-            sql_type: SQL data type string
-
-        Returns:
-            XSD datatype as prefixed string (e.g., "xsd:integer")
-        """
-        sql_type = sql_type.lower()
-
-        # Integer types
-        if "tinyint" in sql_type:
-            return "xsd:byte"
-        if any(
-            t in sql_type
-            for t in [
-                "integer",
-                "int",
-                "int4",
-                "int2",
-                "int8",
-                "serial",
-                "bigint",
-                "smallint",
-            ]
-        ):
-            return "xsd:integer"
-
-        # Numeric types
-        if any(t in sql_type for t in ["numeric", "decimal", "money"]):
-            return "xsd:decimal"
-        if any(t in sql_type for t in ["float4", "float8", "real", "float"]):
-            return "xsd:float"
-        if "double" in sql_type:
-            return "xsd:double"
-
-        # Temporal types
-        if any(t in sql_type for t in ["timestamp", "datetime"]):
-            return "xsd:dateTime"
-        if sql_type.startswith("date"):
-            return "xsd:date"
-        if sql_type.startswith("time"):
-            return "xsd:time"
-
-        # Boolean types
-        if any(t in sql_type for t in ["bool", "boolean"]):
-            return "xsd:boolean"
-
-        # Binary types
-        if any(t in sql_type for t in ["bytea", "binary", "varbinary", "blob"]):
-            return "xsd:base64Binary"
-
-        # String types (default)
-        return "xsd:string"
-
-    def _safe_identifier(self, name: str) -> str:
-        """Convert a name to a safe identifier for use in IRIs.
-
-        Args:
-            name: Original name
-
-        Returns:
-            Safe identifier string
-        """
-        if not name:
-            return "unnamed"
-
-        # Replace non-alphanumeric characters with underscores
-        safe = re.sub(r"[^A-Za-z0-9_]", "_", name)
-
-        # Ensure it starts with a letter or underscore
-        if safe and not (safe[0].isalpha() or safe[0] == "_"):
-            safe = "_" + safe
-
-        return safe or "unnamed"

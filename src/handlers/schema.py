@@ -560,8 +560,14 @@ async def discover_schema(
 
                 database_name = db_manager.connection_info.get("database", "database")
 
+                from ..config import config_manager
+
+                # Classes and properties are named as in the ontology, so the
+                # mapping and the ontology describe the same vocabulary.
                 r2rml_generator = R2RMLGenerator(
-                    base_iri=base_iri, database_name=database_name
+                    base_iri=base_iri,
+                    database_name=database_name,
+                    vocabulary_iri=config_manager.get_server_config().ontology_base_uri,
                 )
                 r2rml_content = await asyncio.to_thread(
                     r2rml_generator.generate_from_schema,

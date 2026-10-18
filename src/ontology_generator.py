@@ -17,6 +17,12 @@ from .constants import (
     ONTOLOGY_TITLE,
 )
 from .database_manager import ColumnInfo, TableInfo
+from .ontology_naming import (
+    class_local_name,
+    clean_name,
+    column_property_local_name,
+    relationship_local_name,
+)
 
 # Minimum word frequency threshold (in Zipf scale ~1e-6).
 # Words below this are considered non-English / abbreviations.
@@ -830,7 +836,7 @@ class OntologyGenerator:
     def _add_table_to_ontology(self, table_info: TableInfo) -> None:
         """Add a single table and its columns to the ontology with comprehensive database annotations."""
         # Create proper URI for table class
-        table_uri = self.base_uri[self._clean_name(table_info.name)]
+        table_uri = self.base_uri[class_local_name(table_info.name)]
 
         # Define table as a class
         self.graph.add((table_uri, RDF.type, OWL.Class))
@@ -866,8 +872,7 @@ class OntologyGenerator:
     ) -> None:
         """Add a column as a data property to the ontology with comprehensive database annotations."""
         # Create proper property URI
-        prop_name = f"{self._clean_name(table_name)}_{self._clean_name(column.name)}"
-        prop_uri = self.base_uri[prop_name]
+        prop_uri = self.base_uri[column_property_local_name(table_name, column.name)]
 
         # Foreign key columns need both data property (for the value) and object property (for relationship)
         # Always create the data property for the column
@@ -940,10 +945,7 @@ class OntologyGenerator:
             return
 
         # Create descriptive relationship name
-        rel_name = (
-            f"{self._clean_name(table_name)}_has_{self._clean_name(referenced_table)}"
-        )
-        prop_uri = self.base_uri[rel_name]
+        prop_uri = self.base_uri[relationship_local_name(table_name, referenced_table)]
         referenced_table_uri = self.base_uri[self._clean_name(referenced_table)]
 
         referenced_column = fk.get("referenced_column", "id")
@@ -1017,17 +1019,7 @@ class OntologyGenerator:
 
     def _clean_name(self, name: str) -> str:
         """Clean a name to make it suitable for URIs."""
-        if not name:
-            return "unnamed"
-
-        # Replace spaces and special characters with underscores
-        cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", name)
-
-        # Ensure it starts with a letter or underscore
-        if cleaned and not (cleaned[0].isalpha() or cleaned[0] == "_"):
-            cleaned = "_" + cleaned
-
-        return cleaned or "unnamed"
+        return clean_name(name)
 
     def _build_table_lookup(self, tables_info: list[TableInfo]) -> None:
         """Build lookup structures for tables and their primary keys."""
