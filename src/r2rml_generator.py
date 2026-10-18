@@ -16,14 +16,14 @@ serve the database through the mapping and the ontology together.
 """
 
 import logging
-from typing import Any
 
 from .constants import DEFAULT_BASE_URI
 from .database_manager import TableInfo
 from .ontology_naming import (
+    ForeignKey,
     class_local_name,
     column_property_local_name,
-    relationship_local_name,
+    foreign_keys,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,12 +178,8 @@ class R2RMLGenerator:
                 f"rr:objectMap [ rr:column {column_ref} ] ] ;"
             )
 
-        for ref_table, fk_columns in self._group_foreign_keys(table_info, table_lookup):
-            lines.extend(
-                self._generate_fk_predicate_object_map(
-                    table_name, ref_table, fk_columns
-                )
-            )
+        for key, fk_columns in self._resolve_foreign_keys(table_info, table_lookup):
+            lines.extend(self._generate_fk_predicate_object_map(key, fk_columns))
 
         # Remove trailing semicolon from last predicate-object map and add period
         if lines and lines[-1].endswith(" ;"):
@@ -232,57 +228,43 @@ class R2RMLGenerator:
         ]
 
     @staticmethod
-    def _group_foreign_keys(
+    def _resolve_foreign_keys(
         table_info: TableInfo, table_lookup: dict[str, TableInfo]
-    ) -> list[tuple[str, list[tuple[str, str]]]]:
-        """Group a table's foreign key columns into foreign keys.
+    ) -> list[tuple[ForeignKey, list[tuple[str, str]]]]:
+        """The table's foreign keys that can be mapped as joins.
 
-        Drivers report one entry per FK column and no constraint name, so a
-        composite key arrives as several entries naming the same table. They
-        are taken as one key when each references a different column; when
-        they repeat a referenced column (two keys to the same table, such as
-        billing and shipping address) each entry is a key of its own.
+        Keys are grouped and named as in the ontology (``foreign_keys``).
 
         Args:
             table_info: TableInfo object of the referencing table
             table_lookup: Dict mapping table names to TableInfo
 
         Returns:
-            One (referenced table, [(child column, parent column)]) per key
+            Each mappable key with its (child column, parent column) pairs
         """
-        by_target: dict[tuple[str, Any], list[dict[str, str]]] = {}
-        for fk in table_info.foreign_keys:
-            key = (fk["referenced_table"], fk.get("referenced_schema"))
-            by_target.setdefault(key, []).append(fk)
-
-        groups: list[tuple[str, list[tuple[str, str]]]] = []
-        for (ref_table, _), entries in by_target.items():
-            parent = table_lookup.get(ref_table)
+        resolved = []
+        for key in foreign_keys(table_info.name, table_info.foreign_keys):
+            parent = table_lookup.get(key.referenced_table)
             if parent is None:
                 # Mapping a join needs the parent's TriplesMap, which only
                 # exists for tables of this mapping.
                 logger.debug(
-                    f"FK {table_info.name} -> {ref_table}: parent table not in "
-                    "mapping, keeping the column value only"
+                    f"FK {table_info.name} -> {key.referenced_table}: parent "
+                    "table not in mapping, keeping the column value only"
                 )
                 continue
             pairs = []
-            for fk in entries:
-                parent_column = fk.get("referenced_column")
+            for child, parent_column in key.column_pairs:
                 if not parent_column and len(parent.primary_keys) == 1:
                     parent_column = parent.primary_keys[0]
                 if parent_column:
-                    pairs.append((fk["column"], parent_column))
-            if not pairs:
-                continue
-            if len({parent_col for _, parent_col in pairs}) == len(pairs):
-                groups.append((ref_table, pairs))
-            else:
-                groups.extend((ref_table, [pair]) for pair in pairs)
-        return groups
+                    pairs.append((child, parent_column))
+            if pairs:
+                resolved.append((key, pairs))
+        return resolved
 
     def _generate_fk_predicate_object_map(
-        self, table_name: str, ref_table: str, fk_columns: list[tuple[str, str]]
+        self, key: ForeignKey, fk_columns: list[tuple[str, str]]
     ) -> list[str]:
         """Generate the object property map for one foreign key.
 
@@ -290,19 +272,17 @@ class R2RMLGenerator:
         the object is exactly the parent row's subject, whatever its key.
 
         Args:
-            table_name: Name of the referencing table
-            ref_table: Name of the referenced table
+            key: The foreign key
             fk_columns: (child column, parent column) pairs of the key
 
         Returns:
             List of Turtle lines for the predicate-object map
         """
-        predicate = relationship_local_name(table_name, ref_table)
         lines = [
             "    rr:predicateObjectMap [",
-            f"        rr:predicate ont:{predicate} ;",
+            f"        rr:predicate ont:{key.local_name} ;",
             "        rr:objectMap [",
-            f"            rr:parentTriplesMap {self._map_name(ref_table)} ;",
+            f"            rr:parentTriplesMap {self._map_name(key.referenced_table)} ;",
         ]
         for i, (child, parent) in enumerate(fk_columns):
             end = " ;" if i < len(fk_columns) - 1 else ""

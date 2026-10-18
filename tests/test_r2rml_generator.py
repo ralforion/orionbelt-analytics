@@ -209,14 +209,12 @@ def test_composite_foreign_key_is_one_join_with_all_columns() -> None:
 def test_two_foreign_keys_to_one_table_stay_separate() -> None:
     """Billing and shipping address must not be required to be the same row."""
     graph = _mapping()
-    maps = _object_maps(graph, _triples_map(graph, "orders"), "orders_has_addresses")
-    children = sorted(
-        str(graph.value(j, RR.child))
-        for om in maps
-        for j in graph.objects(om, RR.joinCondition)
-    )
-    assert len(maps) == 2
-    assert children == ['"billing_address_id"', '"shipping_address_id"']
+    tm = _triples_map(graph, "orders")
+    assert not _object_maps(graph, tm, "orders_has_addresses")
+    for column in ("billing_address_id", "shipping_address_id"):
+        (om,) = _object_maps(graph, tm, f"orders_has_addresses_via_{column}")
+        (join,) = graph.objects(om, RR.joinCondition)
+        assert str(graph.value(join, RR.child)) == f'"{column}"'
 
 
 def test_foreign_key_to_unmapped_table_keeps_only_the_value() -> None:

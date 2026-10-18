@@ -18,9 +18,11 @@ from .constants import (
 )
 from .database_manager import ColumnInfo, TableInfo
 from .ontology_naming import (
+    ForeignKey,
     class_local_name,
     clean_name,
     column_property_local_name,
+    foreign_keys,
     relationship_local_name,
 )
 
@@ -864,8 +866,9 @@ class OntologyGenerator:
             self._add_column_to_ontology(table_uri, column, table_info.name)
 
         # Define relationships
-        for fk in table_info.foreign_keys:
-            self._add_relationship_to_ontology(table_uri, fk, table_info.name)
+        for key in foreign_keys(table_info.name, table_info.foreign_keys):
+            for fk in key.entries:
+                self._add_relationship_to_ontology(table_uri, fk, table_info.name, key)
 
     def _add_column_to_ontology(
         self, table_uri: URIRef, column: ColumnInfo, table_name: str
@@ -936,7 +939,11 @@ class OntologyGenerator:
             self.graph.add((prop_uri, RDFS.comment, Literal(column.comment)))
 
     def _add_relationship_to_ontology(
-        self, table_uri: URIRef, fk: dict[str, str], table_name: str
+        self,
+        table_uri: URIRef,
+        fk: dict[str, str],
+        table_name: str,
+        key: ForeignKey,
     ) -> None:
         """Add a foreign key relationship as an object property with comprehensive database annotations."""
         referenced_table = fk.get("referenced_table")
@@ -944,8 +951,10 @@ class OntologyGenerator:
             logger.warning(f"FK from {table_name} missing referenced_table: {fk}")
             return
 
-        # Create descriptive relationship name
-        prop_uri = self.base_uri[relationship_local_name(table_name, referenced_table)]
+        # Named by the key it belongs to: the columns of a composite key share
+        # one property, while two keys to the same table get one each.
+        prop_uri = self.base_uri[key.local_name]
+        via_label = f" via {key.via_column}" if key.via_column else ""
         referenced_table_uri = self.base_uri[self._clean_name(referenced_table)]
 
         referenced_column = fk.get("referenced_column", "id")
@@ -958,7 +967,11 @@ class OntologyGenerator:
         self.graph.add((prop_uri, RDFS.domain, table_uri))
         self.graph.add((prop_uri, RDFS.range, referenced_table_uri))
         self.graph.add(
-            (prop_uri, RDFS.label, Literal(f"{table_name} has {referenced_table}"))
+            (
+                prop_uri,
+                RDFS.label,
+                Literal(f"{table_name} has {referenced_table}{via_label}"),
+            )
         )
 
         # Add comprehensive database-specific annotations for foreign keys
@@ -991,8 +1004,7 @@ class OntologyGenerator:
         self.graph.add((table_uri, self.oba_ns.joinsTo, referenced_table_uri))
 
         # Add inverse relationship
-        inverse_rel_name = f"{self._clean_name(referenced_table)}_referenced_by_{self._clean_name(table_name)}"
-        inverse_prop_uri = self.base_uri[inverse_rel_name]
+        inverse_prop_uri = self.base_uri[key.inverse_local_name]
         self.graph.add((inverse_prop_uri, RDF.type, OWL.ObjectProperty))
         self.graph.add((inverse_prop_uri, RDFS.domain, referenced_table_uri))
         self.graph.add((inverse_prop_uri, RDFS.range, table_uri))
@@ -1000,7 +1012,7 @@ class OntologyGenerator:
             (
                 inverse_prop_uri,
                 RDFS.label,
-                Literal(f"{referenced_table} referenced by {table_name}"),
+                Literal(f"{referenced_table} referenced by {table_name}{via_label}"),
             )
         )
 
@@ -1016,6 +1028,51 @@ class OntologyGenerator:
         logger.debug(
             f"Added declared FK relationship: {table_name}.{fk_column} -> {referenced_table}.{referenced_column}"
         )
+
+    def _relationship_uri(
+        self, from_table: str, to_table: str, fk_column: str | None = None
+    ) -> URIRef | None:
+        """The relationship from one table to another, if exactly one fits.
+
+        Several keys between the same two tables are separate relationships;
+        ``fk_column`` picks one of them. Without it such a pair is ambiguous,
+        and nothing is returned rather than a guess.
+
+        Args:
+            from_table: The referencing table
+            to_table: The referenced table
+            fk_column: Optional key column, to choose between several keys
+
+        Returns:
+            The object property, or None
+        """
+        matches = set()
+        for prop in self.graph.subjects(RDF.type, OWL.ObjectProperty):
+            ref_table = self.graph.value(prop, self.oba_ns.referencedTable)
+            domain = self.graph.value(prop, RDFS.domain)
+            domain_table = (
+                self.graph.value(domain, self.oba_ns.tableName) if domain else None
+            )
+            if ref_table is None or domain_table is None:
+                continue
+            if str(ref_table).lower() != to_table.lower():
+                continue
+            if str(domain_table).lower() != from_table.lower():
+                continue
+            if fk_column is not None and fk_column.lower() not in {
+                str(c).lower()
+                for c in self.graph.objects(prop, self.oba_ns.foreignKeyColumn)
+            }:
+                continue
+            matches.add(prop)
+        if len(matches) == 1:
+            return matches.pop()  # type: ignore[return-value]
+        if matches:
+            return None
+        plain = self.base_uri[relationship_local_name(from_table, to_table)]
+        if (plain, RDF.type, OWL.ObjectProperty) in self.graph:
+            return plain
+        return None
 
     def _clean_name(self, name: str) -> str:
         """Clean a name to make it suitable for URIs."""
@@ -1607,8 +1664,10 @@ class OntologyGenerator:
 
         # Build lookup: (source, target) -> property URI
         rel_lookup: dict[tuple[str, str], URIRef] = {}
+        pair_count: dict[tuple[str, str], int] = {}
         for rel_src, rel_tgt, rel_uri in relationships:
             rel_lookup[(rel_src, rel_tgt)] = rel_uri
+            pair_count[(rel_src, rel_tgt)] = pair_count.get((rel_src, rel_tgt), 0) + 1
 
         # Find 2-hop chains A→B→C where A→C has no direct relationship
         declared: set[tuple[str, str]] = set()
@@ -1623,6 +1682,10 @@ class OntologyGenerator:
                     continue  # Direct FK exists, no chain needed
                 if (a, c) in declared:
                     continue  # Already created
+                if pair_count[(a, tgt_ab)] > 1 or pair_count[(src_bc, c)] > 1:
+                    # Several keys on a hop (billing and shipping address):
+                    # a chain through one of them would be an arbitrary pick.
+                    continue
 
                 # Create the derived chain property
                 chain_name = (
@@ -1938,10 +2001,14 @@ class OntologyGenerator:
                     )
                     to_table = to_part.split(".")[0] if "." in to_part else to_part
 
-                    rel_name = f"{self._clean_name(from_table)}_has_{self._clean_name(to_table)}"
-                    rel_uri = self.base_uri[rel_name]
+                    from_column = (
+                        from_part.split(".", 1)[1].strip() if "." in from_part else None
+                    )
+                    rel_uri = self._relationship_uri(
+                        from_table.strip(), to_table.strip(), from_column
+                    )
 
-                    if (rel_uri, RDF.type, OWL.ObjectProperty) in self.graph:
+                    if rel_uri is not None:
                         if "description" in rel_desc:
                             self.graph.add(
                                 (
@@ -2134,10 +2201,9 @@ class OntologyGenerator:
                     continue
 
                 # Find the original relationship URI
-                rel_name = (
-                    f"{self._clean_name(from_table)}_has_{self._clean_name(to_table)}"
-                )
-                rel_uri = self.base_uri[rel_name]
+                rel_uri = self._relationship_uri(from_table, to_table)
+                if rel_uri is None:
+                    continue
 
                 # Add suggested name as label if provided
                 if suggested_name:

@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mapping's output changes: anything consuming the old IRIs must be updated.
 
 ### Fixed
+- **Two foreign keys to the same table are two relationships.** Both were
+  named `orders_has_addresses`, so billing and shipping address became one
+  object property with two key columns, of which OBQC saw only one -- a join
+  on the other could be judged against the wrong column. When a table has
+  several keys to one table, each is now named after its column
+  (`orders_has_addresses_via_billing_address_id`), in the ontology and the
+  R2RML mapping alike; single keys keep their names. Relationship
+  descriptions keyed by column reach the right key, an enrichment naming only
+  the two tables of such a pair is no longer applied to an arbitrary one, and
+  no property chain is built through an ambiguous hop. Semantic names saved
+  for such a pair under the old name do not carry over.
 - **R2RML: every column keeps a predicate of its own.** Columns were named
   after the column alone, so all tables' `id` columns shared one predicate.
 - **R2RML: foreign keys are joins.** They are referencing object maps onto
