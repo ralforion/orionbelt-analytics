@@ -257,13 +257,14 @@ async def validate_relationship(
             )
         else:
             message = (
-                f"{from_table}.{column} shares its relationship with other key "
-                "columns, and the ontology does not say whether they form one "
-                "key or which column references which (ontologies generated "
-                "before keys were named apart look like this). A verdict could "
-                "land on the wrong key, so none is recorded. Regenerate the "
-                "ontology with generate_ontology, or give each key its own "
-                "property (one oba:constraintName for a composite key)."
+                f"The relationship of {from_table}.{column} states several key "
+                "or referenced columns, and the ontology does not say which "
+                "column references which, or whether they form one key "
+                "(ontologies generated before keys were named apart look like "
+                "this). A verdict could land on the wrong key, so none is "
+                "recorded. Regenerate the ontology with generate_ontology, or "
+                "give each key its own property (one oba:constraintName for a "
+                "composite key)."
             )
         err = services.create_error_response(message, reason or REASON_AMBIGUOUS_KEY)
         return err

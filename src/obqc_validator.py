@@ -908,7 +908,11 @@ class OBQCValidator:
             str(o) for o in self._graph.objects(subject, self._oba_ns.referencedColumn)
         ]
         if len(fk_columns) == 1:
-            return [(fk_columns[0], ref_columns[0] if ref_columns else "id")]
+            # One key column onto each referenced column the property names:
+            # an older ontology may hold customer_ref -> id and -> legacy_id
+            # on one property, and both joins are relationships.
+            targets = sorted({c.lower(): c for c in ref_columns}.values()) or ["id"]
+            return [(fk_columns[0], target) for target in targets]
         wanted = {c.lower() for c in fk_columns}
         pairs: dict[str, tuple[str, str]] = {}
         for cond in self._graph.objects(subject, self._oba_ns.sqlJoinCondition):

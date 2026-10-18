@@ -587,3 +587,43 @@ def test_shared_property_with_different_targets_is_not_checkable() -> None:
     prop = URIRef(VOCAB + "orders_has_customers")
     graph.add((prop, OBA.referencedColumn, Literal("code")))
     assert why_not_checkable(graph, prop) == REASON_AMBIGUOUS_KEY
+
+
+def test_one_key_column_onto_two_targets_is_two_relationships() -> None:
+    """customer_ref -> id and -> legacy_id: refuting one leaves the other."""
+    from src.relationship_validation import REASON_AMBIGUOUS_KEY, why_not_checkable
+
+    generator = OntologyGenerator(base_uri=VOCAB)
+    generator.generate_from_schema(
+        [
+            _table("customers", ["id", "legacy_id", "credit"]),
+            _table("orders", ["id", "customer_ref"]),
+        ],
+        include_inferred_relationships=False,
+    )
+    graph = generator.graph
+    prop = URIRef(VOCAB + "orders_has_customers")
+    for p, o in (
+        (RDF.type, OWL.ObjectProperty),
+        (RDFS.domain, URIRef(VOCAB + "orders")),
+        (RDFS.range, URIRef(VOCAB + "customers")),
+        (OBA.referencedTable, Literal("customers")),
+        (OBA.relationshipType, Literal("many_to_one")),
+        (OBA.foreignKeyColumn, Literal("customer_ref")),
+        (OBA.referencedColumn, Literal("id")),
+        (OBA.referencedColumn, Literal("legacy_id")),
+        (OBA.validationStatus, Literal("refuted")),
+    ):
+        graph.add((prop, p, o))
+
+    assert why_not_checkable(graph, prop) == REASON_AMBIGUOUS_KEY
+    validator = OBQCValidator()
+    validator.load_ontology(graph, VOCAB)
+    targets = {r.to_column for r in validator._schema_cache.relationships.values()}
+    assert targets == {"id", "legacy_id"}
+    result = _validate(
+        graph,
+        "SELECT SUM(customers.credit) FROM customers "
+        "JOIN orders ON orders.customer_ref = customers.legacy_id",
+    )
+    assert result.fan_trap_blocking

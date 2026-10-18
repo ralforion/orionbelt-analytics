@@ -38,8 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only when it names one constraint (`oba:constraintName`); separate keys
   sharing a property stay separate. `validate_relationship` refuses composite
   keys rather than record a one-column verdict for them, and refuses
-  properties with several key columns but no constraint name -- as ontologies
-  saved by earlier versions hold -- since which key a verdict is about is
+  properties with several key columns but no constraint name, or one key
+  column onto several referenced columns -- as ontologies saved by earlier
+  versions hold -- since which key a verdict is about is
   unknown there; OBQC ignores verdicts already recorded on such properties.
 - **Two foreign keys to the same table are two relationships.** Both were
   named `orders_has_addresses`, so billing and shipping address became one

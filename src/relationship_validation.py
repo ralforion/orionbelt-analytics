@@ -267,7 +267,8 @@ def why_not_checkable(graph: Graph, prop: Node) -> str | None:
     """Why validate_relationship cannot judge this relationship, if it cannot.
 
     The check counts one key column against one referenced column, so it can
-    only speak for a property stating exactly one key column. A composite
+    only speak for a property stating exactly one key column and one
+    referenced column. A composite
     key is unique as a tuple, which one column's values cannot show. A
     property with several key columns and no single constraint -- as
     ontologies generated before keys were named apart, or written by hand,
@@ -282,8 +283,14 @@ def why_not_checkable(graph: Graph, prop: Node) -> str | None:
         None if checkable, else REASON_COMPOSITE_KEY or REASON_AMBIGUOUS_KEY.
     """
     columns = {str(c).lower() for c in graph.objects(prop, OBA.foreignKeyColumn)}
-    if len(columns) <= 1:
+    targets = {str(c).lower() for c in graph.objects(prop, OBA.referencedColumn)}
+    if len(columns) <= 1 and len(targets) <= 1:
         return None
+    if len(columns) <= 1:
+        # One key column onto several referenced ones (customer_ref -> id
+        # and -> legacy_id): a verdict on one target would be read as one
+        # on all of them.
+        return REASON_AMBIGUOUS_KEY
     return (
         REASON_COMPOSITE_KEY if is_composite_key(graph, prop) else REASON_AMBIGUOUS_KEY
     )
