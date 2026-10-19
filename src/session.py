@@ -328,6 +328,9 @@ class SessionData:
     """
 
     def __init__(self) -> None:
+        # The authenticated user who opened it (issuer|subject), or None
+        # without authentication. Only that user may resolve to it again.
+        self.owner: str | None = None
         self.connection = ConnectionState()
         self.schema_cache = SchemaCache()
         self.rdf_store = RDFStoreState()

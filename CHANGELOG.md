@@ -7,13 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-- **The SSE transport (`MCP_TRANSPORT=sse`).** Breaking. The MCP specification
-  deprecated HTTP+SSE, and v2.1.0 warned about it at startup. The server now
-  speaks streamable HTTP only, at `http://<host>:9000/mcp`; `MCP_TRANSPORT=sse`
-  stops it at startup with that hint, rather than silently serving HTTP at a
-  URL the client never asks for. The LibreChat, Vercel AI SDK and n8n
-  examples connect over streamable HTTP.
+### Added
+- **Bearer-token authentication (`MCP_AUTH=jwt`).** The HTTP transport can
+  require a JSON Web Token on every request, verified by FastMCP's
+  `JWTVerifier` against the issuer's JWKS or a key, with issuer, audience,
+  expiry and optional scopes checked; other requests get HTTP 401. The token's
+  issuer and subject identify the user, and sessions belong to theirs: another
+  user's connection handle or MCP session is refused, and the sole-session
+  fallback only sees the caller's own. `MCP_AUTH_RESOURCE_URL` advertises the
+  issuer to MCP clients (RFC 9728). Off by default; unknown values or missing
+  settings stop the server instead of running it open. Database credentials
+  and the on-disk workspace are still shared per connection.
 
 ### Changed
 - **OBQC weighs relationships by their evidence.** In schemas without
@@ -36,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unrelated vocabularies. Classes and properties are now the ontology's own
   (`ONTOLOGY_BASE_URI`); `R2RML_BASE_IRI` still names the row resources. The
   mapping's output changes: anything consuming the old IRIs must be updated.
+
+### Removed
+- **The SSE transport (`MCP_TRANSPORT=sse`).** Breaking. The MCP specification
+  deprecated HTTP+SSE, and v2.1.0 warned about it at startup. The server now
+  speaks streamable HTTP only, at `http://<host>:9000/mcp`; `MCP_TRANSPORT=sse`
+  stops it at startup with that hint, rather than silently serving HTTP at a
+  URL the client never asks for. The LibreChat, Vercel AI SDK and n8n
+  examples connect over streamable HTTP.
 
 ### Fixed
 - **OBQC reads every column of a composite key.** It took one of a
