@@ -44,7 +44,7 @@ jobs:
         run: uv sync
 
       - name: Dump server tools
-        # The server only speaks http/sse in normal operation, but the FastMCP
+        # The server only speaks streamable HTTP in normal operation, but the FastMCP
         # `mcp` object (with every @mcp.tool() registered on import of src.main)
         # can run a one-shot stdio session for the dump.
         run: |

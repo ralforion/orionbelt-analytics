@@ -315,9 +315,8 @@ def main():
         # Print startup information
         print_startup_info()
 
-        transport_name = "streamable-http" if config.mcp_transport == "http" else "SSE"
         logger.info(
-            f"🚀 Starting OrionBelt Analytics v{__version__} MCP server with {transport_name} transport..."
+            f"🚀 Starting OrionBelt Analytics v{__version__} MCP server with streamable-http transport..."
         )
         logger.info("📡 Server ready for MCP protocol messages")
 

@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ONTOLOGY_BASE_URI`); `R2RML_BASE_IRI` still names the row resources. The
   mapping's output changes: anything consuming the old IRIs must be updated.
 
+### Removed
+- **The SSE transport (`MCP_TRANSPORT=sse`).** Breaking. The MCP specification
+  deprecated HTTP+SSE, and v2.1.0 warned about it at startup. The server now
+  speaks streamable HTTP only, at `http://<host>:9000/mcp`; `MCP_TRANSPORT=sse`
+  stops it at startup with that hint, rather than silently serving HTTP at a
+  URL the client never asks for. The LibreChat, Vercel AI SDK and n8n
+  examples connect over streamable HTTP.
+
 ### Fixed
 - **OBQC reads every column of a composite key.** It took one of a
   relationship's key columns and ignored the rest, so a join on part of a

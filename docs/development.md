@@ -40,7 +40,7 @@ Edit `.env` with your database credentials and server settings. Key variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MCP_TRANSPORT` | `http` | Transport mode (`http` or `sse`) |
+| `MCP_TRANSPORT` | `http` | Transport mode (`http`, streamable HTTP; `sse` was removed) |
 | `MCP_SERVER_HOST` | `localhost` | Server bind address |
 | `MCP_SERVER_PORT` | `9000` | Server port |
 | `ONTOLOGY_BASE_URI` | `http://example.com/ontology/` | RDF namespace base |
