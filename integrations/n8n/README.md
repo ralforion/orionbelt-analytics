@@ -27,6 +27,11 @@ uv run server.py
 
 3. Import the workflow: n8n menu > Import from File > select the JSON file
 
+4. Open the **OrionBelt Analytics MCP** node and check that **Server Transport** is
+   **HTTP Streamable** and the endpoint URL ends in `/mcp`. The server no longer
+   offers the SSE transport, and older n8n versions may import the node with an
+   SSE endpoint instead.
+
 ## AI Agent Workflow
 
 `workflow_ai_agent.json` creates a chat-based AI agent with OrionBelt Analytics tools:

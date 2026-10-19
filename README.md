@@ -138,12 +138,13 @@ claude mcp add orionbelt-analytics http://localhost:9000/mcp
 
 ### LibreChat
 
-Set `MCP_TRANSPORT=sse` in `.env`, restart the server, then add to `librechat.yaml`:
+Add to `librechat.yaml`:
 
 ```yaml
 mcpServers:
   OrionBelt-Analytics:
-    url: "http://host.docker.internal:9000/sse"
+    type: streamable-http
+    url: "http://host.docker.internal:9000/mcp"
     timeout: 60000
     startup: true
 ```

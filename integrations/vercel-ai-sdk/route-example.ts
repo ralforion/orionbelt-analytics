@@ -4,7 +4,7 @@
  * Place this file at: app/api/chat/route.ts
  *
  * Prerequisites:
- *   npm install ai @ai-sdk/anthropic
+ *   npm install ai @ai-sdk/anthropic @modelcontextprotocol/sdk
  *
  * Environment variables:
  *   ANTHROPIC_API_KEY=sk-ant-...
@@ -14,6 +14,7 @@
 import { streamText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { experimental_createMCPClient as createMCPClient } from "ai";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const SYSTEM_PROMPT = `You are a database intelligence assistant powered by OrionBelt Analytics.
 You help users analyze database schemas, generate ontologies, and write safe SQL queries.
@@ -40,10 +41,7 @@ export async function POST(req: Request) {
   const mcpUrl = process.env.ORIONBELT_MCP_URL || "http://localhost:9000/mcp";
 
   const client = await createMCPClient({
-    transport: {
-      type: "sse",
-      url: mcpUrl,
-    },
+    transport: new StreamableHTTPClientTransport(new URL(mcpUrl)),
   });
 
   const tools = await client.tools();

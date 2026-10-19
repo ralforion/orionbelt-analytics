@@ -132,9 +132,8 @@ WORKSPACE_MAX_AGE_DAYS=30
 SEMANTIC_NAMING_MODE=auto
 
 # MCP Transport Configuration
-# Options: http, sse (Server-Sent Events)
-# - http: Standard HTTP transport (streamable, default)
-# - sse: Server-Sent Events for (legacy)
+# Options: http (streamable HTTP, endpoint /mcp)
+# The legacy sse transport was removed; MCP_TRANSPORT=sse stops the server.
 MCP_TRANSPORT=http
 
 # MCP Server configuration
@@ -281,7 +280,7 @@ DATABRICKS_SCHEMA=default
 | `ONTOLOGY_BASE_URI` | `http://example.com/ontology/` | Base URI for generated RDF ontologies |
 | `R2RML_BASE_IRI` | `http://mycompany.com/` | Base IRI for R2RML subject templates (row resources); classes and properties use `ONTOLOGY_BASE_URI` |
 | `OUTPUT_DIR` | `tmp` | Directory for generated files (relative to project root) |
-| `MCP_TRANSPORT` | `http` | MCP transport mode: `http`, or `sse` (deprecated) |
+| `MCP_TRANSPORT` | `http` | MCP transport mode: `http` (streamable HTTP). `sse` was removed |
 | `MCP_CACHE_TTL_SECONDS` | `300` | How long a client on MCP 2026-07-28 may cache the tool list, the resource list and resource reads. Sent as a `private` cache hint; `0` sends none. Raise it for fewer round trips, lower it while developing tools |
 | `SESSIONLESS_FALLBACK` | `sole_session` | What a call with neither an MCP session nor a `connection` handle resolves to: `sole_session` (the only live session opened without a transport session, if there is exactly one; logged as a warning on first use) or `none` (always an error). **Use `none` when several people share the server** |
 | `MCP_SERVER_HOST` | `localhost` | Host address the server binds to |
@@ -449,35 +448,27 @@ MCP_SERVER_PORT=9000
 }
 ```
 
-### `sse` (deprecated)
+### `sse` (removed)
 
-> **Deprecated.** The MCP specification deprecated the HTTP+SSE transport in
-> its 2026-07-28 revision, and the server logs a warning at startup when this
-> mode is selected. It will be removed in a future release. Use `http`.
-
-Server-Sent Events transport for backward compatibility with older MCP clients. Use this mode for LibreChat integration or other clients that do not support streamable HTTP.
-
-```env
-MCP_TRANSPORT=sse
-MCP_SERVER_HOST=localhost
-MCP_SERVER_PORT=9000
-```
+The HTTP+SSE transport was deprecated by the MCP specification, warned about
+at startup in v2.1.x, and has been removed. `MCP_TRANSPORT=sse` now stops the
+server at startup with a message to use `http`. Clients connect to the
+streamable HTTP endpoint, `http://<host>:9000/mcp`, instead of `/sse`.
 
 **LibreChat** configuration (`librechat.yaml`):
 
 ```yaml
 mcpServers:
   OrionBelt-Analytics:
-    url: "http://host.docker.internal:9000/sse"
+    type: streamable-http
+    url: "http://host.docker.internal:9000/mcp"
     timeout: 60000
     startup: true
 ```
 
-**Note:** LibreChat requires SSE transport. Set `MCP_TRANSPORT=sse` before starting the server when using LibreChat.
-
 ### Transport Validation
 
-The server automatically validates the `MCP_TRANSPORT` value on startup. If an invalid value is provided, it defaults to `http` and logs a warning.
+The server validates `MCP_TRANSPORT` on startup. `sse` stops it with an error, since the transport was removed; any other unknown value defaults to `http` with a warning.
 
 ---
 

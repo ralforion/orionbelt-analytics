@@ -11,9 +11,9 @@ TypeScript integration for the [Vercel AI SDK](https://ai-sdk.dev) that connects
 ## Prerequisites
 
 ```bash
-npm install ai @ai-sdk/anthropic
+npm install ai @ai-sdk/anthropic @modelcontextprotocol/sdk
 # Or with OpenAI:
-npm install ai @ai-sdk/openai
+npm install ai @ai-sdk/openai @modelcontextprotocol/sdk
 ```
 
 ## Setup
@@ -50,12 +50,12 @@ app/
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { experimental_createMCPClient as createMCPClient } from "ai";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const client = await createMCPClient({
-  transport: {
-    type: "sse",
-    url: "http://localhost:9000/mcp",
-  },
+  transport: new StreamableHTTPClientTransport(
+    new URL("http://localhost:9000/mcp"),
+  ),
 });
 
 const tools = await client.tools();

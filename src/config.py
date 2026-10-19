@@ -19,6 +19,9 @@ from .constants import (
 
 logger = logging.getLogger(__name__)
 
+# Accepted until v2.1.x with a deprecation warning, now refused at startup.
+_REMOVED_TRANSPORT = "sse"
+
 
 SEMANTIC_NAMING_MODES = ("auto", "input_required", "review")
 
@@ -190,8 +193,10 @@ class ServerConfig:
         if not self.ontology_base_uri.endswith("/"):
             self.ontology_base_uri += "/"
 
-        # Validate transport type
-        if self.mcp_transport not in ["http", "sse"]:
+        # Validate transport type. "sse" is kept as given, so validate_config
+        # can say it was removed rather than start an HTTP server at another
+        # URL that its clients never reach.
+        if self.mcp_transport not in ["http", _REMOVED_TRANSPORT]:
             logger.warning(
                 f"Invalid MCP_TRANSPORT value '{self.mcp_transport}'. Defaulting to 'http'."
             )
@@ -335,19 +340,20 @@ class ConfigManager:
         config = self.get_server_config()
 
         # Validate transport type
-        valid_transports = {"http", "sse"}
+        if config.mcp_transport == _REMOVED_TRANSPORT:
+            # Superseded since MCP 2025-03-26, Deprecated in 2026-07-28, and
+            # removed here after a release of warnings (v2.1.0).
+            raise ValueError(
+                "MCP_TRANSPORT=sse is no longer supported: the MCP specification "
+                "deprecated the HTTP+SSE transport. Set MCP_TRANSPORT=http and "
+                "point clients at the streamable HTTP endpoint "
+                f"(http://<host>:{config.mcp_server_port}/mcp)."
+            )
+        valid_transports = {"http"}
         if config.mcp_transport not in valid_transports:
             raise ValueError(
                 f"Invalid MCP_TRANSPORT='{config.mcp_transport}'. "
                 f"Must be one of: {', '.join(sorted(valid_transports))}"
-            )
-        if config.mcp_transport == "sse":
-            # The HTTP+SSE transport has been superseded since MCP 2025-03-26
-            # and is formally Deprecated in the 2026-07-28 revision.
-            logger.warning(
-                "MCP_TRANSPORT=sse is deprecated and will be removed in a future "
-                "release: the MCP specification has deprecated the HTTP+SSE "
-                "transport. Switch to MCP_TRANSPORT=http (streamable HTTP)."
             )
 
         # Validate port range
