@@ -25,6 +25,7 @@ from typing import Any, cast
 from fastmcp import Context
 from pydantic import BaseModel
 
+from .auth import current_user
 from .database_manager import DatabaseManager
 from .exceptions import SessionRequiredError, UnknownConnectionError
 from .obqc_validator import OBQCValidator, PreparedOntology, prepare_ontology
@@ -403,6 +404,7 @@ class ServerState:
 
     def _register(self, session_key: str) -> SessionData:
         session = SessionData()
+        session.owner = current_user()
         session.handle = self._mint_handle()
         self._handles[session.handle] = session_key
         self._sessions[session_key] = session
@@ -416,6 +418,7 @@ class ServerState:
         """
         handle = self._mint_handle()
         session = SessionData()
+        session.owner = current_user()
         session.handle = handle
         key = f"{_HANDLE_SESSION_PREFIX}{handle}"
         self._handles[handle] = key
@@ -450,13 +453,18 @@ class ServerState:
         key = self._handles.get(handle)
         return self._sessions.get(key) if key is not None else None
 
-    def sole_session(self) -> SessionData | None:
+    def sole_session(self, owner: str | None = None) -> SessionData | None:
         """The only live session a caller without a transport session can be.
 
         Only sessions that were themselves opened without a transport session
         are candidates. A session that belongs to a transport session has a
         client that identifies itself on every request, so a caller who does
-        not cannot be that client, however alone that session is.
+        not cannot be that client, however alone that session is. With
+        authentication, only the caller's own sessions count: another user's
+        session is never the "only" one.
+
+        Args:
+            owner: The authenticated caller, or None without authentication.
 
         Returns:
             The session, if exactly one candidate is live.
@@ -464,7 +472,7 @@ class ServerState:
         candidates = [
             session
             for key, session in self._sessions.items()
-            if key.startswith(_HANDLE_SESSION_PREFIX)
+            if key.startswith(_HANDLE_SESSION_PREFIX) and session.owner == owner
         ]
         if len(candidates) != 1:
             return None
@@ -958,16 +966,32 @@ def get_session_data(ctx: Context) -> SessionData:
         UnknownConnectionError: The handle names no live session.
         SessionRequiredError: Nothing identifies the caller.
     """
+    user = current_user()
     handle = _requested_handle.get()
     if handle is not None:
-        return _server_state.session_for_handle(handle)
+        session = _server_state.session_for_handle(handle)
+        if session.owner != user:
+            # Indistinguishable from an unknown handle: whether another
+            # user's handle exists is not the caller's business.
+            raise UnknownConnectionError(
+                f"Unknown or expired connection handle '{handle}'. Call "
+                "connect_database to get a new one, then pass it as the "
+                "`connection` argument."
+            )
+        return session
 
     session_id = _transport_session_id(ctx)
     if session_id is not None:
-        return _server_state.get_session(session_id)
+        session = _server_state.get_session(session_id)
+        if session.owner != user:
+            raise UnknownConnectionError(
+                "This MCP session was opened by another user. Start a new "
+                "session with your own credentials."
+            )
+        return session
 
     if _sessionless_fallback_enabled():
-        sole = _server_state.sole_session()
+        sole = _server_state.sole_session(owner=user)
         if sole is not None:
             if not sole.fallback_noted:
                 sole.fallback_noted = True

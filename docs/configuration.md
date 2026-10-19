@@ -283,6 +283,12 @@ DATABRICKS_SCHEMA=default
 | `OUTPUT_DIR` | `tmp` | Directory for generated files (relative to project root) |
 | `MCP_TRANSPORT` | `http` | MCP transport mode: `http`, or `sse` (deprecated) |
 | `MCP_CACHE_TTL_SECONDS` | `300` | How long a client on MCP 2026-07-28 may cache the tool list, the resource list and resource reads. Sent as a `private` cache hint; `0` sends none. Raise it for fewer round trips, lower it while developing tools |
+| `MCP_AUTH` | `none` | `jwt` requires a bearer token on every HTTP request; see [Authentication](#authentication). Unknown values stop the server |
+| `MCP_AUTH_JWKS_URI` / `MCP_AUTH_PUBLIC_KEY` | -- | Exactly one: the issuer's JWKS URL, or a PEM public key (or the shared secret for HS256/384/512) |
+| `MCP_AUTH_ISSUER` / `MCP_AUTH_AUDIENCE` | -- | Required with `jwt`: the `iss` tokens must come from, and this server's `aud` |
+| `MCP_AUTH_ALGORITHM` | `RS256` | Signing algorithm to accept |
+| `MCP_AUTH_REQUIRED_SCOPES` | -- | Comma- or space-separated scopes every token must carry |
+| `MCP_AUTH_RESOURCE_URL` | -- | This server's public URL; advertises the issuer to MCP clients (RFC 9728) so they can log in |
 | `SESSIONLESS_FALLBACK` | `sole_session` | What a call with neither an MCP session nor a `connection` handle resolves to: `sole_session` (the only live session opened without a transport session, if there is exactly one; logged as a warning on first use) or `none` (always an error). **Use `none` when several people share the server** |
 | `MCP_SERVER_HOST` | `localhost` | Host address the server binds to |
 | `MCP_SERVER_PORT` | `9000` | Port the server listens on |
@@ -416,6 +422,45 @@ Either way the response is identical, and the server logs which path a request t
 **Logging:** look for lines starting with `MCP sampling:` in the server log to verify the path a request took: one when the request is handed to the client (with the item count) and one when the answer is parsed (with the suggestion counts and the model name). The two rounds are separate requests, so no elapsed time is logged. When the review path is chosen instead, a line says why: `Client cannot answer a sampling request; using the review path`, or a warning if `SEMANTIC_NAMING_MODE=input_required` asked for more than the client can do.
 
 ---
+
+## Authentication
+
+Off by default, which suits a single user on stdio or a private network.
+With `MCP_AUTH=jwt`, the HTTP transport accepts only requests that carry a
+JSON Web Token (`Authorization: Bearer ...`) signed by the configured issuer
+for this server's audience; anything else gets HTTP 401 before any tool runs.
+FastMCP's `JWTVerifier` checks the signature (against the issuer's JWKS, with
+key rotation, or a fixed key), expiry, issuer, audience and any required
+scopes.
+
+```env
+MCP_AUTH=jwt
+MCP_AUTH_JWKS_URI=https://login.example.com/.well-known/jwks.json
+MCP_AUTH_ISSUER=https://login.example.com/
+MCP_AUTH_AUDIENCE=orionbelt-analytics
+# Optional
+MCP_AUTH_REQUIRED_SCOPES=oba:use
+MCP_AUTH_RESOURCE_URL=https://analytics.example.com
+```
+
+The token's issuer and subject (`iss` + `sub`) identify the user. Each
+session -- whether reached by an MCP session or a `connection` handle --
+belongs to the user who opened it: another user's handle is treated as
+unknown, and the sole-session fallback only considers the caller's own
+sessions. Ontology state in memory is per session, so it is per user too.
+
+What authentication does **not** separate yet:
+
+- **Database credentials.** Every user queries with the server's
+  configured credentials; a token decides who may use the server, not which
+  database rows they see.
+- **The workspace on disk.** Generated ontology versions, saved semantic
+  models and RDF graphs are kept per database connection, so users of the
+  same database share them (planned: per-user workspaces).
+
+Setting `MCP_AUTH` to an unknown value, or `jwt` without a key, issuer or
+audience, stops the server at startup rather than run it unauthenticated.
+stdio has no tokens and is unaffected.
 
 ## Transport Configuration
 

@@ -31,7 +31,8 @@ from . import __name__ as SERVER_NAME
 from . import __version__
 
 # --- Centralized path and env loading (Task 1 & 2) ---
-from .config import resolve_mcp_cache_ttl
+from .auth import build_auth_provider
+from .config import config_manager, resolve_mcp_cache_ttl
 from .paths import ensure_output_dir, get_env_file_path
 
 # Load environment variables using centralized path resolution (Task 1: C4 fix)
@@ -94,6 +95,8 @@ _CACHE_TTL = resolve_mcp_cache_ttl()
 mcp = FastMCP(
     name=SERVER_NAME,
     version=__version__,
+    # Bearer-token verification on the HTTP transport when MCP_AUTH=jwt.
+    auth=build_auth_provider(config_manager.get_auth_config()),
     cache_ttl=_CACHE_TTL or None,
     cache_scope="private" if _CACHE_TTL else None,
     instructions="""

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Bearer-token authentication (`MCP_AUTH=jwt`).** The HTTP transport can
+  require a JSON Web Token on every request, verified by FastMCP's
+  `JWTVerifier` against the issuer's JWKS or a key, with issuer, audience,
+  expiry and optional scopes checked; other requests get HTTP 401. The token's
+  issuer and subject identify the user, and sessions belong to theirs: another
+  user's connection handle or MCP session is refused, and the sole-session
+  fallback only sees the caller's own. `MCP_AUTH_RESOURCE_URL` advertises the
+  issuer to MCP clients (RFC 9728). Off by default; unknown values or missing
+  settings stop the server instead of running it open. Database credentials
+  and the on-disk workspace are still shared per connection.
+
 ### Changed
 - **OBQC weighs relationships by their evidence.** In schemas without
   declared keys -- most warehouses -- relationships are inferred from column
