@@ -43,9 +43,13 @@ def _jwt_config(**overrides) -> AuthConfig:
     return AuthConfig(**settings)
 
 
-def _token(subject: str, audience: str = AUDIENCE, issuer: str = ISSUER) -> str:
+def _token(
+    subject: str | None, audience: str = AUDIENCE, issuer: str = ISSUER, **extra
+) -> str:
     now = int(time.time())
-    claims = {"sub": subject, "iss": issuer, "aud": audience, "iat": now}
+    claims = {"iss": issuer, "aud": audience, "iat": now, **extra}
+    if subject is not None:
+        claims["sub"] = subject
     claims["exp"] = now + 300
     return jwt.encode({"alg": "HS256"}, claims, OctKey.import_key(SECRET))
 
@@ -99,6 +103,44 @@ def test_settings_are_read_from_the_environment(monkeypatch):
     assert isinstance(build_auth_provider(config), JWTVerifier)
 
 
+@pytest.mark.parametrize(
+    ("given", "canonical"),
+    [
+        ("EdDSA", "EdDSA"),
+        ("Ed25519", "Ed25519"),
+        ("ed448", "Ed448"),
+        ("EDDSA", "EdDSA"),
+        ("es256", "ES256"),
+        (" RS256 ", "RS256"),
+    ],
+)
+def test_the_algorithm_keeps_its_canonical_spelling(monkeypatch, given, canonical):
+    """Mixed-case names must reach JWTVerifier as it spells them."""
+    monkeypatch.setenv("MCP_AUTH", "jwt")
+    monkeypatch.setenv("MCP_AUTH_PUBLIC_KEY", _ed25519_public_pem())
+    monkeypatch.setenv("MCP_AUTH_ISSUER", ISSUER)
+    monkeypatch.setenv("MCP_AUTH_AUDIENCE", AUDIENCE)
+    monkeypatch.setenv("MCP_AUTH_ALGORITHM", given)
+    config = ConfigManager().get_auth_config()
+    assert config.algorithm == canonical
+    assert build_auth_provider(config).algorithm == canonical
+
+
+def test_an_unknown_algorithm_fails_validation():
+    with pytest.raises(ValueError, match="MCP_AUTH_ALGORITHM"):
+        _jwt_config(algorithm="none").validate()
+
+
+def _ed25519_public_pem() -> str:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    public = Ed25519PrivateKey.generate().public_key()
+    return public.public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+
+
 def test_a_resource_url_advertises_the_issuer_for_login():
     provider = build_auth_provider(_jwt_config(resource_url="https://oba.example"))
     assert isinstance(provider, RemoteAuthProvider)
@@ -111,6 +153,8 @@ def test_the_user_is_issuer_and_subject():
 
     assert user_key(Token({"iss": ISSUER, "sub": "alice"})) == f"{ISSUER}|alice"
     assert user_key(Token({"iss": ISSUER})) is None
+    assert user_key(Token({"iss": ISSUER, "sub": "  "})) is None
+    assert user_key(Token({"iss": ISSUER, "sub": 42})) is None
     assert user_key(None) is None
 
 
@@ -209,12 +253,24 @@ _INITIALIZE = {
 
 @pytest.mark.parametrize(
     "token",
-    [None, "not-a-jwt", "wrong-audience", "wrong-issuer", "wrong-secret"],
+    [
+        None,
+        "not-a-jwt",
+        "wrong-audience",
+        "wrong-issuer",
+        "wrong-secret",
+        "no-subject",
+        "empty-subject",
+    ],
 )
 async def test_requests_without_a_valid_token_get_401(secured, token):
     bad = {
         "wrong-audience": lambda: _token("alice", audience="another-service"),
         "wrong-issuer": lambda: _token("alice", issuer="https://elsewhere.example"),
+        # Signed and otherwise valid, but naming nobody: all such tokens
+        # would share one identity and so each other's sessions.
+        "no-subject": lambda: _token(None, client_id="client-a"),
+        "empty-subject": lambda: _token("", client_id="client-a"),
         "wrong-secret": lambda: jwt.encode(
             {"alg": "HS256"},
             {"sub": "alice", "iss": ISSUER, "aud": AUDIENCE, "exp": 2**31},

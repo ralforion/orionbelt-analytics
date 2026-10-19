@@ -286,7 +286,7 @@ DATABRICKS_SCHEMA=default
 | `MCP_AUTH` | `none` | `jwt` requires a bearer token on every HTTP request; see [Authentication](#authentication). Unknown values stop the server |
 | `MCP_AUTH_JWKS_URI` / `MCP_AUTH_PUBLIC_KEY` | -- | Exactly one: the issuer's JWKS URL, or a PEM public key (or the shared secret for HS256/384/512) |
 | `MCP_AUTH_ISSUER` / `MCP_AUTH_AUDIENCE` | -- | Required with `jwt`: the `iss` tokens must come from, and this server's `aud` |
-| `MCP_AUTH_ALGORITHM` | `RS256` | Signing algorithm to accept |
+| `MCP_AUTH_ALGORITHM` | `RS256` | Signing algorithm to accept: HS256/384/512, RS256/384/512, ES256/384/512, PS256/384/512, Ed25519, Ed448 or EdDSA (case-insensitive). Others stop the server |
 | `MCP_AUTH_REQUIRED_SCOPES` | -- | Comma- or space-separated scopes every token must carry |
 | `MCP_AUTH_RESOURCE_URL` | -- | This server's public URL; advertises the issuer to MCP clients (RFC 9728) so they can log in |
 | `SESSIONLESS_FALLBACK` | `sole_session` | What a call with neither an MCP session nor a `connection` handle resolves to: `sole_session` (the only live session opened without a transport session, if there is exactly one; logged as a warning on first use) or `none` (always an error). **Use `none` when several people share the server** |
@@ -443,7 +443,8 @@ MCP_AUTH_REQUIRED_SCOPES=oba:use
 MCP_AUTH_RESOURCE_URL=https://analytics.example.com
 ```
 
-The token's issuer and subject (`iss` + `sub`) identify the user. Each
+The token's issuer and subject (`iss` + `sub`) identify the user; a token
+without a subject is rejected, even when its signature is valid. Each
 session -- whether reached by an MCP session or a `connection` handle --
 belongs to the user who opened it: another user's handle is treated as
 unknown, and the sole-session fallback only considers the caller's own

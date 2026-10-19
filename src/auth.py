@@ -4,6 +4,7 @@ With ``MCP_AUTH=jwt`` every HTTP request must carry a JSON Web Token that the
 configured issuer signed for this server's audience. FastMCP verifies it
 (``JWTVerifier``: signature against a JWKS endpoint or a key, expiry, issuer,
 audience, scopes) and rejects the request with 401 before any tool runs.
+Tokens without a subject are rejected too, since the subject names the user.
 
 The verified token also names the caller. ``current_user`` turns it into a
 stable key -- issuer and subject -- that the session layer uses to keep one
@@ -22,6 +23,24 @@ from fastmcp.server.dependencies import get_access_token
 from .config import AuthConfig
 
 logger = logging.getLogger(__name__)
+
+
+class _SubjectJWTVerifier(JWTVerifier):
+    """A JWTVerifier that also rejects tokens without a subject.
+
+    The subject is what keeps users apart: every token without one would
+    otherwise be the same nobody, free to use each other's sessions.
+    """
+
+    async def load_access_token(self, token: str) -> AccessToken | None:
+        access = await super().load_access_token(token)
+        if access is not None and user_key(access) is None:
+            self.logger.warning(
+                "Bearer token rejected for client %s: no subject (sub) claim",
+                access.client_id,
+            )
+            return None
+        return access
 
 
 def build_auth_provider(config: AuthConfig) -> AuthProvider | None:
@@ -44,7 +63,7 @@ def build_auth_provider(config: AuthConfig) -> AuthProvider | None:
     if config.mode == "none":
         return None
 
-    verifier = JWTVerifier(
+    verifier = _SubjectJWTVerifier(
         jwks_uri=config.jwks_uri,
         public_key=config.public_key,
         issuer=config.issuer,
@@ -70,11 +89,13 @@ def user_key(token: AccessToken | None) -> str | None:
     """The stable identity in a verified token: issuer and subject.
 
     The subject alone is only unique per issuer, so both are part of it.
+    None when there is no token, or its subject is missing or not a
+    nonempty string; the verifier rejects such tokens.
     """
     if token is None:
         return None
     subject = token.claims.get("sub")
-    if not subject:
+    if not isinstance(subject, str) or not subject.strip():
         return None
     return f"{token.claims.get('iss', '')}|{subject}"
 

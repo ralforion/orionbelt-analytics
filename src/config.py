@@ -162,6 +162,27 @@ def _resolve_sessionless_fallback() -> str:
 
 _AUTH_MODES = ("none", "jwt")
 _HMAC_ALGORITHMS = ("HS256", "HS384", "HS512")
+# What JWTVerifier accepts, in its spelling. Mixed case matters: "EdDSA",
+# "Ed25519" and "Ed448" are not recognised in upper case.
+_JWT_ALGORITHMS = (
+    *_HMAC_ALGORITHMS,
+    *(f"{family}{bits}" for family in ("RS", "ES", "PS") for bits in (256, 384, 512)),
+    "EdDSA",
+    "Ed25519",
+    "Ed448",
+)
+
+
+def _canonical_algorithm(raw: str) -> str:
+    """The algorithm in its canonical spelling, matched regardless of case.
+
+    An unknown name is returned as given, for validation to reject.
+    """
+    name = raw.strip()
+    for known in _JWT_ALGORITHMS:
+        if known.lower() == name.lower():
+            return known
+    return name
 
 
 @dataclass
@@ -217,6 +238,11 @@ class AuthConfig:
                 f"MCP_AUTH=jwt needs {' and '.join(missing)}: tokens are only "
                 "accepted from a known issuer and for this server's audience."
             )
+        if self.algorithm not in _JWT_ALGORITHMS:
+            raise ValueError(
+                f"Unsupported MCP_AUTH_ALGORITHM='{self.algorithm}'. Must be one "
+                f"of: {', '.join(_JWT_ALGORITHMS)}"
+            )
         if self.algorithm in _HMAC_ALGORITHMS and self.jwks_uri:
             raise ValueError(
                 f"MCP_AUTH_ALGORITHM={self.algorithm} is a shared-secret "
@@ -232,7 +258,7 @@ def _load_auth_config() -> AuthConfig:
         public_key=os.getenv("MCP_AUTH_PUBLIC_KEY") or None,
         issuer=os.getenv("MCP_AUTH_ISSUER") or None,
         audience=os.getenv("MCP_AUTH_AUDIENCE") or None,
-        algorithm=os.getenv("MCP_AUTH_ALGORITHM", "RS256").strip().upper(),
+        algorithm=_canonical_algorithm(os.getenv("MCP_AUTH_ALGORITHM", "RS256")),
         required_scopes=[s for s in scopes.replace(",", " ").split() if s],
         resource_url=os.getenv("MCP_AUTH_RESOURCE_URL") or None,
     )
