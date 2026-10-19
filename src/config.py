@@ -2,7 +2,7 @@
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from dotenv import load_dotenv
@@ -160,6 +160,110 @@ def _resolve_sessionless_fallback() -> str:
     return "sole_session"
 
 
+_AUTH_MODES = ("none", "jwt")
+_HMAC_ALGORITHMS = ("HS256", "HS384", "HS512")
+# What JWTVerifier accepts, in its spelling. Mixed case matters: "EdDSA",
+# "Ed25519" and "Ed448" are not recognised in upper case.
+_JWT_ALGORITHMS = (
+    *_HMAC_ALGORITHMS,
+    *(f"{family}{bits}" for family in ("RS", "ES", "PS") for bits in (256, 384, 512)),
+    "EdDSA",
+    "Ed25519",
+    "Ed448",
+)
+
+
+def _canonical_algorithm(raw: str) -> str:
+    """The algorithm in its canonical spelling, matched regardless of case.
+
+    An unknown name is returned as given, for validation to reject.
+    """
+    name = raw.strip()
+    for known in _JWT_ALGORITHMS:
+        if known.lower() == name.lower():
+            return known
+    return name
+
+
+@dataclass
+class AuthConfig:
+    """Bearer-token authentication of the HTTP transport (``MCP_AUTH_*``)."""
+
+    # "none" (default) or "jwt": verify a JSON Web Token on every request.
+    mode: str = "none"
+    # Where the verification key comes from: the issuer's JWKS endpoint, or
+    # a PEM public key / shared HMAC secret. Exactly one of them.
+    jwks_uri: str | None = None
+    public_key: str | None = None
+    issuer: str | None = None
+    # This server's identifier in the token's "aud" claim. Required: without
+    # it, a token the issuer minted for any other service would be accepted.
+    audience: str | None = None
+    algorithm: str = "RS256"
+    required_scopes: list[str] = field(default_factory=list)
+    # Public URL of this server. When set, it advertises the issuer as its
+    # authorization server (RFC 9728), so MCP clients can find where to log in.
+    resource_url: str | None = None
+
+    def validate(self) -> None:
+        """Refuse settings that would leave the server open or never accept.
+
+        Raises:
+            ValueError: Unknown mode, or a jwt mode missing what it needs.
+        """
+        if self.mode not in _AUTH_MODES:
+            # Fail closed: a typo must not turn authentication off.
+            raise ValueError(
+                f"Invalid MCP_AUTH='{self.mode}'. Must be one of: "
+                f"{', '.join(_AUTH_MODES)}"
+            )
+        if self.mode == "none":
+            return
+        if bool(self.jwks_uri) == bool(self.public_key):
+            raise ValueError(
+                "MCP_AUTH=jwt needs exactly one of MCP_AUTH_JWKS_URI (the "
+                "issuer's key set) or MCP_AUTH_PUBLIC_KEY (a PEM public key, or "
+                "the shared secret for HS256/384/512)."
+            )
+        missing = [
+            name
+            for name, value in (
+                ("MCP_AUTH_ISSUER", self.issuer),
+                ("MCP_AUTH_AUDIENCE", self.audience),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"MCP_AUTH=jwt needs {' and '.join(missing)}: tokens are only "
+                "accepted from a known issuer and for this server's audience."
+            )
+        if self.algorithm not in _JWT_ALGORITHMS:
+            raise ValueError(
+                f"Unsupported MCP_AUTH_ALGORITHM='{self.algorithm}'. Must be one "
+                f"of: {', '.join(_JWT_ALGORITHMS)}"
+            )
+        if self.algorithm in _HMAC_ALGORITHMS and self.jwks_uri:
+            raise ValueError(
+                f"MCP_AUTH_ALGORITHM={self.algorithm} is a shared-secret "
+                "algorithm; set the secret in MCP_AUTH_PUBLIC_KEY, not a JWKS URI."
+            )
+
+
+def _load_auth_config() -> AuthConfig:
+    scopes = os.getenv("MCP_AUTH_REQUIRED_SCOPES", "")
+    return AuthConfig(
+        mode=os.getenv("MCP_AUTH", "none").strip().lower(),
+        jwks_uri=os.getenv("MCP_AUTH_JWKS_URI") or None,
+        public_key=os.getenv("MCP_AUTH_PUBLIC_KEY") or None,
+        issuer=os.getenv("MCP_AUTH_ISSUER") or None,
+        audience=os.getenv("MCP_AUTH_AUDIENCE") or None,
+        algorithm=_canonical_algorithm(os.getenv("MCP_AUTH_ALGORITHM", "RS256")),
+        required_scopes=[s for s in scopes.replace(",", " ").split() if s],
+        resource_url=os.getenv("MCP_AUTH_RESOURCE_URL") or None,
+    )
+
+
 @dataclass
 class ServerConfig:
     """Server configuration settings."""
@@ -250,6 +354,7 @@ class ConfigManager:
         load_dotenv(env_path)
         self._server_config: ServerConfig | None = None
         self._db_config: DatabaseConfig | None = None
+        self._auth_config: AuthConfig | None = None
 
     def get_server_config(self) -> ServerConfig:
         """Get server configuration."""
@@ -280,6 +385,12 @@ class ConfigManager:
             )
             logger.info("Server configuration loaded")
         return self._server_config
+
+    def get_auth_config(self) -> AuthConfig:
+        """Get bearer-token authentication settings."""
+        if self._auth_config is None:
+            self._auth_config = _load_auth_config()
+        return self._auth_config
 
     def get_database_config(self) -> DatabaseConfig:
         """Get database configuration."""
@@ -349,6 +460,8 @@ class ConfigManager:
                 "release: the MCP specification has deprecated the HTTP+SSE "
                 "transport. Switch to MCP_TRANSPORT=http (streamable HTTP)."
             )
+
+        self.get_auth_config().validate()
 
         # Validate port range
         if not (1 <= config.mcp_server_port <= 65535):

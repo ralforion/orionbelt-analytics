@@ -25,7 +25,7 @@ uv run python scripts/gen-third-party-notices.py   # refresh THIRD_PARTY_NOTICES
 pre-commit run --all-files               # all of the above as configured hooks
 ```
 
-Config comes from `.env` (copy from `.env.template`). At minimum set credentials for one database. Key vars: `MCP_TRANSPORT` (http/sse), `MCP_SERVER_PORT` (9000), `AUTO_GRAPHRAG`, `SESSION_IDLE_TIMEOUT_SECONDS`, `AUTO_CLEANUP_ON_STARTUP`.
+Config comes from `.env` (copy from `.env.template`). At minimum set credentials for one database. Key vars: `MCP_TRANSPORT` (http/sse), `MCP_SERVER_PORT` (9000), `AUTO_GRAPHRAG`, `SESSION_IDLE_TIMEOUT_SECONDS`, `AUTO_CLEANUP_ON_STARTUP`, `MCP_AUTH` (none/jwt, see `docs/configuration.md#authentication`).
 
 ## Architecture
 
