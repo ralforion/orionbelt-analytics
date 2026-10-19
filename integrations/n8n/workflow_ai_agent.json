@@ -39,7 +39,7 @@
       },
       "id": "mcp-client",
       "name": "OrionBelt Analytics MCP",
-      "type": "@n8n/n8n-nodes-langchain.toolMCP",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
       "typeVersion": 1.1,
       "position": [520, 520],
       "notes": "Connects to OrionBelt Analytics MCP server. All 20+ tools are auto-discovered."
