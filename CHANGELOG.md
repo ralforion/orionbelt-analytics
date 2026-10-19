@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-19
+
+### Upgrade notes
+- **`MCP_TRANSPORT=sse` no longer starts the server.** Set `MCP_TRANSPORT=http`
+  (or leave it unset) and point clients at `http://<host>:9000/mcp`. v2.1.0 has
+  warned about this at every start.
+- **Regenerate R2RML mappings used outside OBA.** Classes and properties in the
+  mapping are now the ontology's own IRIs, and foreign-key properties may be
+  named apart, so engines such as Ontop and queries over the old IRIs need the
+  new mapping.
+- **Authentication is opt-in.** Nothing changes until `MCP_AUTH=jwt` is set;
+  see `docs/configuration.md#authentication`.
+
 ### Added
 - **Bearer-token authentication (`MCP_AUTH=jwt`).** The HTTP transport can
   require a JSON Web Token on every request, verified by FastMCP's
