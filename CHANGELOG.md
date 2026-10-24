@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Dependency advisories cleared in the shipped tree**: `pillow` 12.3.0 →
+  13.0.0, `fastmcp` 4.0.10 → 4.1.3, `certifi`, `opentelemetry-*` 1.44 → 1.45.1,
+  and `filelock` 3.32.4 → 4.2.4. filelock 4 needs the Snowflake connector 5
+  line, so `snowflake-connector-python` moves 4.8.0 → 5.1.0 and
+  `snowflake-sqlalchemy` 1.11.1 → 2.0.0 (which drops `boto3`, `pyOpenSSL` and
+  their dependencies, and pulls `protobuf` back to 6.33). Targeted upgrades,
+  not a re-resolve. Supersedes #185 and #186.
+
 ## [2.2.0] - 2026-10-19
 
 ### Upgrade notes
