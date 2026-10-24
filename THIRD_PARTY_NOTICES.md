@@ -80,7 +80,7 @@ files themselves must be published under MPL-2.0.
 
 | Licence | Packages |
 | --- | --- |
-| Apache-2.0 | 59 |
+| Apache-2.0 | 55 |
 | Apache-2.0 AND CNRI-Python | 1 |
 | Apache-2.0 AND MIT | 1 |
 | Apache-2.0 OR BSD-2-Clause | 1 |
@@ -90,7 +90,7 @@ files themselves must be published under MPL-2.0.
 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | 1 |
 | ISC | 4 |
 | LGPL-3.0-or-later WITH psycopg-exception | 1 |
-| MIT | 75 |
+| MIT | 73 |
 | MIT AND PSF-2.0 | 1 |
 | MIT OR AFL-2.1 | 1 |
 | MIT OR Apache-2.0 | 1 |
@@ -103,7 +103,7 @@ files themselves must be published under MPL-2.0.
 | Unlicense | 1 |
 | W3C-20150513 | 1 |
 
-194 packages in total.
+188 packages in total.
 
 ## Packages
 
@@ -116,14 +116,11 @@ files themselves must be published under MPL-2.0.
 | annotated-doc | MIT | <https://pypi.org/project/annotated-doc/> |
 | annotated-types | MIT | <https://pypi.org/project/annotated-types/> |
 | anyio | MIT | <https://pypi.org/project/anyio/> |
-| asn1crypto | MIT | <https://pypi.org/project/asn1crypto/> |
 | asynch | Apache-2.0 | <https://pypi.org/project/asynch/> |
 | attrs | MIT | <https://pypi.org/project/attrs/> |
 | Authlib | BSD-3-Clause | <https://pypi.org/project/authlib/> |
 | bcrypt | Apache-2.0 | <https://pypi.org/project/bcrypt/> |
 | beartype | MIT | <https://pypi.org/project/beartype/> |
-| boto3 | Apache-2.0 | <https://pypi.org/project/boto3/> |
-| botocore | Apache-2.0 | <https://pypi.org/project/botocore/> |
 | build | MIT | <https://pypi.org/project/build/> |
 | cachetools | MIT | <https://pypi.org/project/cachetools/> |
 | caio | Apache-2.0 | <https://pypi.org/project/caio/> |
@@ -182,7 +179,6 @@ files themselves must be published under MPL-2.0.
 | jaraco.context | MIT | <https://pypi.org/project/jaraco-context/> |
 | jaraco.functools | MIT | <https://pypi.org/project/jaraco-functools/> |
 | jeepney | MIT | <https://pypi.org/project/jeepney/> |
-| jmespath | MIT | <https://pypi.org/project/jmespath/> |
 | joblib | BSD-3-Clause | <https://pypi.org/project/joblib/> |
 | joserfc | BSD-3-Clause | <https://pypi.org/project/joserfc/> |
 | jsonref | MIT | <https://pypi.org/project/jsonref/> |
@@ -212,6 +208,7 @@ files themselves must be published under MPL-2.0.
 | openapi-pydantic | MIT | <https://pypi.org/project/openapi-pydantic/> |
 | openpyxl | MIT | <https://pypi.org/project/openpyxl/> |
 | opentelemetry-api | Apache-2.0 | <https://pypi.org/project/opentelemetry-api/> |
+| opentelemetry-exporter-otlp-common | Apache-2.0 | <https://pypi.org/project/opentelemetry-exporter-otlp-common/> |
 | opentelemetry-exporter-otlp-proto-common | Apache-2.0 | <https://pypi.org/project/opentelemetry-exporter-otlp-proto-common/> |
 | opentelemetry-exporter-otlp-proto-grpc | Apache-2.0 | <https://pypi.org/project/opentelemetry-exporter-otlp-proto-grpc/> |
 | opentelemetry-proto | Apache-2.0 | <https://pypi.org/project/opentelemetry-proto/> |
@@ -244,7 +241,6 @@ files themselves must be published under MPL-2.0.
 | Pygments | BSD-2-Clause | <https://pypi.org/project/pygments/> |
 | PyJWT | MIT | <https://pypi.org/project/pyjwt/> |
 | PyMySQL | MIT | <https://pypi.org/project/pymysql/> |
-| pyOpenSSL | Apache-2.0 | <https://pypi.org/project/pyopenssl/> |
 | pyoxigraph | MIT OR Apache-2.0 | <https://pypi.org/project/pyoxigraph/> |
 | pyparsing | MIT | <https://pypi.org/project/pyparsing/> |
 | pyperclip | BSD-3-Clause | <https://pypi.org/project/pyperclip/> |
@@ -266,7 +262,6 @@ files themselves must be published under MPL-2.0.
 | rich | MIT | <https://pypi.org/project/rich/> |
 | rich-rst | MIT | <https://pypi.org/project/rich-rst/> |
 | rpds-py | MIT | <https://pypi.org/project/rpds-py/> |
-| s3transfer | Apache-2.0 | <https://pypi.org/project/s3transfer/> |
 | scikit-learn | BSD-3-Clause | <https://pypi.org/project/scikit-learn/> |
 | scipy | BSD-3-Clause | <https://pypi.org/project/scipy/> |
 | secretstorage | BSD-3-Clause | <https://pypi.org/project/secretstorage/> |
@@ -275,7 +270,6 @@ files themselves must be published under MPL-2.0.
 | six | MIT | <https://pypi.org/project/six/> |
 | snowflake-connector-python | Apache-2.0 | <https://pypi.org/project/snowflake-connector-python/> |
 | snowflake-sqlalchemy | Apache-2.0 | <https://pypi.org/project/snowflake-sqlalchemy/> |
-| sortedcontainers | Apache-2.0 | <https://pypi.org/project/sortedcontainers/> |
 | SQLAlchemy | MIT | <https://pypi.org/project/sqlalchemy/> |
 | sqlalchemy-bigquery | MIT | <https://pypi.org/project/sqlalchemy-bigquery/> |
 | sqlglot | MIT | <https://pypi.org/project/sqlglot/> |
