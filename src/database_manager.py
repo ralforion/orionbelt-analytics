@@ -741,7 +741,7 @@ class DatabaseManager:
         warehouse: str,
         database: str,
         schema: str = "PUBLIC",
-        role: str = "PUBLIC",
+        role: str | None = None,
     ) -> bool:
         """Connect to Snowflake database with enhanced security and reliability."""
         from .drivers.snowflake import SnowflakeDriver

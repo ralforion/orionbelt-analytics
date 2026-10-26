@@ -45,7 +45,8 @@ class SnowflakeDriver(DatabaseDriver):
         """Connect to Snowflake.
 
         Expected params: account, username, password, warehouse, database,
-                         schema (default 'PUBLIC'), role (default 'PUBLIC').
+                         schema (default 'PUBLIC'), role (default: the user's
+                         default role in Snowflake).
         """
         account = params["account"]
         username = params["username"]
@@ -53,7 +54,7 @@ class SnowflakeDriver(DatabaseDriver):
         warehouse = params["warehouse"]
         database = params["database"]
         schema = params.get("schema", "PUBLIC")
-        role = params.get("role", "PUBLIC")
+        role = params.get("role")
 
         try:
             if not all([account, username, warehouse, database]):
@@ -62,10 +63,14 @@ class SnowflakeDriver(DatabaseDriver):
 
             encoded_password = quote_plus(password) if password else ""
 
+            # The dialect URL-decodes each part, so names may hold any character.
             connection_string = (
                 f"snowflake://{username}:{encoded_password}@{account}/"
-                f"{database}/{schema}?warehouse={warehouse}&role={role}"
+                f"{quote_plus(database)}/{quote_plus(schema)}"
+                f"?warehouse={quote_plus(warehouse)}"
             )
+            if role:
+                connection_string += f"&role={quote_plus(role)}"
 
             logger.info(
                 f"Connecting to Snowflake with account: {account}, database: {database}, "

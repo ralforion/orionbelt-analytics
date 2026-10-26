@@ -107,6 +107,58 @@ class TestDatabaseManager(unittest.TestCase):
         self.assertEqual(self.db_manager.connection_info["type"], "snowflake")
         self.assertEqual(self.db_manager.connection_info["account"], "test-account")
 
+    @patch("src.drivers.snowflake.create_engine")
+    def test_connect_snowflake_url_carries_encoded_names(self, mock_create_engine):
+        """Role and names reach the URL encoded, and decode back unchanged."""
+        from snowflake.sqlalchemy.snowdialect import SnowflakeDialect
+        from sqlalchemy.engine import make_url
+
+        mock_engine = mock_create_engine.return_value
+        mock_engine.connect.return_value.__enter__ = Mock(return_value=Mock())
+        mock_engine.connect.return_value.__exit__ = Mock(return_value=None)
+
+        result = self.db_manager.connect_snowflake(
+            account="test-account",
+            username="testuser",
+            password="testpass",
+            warehouse="WH 1",
+            database="MY DB",
+            schema="S/1",
+            role="DATA&ROLE",
+        )
+
+        self.assertTrue(result)
+        url = make_url(mock_create_engine.call_args.args[0])
+        _, opts = SnowflakeDialect().create_connect_args(url)
+        self.assertEqual(opts["role"], "DATA&ROLE")
+        self.assertEqual(opts["warehouse"], "WH 1")
+        self.assertEqual(opts["database"], "MY DB")
+        self.assertEqual(opts["schema"], "S/1")
+
+    @patch("src.drivers.snowflake.create_engine")
+    def test_connect_snowflake_without_role_leaves_default_role(
+        self, mock_create_engine
+    ):
+        """No role in the URL, so Snowflake uses the user's default role."""
+        from sqlalchemy.engine import make_url
+
+        mock_engine = mock_create_engine.return_value
+        mock_engine.connect.return_value.__enter__ = Mock(return_value=Mock())
+        mock_engine.connect.return_value.__exit__ = Mock(return_value=None)
+
+        result = self.db_manager.connect_snowflake(
+            account="test-account",
+            username="testuser",
+            password="testpass",
+            warehouse="COMPUTE_WH",
+            database="TESTDB",
+        )
+
+        self.assertTrue(result)
+        url = make_url(mock_create_engine.call_args.args[0])
+        self.assertNotIn("role", url.query)
+        self.assertEqual(url.query["warehouse"], "COMPUTE_WH")
+
     def test_validate_identifier(self):
         """Test identifier validation."""
         # Valid identifiers

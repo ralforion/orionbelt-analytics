@@ -317,6 +317,40 @@ class TestMCPToolsAsync:
         assert "Successfully connected" in result
         assert "snowflake" in result
 
+    @pytest.mark.parametrize(
+        ("role_env", "expected_role"),
+        [("ANALYST_ROLE", "ANALYST_ROLE"), ("", None)],
+    )
+    async def test_connect_database_snowflake_passes_role(
+        self, mock_ctx, mock_session_data, role_env, expected_role
+    ):
+        """SNOWFLAKE_ROLE reaches the connection; unset it is left to Snowflake."""
+        mock_db_manager = Mock()
+        mock_db_manager.connect_snowflake.return_value = True
+        mock_session_data.db_manager = mock_db_manager
+
+        with (
+            patch("src.main.get_session_data", return_value=mock_session_data),
+            patch("src.main.get_session_db_manager", return_value=mock_db_manager),
+            patch("src.main._get_connection_fingerprint", return_value="test5678efgh"),
+            patch.dict(
+                "os.environ",
+                {
+                    "SNOWFLAKE_ACCOUNT": "test-account",
+                    "SNOWFLAKE_USERNAME": "testuser",
+                    "SNOWFLAKE_PASSWORD": "testpass",
+                    "SNOWFLAKE_WAREHOUSE": "COMPUTE_WH",
+                    "SNOWFLAKE_DATABASE": "TESTDB",
+                    "SNOWFLAKE_SCHEMA": "PUBLIC",
+                    "SNOWFLAKE_ROLE": role_env,
+                },
+            ),
+        ):
+            await main_module.connect_database(mock_ctx, db_type="snowflake")
+
+        kwargs = mock_db_manager.connect_snowflake.call_args.kwargs
+        assert kwargs["role"] == expected_role
+
     async def test_connect_database_unsupported_type(self, mock_ctx):
         """Test connection with unsupported database type returns proper validation error."""
         result = await main_module.connect_database(mock_ctx, db_type="oracle")
