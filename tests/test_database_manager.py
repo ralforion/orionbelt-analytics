@@ -431,6 +431,35 @@ class TestDatabaseManager(unittest.TestCase):
                 uri="https://dremio.example", pat="pat"
             )
 
+    @patch("src.drivers.snowflake.create_engine")
+    def test_reconnect_snowflake_keeps_role(self, mock_create_engine):
+        """Recovery reconnects with the configured role, not the default one."""
+        from sqlalchemy.engine import make_url
+
+        mock_engine = mock_create_engine.return_value
+        mock_engine.connect.return_value.__enter__ = Mock(return_value=Mock())
+        mock_engine.connect.return_value.__exit__ = Mock(return_value=None)
+        self.assertTrue(
+            self.db_manager.connect_snowflake(
+                account="test-account",
+                username="testuser",
+                password="testpass",
+                warehouse="COMPUTE_WH",
+                database="TESTDB",
+                role="ANALYST_ROLE",
+            )
+        )
+        mock_create_engine.reset_mock()
+
+        self.db_manager._reconnect()
+
+        url = make_url(mock_create_engine.call_args.args[0])
+        self.assertEqual(url.query["role"], "ANALYST_ROLE")
+        self.assertEqual(self.db_manager.connection_info["role"], "ANALYST_ROLE")
+        self.assertEqual(
+            self.db_manager._last_connection_params["role"], "ANALYST_ROLE"
+        )
+
 
 class TestClickHouseConnection(unittest.TestCase):
     """Test suite for ClickHouse connection functionality."""

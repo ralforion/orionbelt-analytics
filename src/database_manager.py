@@ -524,6 +524,7 @@ class DatabaseManager:
                 params["warehouse"],
                 params["database"],
                 params.get("schema", "PUBLIC"),
+                params.get("role"),
             )
         elif params["type"] == "clickhouse":
             success = self.connect_clickhouse(
