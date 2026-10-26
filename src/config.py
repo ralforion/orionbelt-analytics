@@ -325,7 +325,7 @@ class DatabaseConfig:
     snowflake_warehouse: str | None = None
     snowflake_database: str | None = None
     snowflake_schema: str = DEFAULT_SNOWFLAKE_SCHEMA
-    snowflake_role: str = "PUBLIC"
+    snowflake_role: str | None = None
 
     # Dremio settings (following official dremio-mcp approach)
     dremio_uri: str | None = (
@@ -414,7 +414,7 @@ class ConfigManager:
                 snowflake_schema=os.getenv(
                     "SNOWFLAKE_SCHEMA", DEFAULT_SNOWFLAKE_SCHEMA
                 ),
-                snowflake_role=os.getenv("SNOWFLAKE_ROLE", "PUBLIC"),
+                snowflake_role=os.getenv("SNOWFLAKE_ROLE") or None,
                 # New PAT-based settings (preferred)
                 dremio_uri=os.getenv("DREMIO_URI"),
                 dremio_pat=os.getenv("DREMIO_PAT"),

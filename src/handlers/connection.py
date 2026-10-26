@@ -153,6 +153,8 @@ async def connect_database(
         warehouse = env("SNOWFLAKE_WAREHOUSE")
         database = env("SNOWFLAKE_DATABASE")
         schema = env("SNOWFLAKE_SCHEMA", "PUBLIC")
+        # Unset leaves the role to the user's default role in Snowflake.
+        role = env("SNOWFLAKE_ROLE") or None
         configured_schema = schema
 
         required_params = {
@@ -177,6 +179,7 @@ async def connect_database(
             warehouse=str(warehouse),
             database=str(database),
             schema=schema,
+            role=role,
         )
         db_name = str(database)
 

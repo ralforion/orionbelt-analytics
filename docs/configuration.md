@@ -211,7 +211,7 @@ SNOWFLAKE_PASSWORD=password
 SNOWFLAKE_WAREHOUSE=COMPUTE_WH
 SNOWFLAKE_DATABASE=MYDB
 SNOWFLAKE_SCHEMA=PUBLIC
-SNOWFLAKE_ROLE=PUBLIC
+SNOWFLAKE_ROLE=ANALYST                 # optional; unset uses the user's default role
 
 # -----------------------------------------------------------------
 # ClickHouse Configuration
