@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-10-27
+
+### Upgrade notes
+- **Snowflake connects with the user's default role when `SNOWFLAKE_ROLE` is
+  unset**, instead of always as `PUBLIC`. Every role inherits `PUBLIC`, so no
+  access is lost; set `SNOWFLAKE_ROLE=PUBLIC` to keep the old behaviour.
+
+### Fixed
+- **`SNOWFLAKE_ROLE` is honoured.** It was read but never reached the
+  connection, so every Snowflake connection ran as `PUBLIC` and tables granted
+  to another role were invisible. Automatic reconnection keeps the role too.
+  Database, schema, warehouse and role are now URL-encoded, so names with
+  spaces, `/` or `&` reach Snowflake unchanged.
+
 ### Security
 - **Dependency advisories cleared in the shipped tree**: `pillow` 12.3.0 →
   13.0.0, `fastmcp` 4.0.10 → 4.1.3, `certifi`, `opentelemetry-*` 1.44 → 1.45.1,
@@ -15,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `snowflake-sqlalchemy` 1.11.1 → 2.0.0 (which drops `boto3`, `pyOpenSSL` and
   their dependencies, and pulls `protobuf` back to 6.33). Targeted upgrades,
   not a re-resolve. Supersedes #185 and #186.
+
+### Changed
+- **DuckDB 2.0.0** (from 1.5.6), plus minor and patch updates to
+  `databricks-sql-connector`, `pandas`, `pyoxigraph`, `sqlglot` and `brotli`.
 
 ## [2.2.0] - 2026-10-19
 
