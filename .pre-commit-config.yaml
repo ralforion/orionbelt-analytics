@@ -1,43 +1,54 @@
 # Pre-commit hooks for code quality and security
+#
+# The Python tools run from the project venv (`uv run`), so their versions are
+# the ones in uv.lock -- the same as CI -- and a Dependabot bump reaches the
+# hooks with nothing else to edit. Remote `rev:` pins could not follow the lock
+# and drifted until three of these hooks no longer ran. Run `uv sync` first.
 repos:
-  # Code formatting
-  - repo: https://github.com/psf/black
-    rev: 26.10.0
+  - repo: local
     hooks:
+      # Formatting and imports, as CI's quality job checks them.
       - id: black
-        language_version: python3.13
-
-  # Import sorting
-  - repo: https://github.com/pycqa/isort
-    rev: 9.0.1
-    hooks:
+        name: black
+        entry: uv run black
+        language: system
+        types: [python]
+        files: ^(src/|tests/|server\.py$)
       - id: isort
-        args: ["--profile", "black"]
+        name: isort
+        entry: uv run isort --filter-files
+        language: system
+        types: [python]
+        files: ^(src/|tests/|server\.py$)
 
-  # Code linting
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.0.0
-    hooks:
-      - id: flake8
-        additional_dependencies: [flake8-docstrings]
+      # Lint with ruff, CI's linter (rule selection in pyproject.toml).
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check --force-exclude
+        language: system
+        types: [python]
+        files: ^(src/|tests/|server\.py$)
 
-  # Security linting
-  - repo: https://github.com/PyCQA/bandit
-    rev: 1.7.5
-    hooks:
-      - id: bandit
-        args: ["-r", "src/"]
-        exclude: tests/
-
-  # Type checking — targets Python 3.13 to match pyproject (requires-python >=3.13).
-  # --ignore-missing-imports is justified: several runtime deps ship no type stubs
-  # (fastmcp, pyoxigraph, chromadb, snowflake/databricks/dremio connectors).
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.8.0
-    hooks:
+      # Strict type check of the whole package, as CI's typecheck job runs it:
+      # checking only the changed files would resolve imports differently.
       - id: mypy
-        additional_dependencies: [types-all]
-        args: [--ignore-missing-imports, --python-version=3.13]
+        name: mypy
+        entry: uv run mypy src
+        language: system
+        pass_filenames: false
+        files: ^src/.*\.py$
+
+      # Security lint with the [tool.bandit] skips from pyproject.toml. Blocks
+      # only on medium-or-higher severity *and* confidence. The rest (today:
+      # low-confidence B608 string-built SQL, low-severity B105/B107) needs a
+      # human: review `bandit -c pyproject.toml -r src/` on SQL or credential
+      # changes.
+      - id: bandit
+        name: bandit
+        entry: uv run bandit -q -c pyproject.toml -ll -ii -r src/
+        language: system
+        pass_filenames: false
+        files: ^src/.*\.py$
 
   # General hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -59,7 +70,7 @@ repos:
     hooks:
       - id: ggshield
         language: python
-        stages: [commit]
+        stages: [pre-commit]
 
   # Third-party attribution: keep THIRD_PARTY_NOTICES.md in step with the
   # locked production tree. Scoped to the files that can change the dependency
