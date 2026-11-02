@@ -110,9 +110,6 @@ isort src/ tests/ server.py
 # Ruff -- fast linter and formatter
 ruff check src/ tests/ server.py
 
-# Flake8
-flake8 src/
-
 # Find unused code
 vulture src/
 ```
@@ -130,7 +127,7 @@ mypy is configured with `disallow_untyped_defs`, `disallow_incomplete_defs`, `wa
 
 ```bash
 # Static security analysis (skips assert_used in tests)
-bandit -r src/
+bandit -c pyproject.toml -r src/
 
 # Dependency vulnerability scanning, against the tree that actually ships
 ./scripts/audit-prod-deps.sh
@@ -210,7 +207,11 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-Pre-commit runs formatting, linting, and security checks automatically before each commit.
+Pre-commit runs formatting, linting, type and security checks automatically before
+each commit. The Python hooks (black, isort, ruff, mypy, bandit) are `uv run`
+commands, so they use the versions locked in `uv.lock`, exactly as CI does: run
+`uv sync` before the first commit, and a dependency bump never needs a matching
+edit in `.pre-commit-config.yaml`.
 
 ---
 
@@ -462,7 +463,7 @@ docs: update configuration reference for BigQuery
 6. **Run security scanning** for changes touching SQL handling or credentials:
 
    ```bash
-   bandit -r src/
+   bandit -c pyproject.toml -r src/
    ```
 
 7. **Verify action pins** if you touched anything under `.github/workflows/`:
