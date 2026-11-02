@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Dependency advisories cleared in the shipped tree**: `authlib` 1.8.0 →
+  1.9.2, `joserfc` 1.7.5 → 1.7.7, `dnspython` 2.8.0 → 2.9.1, `msgpack` 1.2.2 →
+  1.2.4, `pyasn1` 0.6.4 → 0.6.5 and `oauthlib` 3.3.1 → 4.0.1. oauthlib 4 is
+  reachable now that `databricks-sql-connector` 4.8.0 allows it, so the two
+  oauthlib advisories the audit used to ignore are fixed rather than
+  accepted. Targeted upgrades, not a re-resolve.
+
 ## [2.2.1] - 2026-10-27
 
 ### Upgrade notes
