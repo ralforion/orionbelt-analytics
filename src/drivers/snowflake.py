@@ -3,10 +3,9 @@
 import logging
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote_plus
 
 from sqlalchemy import MetaData, create_engine, inspect, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import QueuePool
 
@@ -61,23 +60,34 @@ class SnowflakeDriver(DatabaseDriver):
                 logger.error("Missing required Snowflake connection parameters")
                 return False
 
-            encoded_password = quote_plus(password) if password else ""
-
-            # The dialect URL-decodes each part, so names may hold any character.
-            connection_string = (
-                f"snowflake://{username}:{encoded_password}@{account}/"
-                f"{quote_plus(database)}/{quote_plus(schema)}"
-                f"?warehouse={quote_plus(warehouse)}"
+            # URL.create holds raw values, so no string is encoded and parsed back.
+            url = URL.create(
+                "snowflake",
+                username=username,
+                password=password or None,
+                host=account,
             )
+            # Names go to the connector as connect_args, which SQLAlchemy merges
+            # in after the dialect has read the URL. The URL path is no carrier:
+            # the dialect splits it as db/schema on any unquoted "/", and from
+            # snowflake-sqlalchemy 2.1 neither "+" nor an encoded "%2F" decodes
+            # back, so encoding cannot make every name round-trip.
+            connect_args: dict[str, Any] = {
+                "application": "orionbelt-analytics",
+                "network_timeout": CONNECTION_TIMEOUT,
+                "database": database,
+                "schema": schema,
+                "warehouse": warehouse,
+            }
             if role:
-                connection_string += f"&role={quote_plus(role)}"
+                connect_args["role"] = role
 
             logger.info(
                 f"Connecting to Snowflake with account: {account}, database: {database}, "
                 f"warehouse: {warehouse}, schema: {schema}"
             )
             self.engine = create_engine(
-                connection_string,
+                url,
                 poolclass=QueuePool,
                 pool_size=self._pool_size,
                 max_overflow=self._max_overflow,
@@ -85,10 +95,7 @@ class SnowflakeDriver(DatabaseDriver):
                 pool_pre_ping=True,
                 pool_recycle=3600,
                 echo=False,
-                connect_args={
-                    "application": "orionbelt-analytics",
-                    "network_timeout": CONNECTION_TIMEOUT,
-                },
+                connect_args=connect_args,
             )
             self.metadata = MetaData()
 
