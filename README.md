@@ -10,7 +10,7 @@
 [![Version 2.2.2](https://img.shields.io/badge/version-2.2.2-purple.svg)](https://github.com/ralforion/orionbelt-analytics/releases)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: BUSL-1.1](https://img.shields.io/badge/License-BUSL--1.1-orange.svg)](https://github.com/ralforion/orionbelt-analytics/blob/main/LICENSE)
-[![FastMCP](https://img.shields.io/badge/FastMCP-3.3.1+-blue)](https://github.com/jlowin/fastmcp)
+[![FastMCP 4.0.5+](https://img.shields.io/badge/FastMCP-4.0.5+-blue)](https://github.com/PrefectHQ/fastmcp)
 [![RDF/OWL](https://img.shields.io/badge/RDF%2FOWL-Ontology-orange)](https://www.w3.org/OWL/)
 
 [![BigQuery](https://img.shields.io/badge/BigQuery-669DF6.svg?logo=googlebigquery&logoColor=white)](https://cloud.google.com/bigquery)
