@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Snowflake names reach the connector unchanged on snowflake-sqlalchemy
+  2.1.** 2.1 no longer decodes `+` in the URL path and reads an encoded `/` as
+  the database/schema separator, so the URL encoding added in 2.2.1 would
+  have sent `MY DB` as `MY+DB` and failed on a schema containing `/`.
+  Database, schema, warehouse and role now go to the connector as connection
+  arguments, bypassing the URL. This also fixes **passwords containing a
+  space**, which reached Snowflake with `+` in its place on every version.
+
 ## [2.2.1] - 2026-10-27
 
 ### Upgrade notes
