@@ -8,6 +8,21 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.database_manager import ColumnInfo, DatabaseManager, TableInfo
 
 
+def _snowflake_connector_kwargs(mock_create_engine):
+    """What a mocked ``create_engine`` call would hand ``snowflake.connector``.
+
+    Mirrors SQLAlchemy: the dialect reads the URL, then ``connect_args`` are
+    merged over the result.
+    """
+    from snowflake.sqlalchemy.snowdialect import SnowflakeDialect
+    from sqlalchemy.engine import make_url
+
+    call = mock_create_engine.call_args
+    _, kwargs = SnowflakeDialect().create_connect_args(make_url(call.args[0]))
+    kwargs.update(call.kwargs.get("connect_args", {}))
+    return kwargs
+
+
 class TestDatabaseManager(unittest.TestCase):
     """Test suite for DatabaseManager functionality."""
 
@@ -108,40 +123,37 @@ class TestDatabaseManager(unittest.TestCase):
         self.assertEqual(self.db_manager.connection_info["account"], "test-account")
 
     @patch("src.drivers.snowflake.create_engine")
-    def test_connect_snowflake_url_carries_encoded_names(self, mock_create_engine):
-        """Role and names reach the URL encoded, and decode back unchanged."""
-        from snowflake.sqlalchemy.snowdialect import SnowflakeDialect
-        from sqlalchemy.engine import make_url
-
+    def test_connect_snowflake_passes_names_unchanged(self, mock_create_engine):
+        """Credentials, names and role reach the connector exactly as given."""
         mock_engine = mock_create_engine.return_value
         mock_engine.connect.return_value.__enter__ = Mock(return_value=Mock())
         mock_engine.connect.return_value.__exit__ = Mock(return_value=None)
 
         result = self.db_manager.connect_snowflake(
             account="test-account",
-            username="testuser",
-            password="testpass",
+            username="test.user@example.com",
+            password="p@ss w+rd/%2F",
             warehouse="WH 1",
-            database="MY DB",
+            database="MY+DB %2F",
             schema="S/1",
             role="DATA&ROLE",
         )
 
         self.assertTrue(result)
-        url = make_url(mock_create_engine.call_args.args[0])
-        _, opts = SnowflakeDialect().create_connect_args(url)
+        opts = _snowflake_connector_kwargs(mock_create_engine)
+        self.assertEqual(opts["account"], "test-account")
+        self.assertEqual(opts["user"], "test.user@example.com")
+        self.assertEqual(opts["password"], "p@ss w+rd/%2F")
         self.assertEqual(opts["role"], "DATA&ROLE")
         self.assertEqual(opts["warehouse"], "WH 1")
-        self.assertEqual(opts["database"], "MY DB")
+        self.assertEqual(opts["database"], "MY+DB %2F")
         self.assertEqual(opts["schema"], "S/1")
 
     @patch("src.drivers.snowflake.create_engine")
     def test_connect_snowflake_without_role_leaves_default_role(
         self, mock_create_engine
     ):
-        """No role in the URL, so Snowflake uses the user's default role."""
-        from sqlalchemy.engine import make_url
-
+        """No role is passed, so Snowflake uses the user's default role."""
         mock_engine = mock_create_engine.return_value
         mock_engine.connect.return_value.__enter__ = Mock(return_value=Mock())
         mock_engine.connect.return_value.__exit__ = Mock(return_value=None)
@@ -155,9 +167,10 @@ class TestDatabaseManager(unittest.TestCase):
         )
 
         self.assertTrue(result)
-        url = make_url(mock_create_engine.call_args.args[0])
-        self.assertNotIn("role", url.query)
-        self.assertEqual(url.query["warehouse"], "COMPUTE_WH")
+        opts = _snowflake_connector_kwargs(mock_create_engine)
+        self.assertNotIn("role", opts)
+        self.assertEqual(opts["warehouse"], "COMPUTE_WH")
+        self.assertEqual(opts["schema"], "PUBLIC")
 
     def test_validate_identifier(self):
         """Test identifier validation."""
@@ -434,8 +447,6 @@ class TestDatabaseManager(unittest.TestCase):
     @patch("src.drivers.snowflake.create_engine")
     def test_reconnect_snowflake_keeps_role(self, mock_create_engine):
         """Recovery reconnects with the configured role, not the default one."""
-        from sqlalchemy.engine import make_url
-
         mock_engine = mock_create_engine.return_value
         mock_engine.connect.return_value.__enter__ = Mock(return_value=Mock())
         mock_engine.connect.return_value.__exit__ = Mock(return_value=None)
@@ -453,8 +464,8 @@ class TestDatabaseManager(unittest.TestCase):
 
         self.db_manager._reconnect()
 
-        url = make_url(mock_create_engine.call_args.args[0])
-        self.assertEqual(url.query["role"], "ANALYST_ROLE")
+        opts = _snowflake_connector_kwargs(mock_create_engine)
+        self.assertEqual(opts["role"], "ANALYST_ROLE")
         self.assertEqual(self.db_manager.connection_info["role"], "ANALYST_ROLE")
         self.assertEqual(
             self.db_manager._last_connection_params["role"], "ANALYST_ROLE"
