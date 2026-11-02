@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-11-02
+
 ### Fixed
 - **Snowflake names reach the connector unchanged on snowflake-sqlalchemy
   2.1.** 2.1 no longer decodes `+` in the URL path and reads an encoded `/` as
@@ -15,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Database, schema, warehouse and role now go to the connector as connection
   arguments, bypassing the URL. This also fixes **passwords containing a
   space**, which reached Snowflake with `+` in its place on every version.
+  (#197)
 
 ### Security
 - **Dependency advisories cleared in the shipped tree**: `authlib` 1.8.0 →
@@ -22,7 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.2.4, `pyasn1` 0.6.4 → 0.6.5 and `oauthlib` 3.3.1 → 4.0.1. oauthlib 4 is
   reachable now that `databricks-sql-connector` 4.8.0 allows it, so the two
   oauthlib advisories the audit used to ignore are fixed rather than
-  accepted. Targeted upgrades, not a re-resolve.
+  accepted. Targeted upgrades, not a re-resolve. (#196)
+
+### Dependencies
+- `snowflake-sqlalchemy` 2.0.0 → 2.1.0 (adds SQLAlchemy 2.1 support; this
+  release still locks SQLAlchemy 2.0), `databricks-sql-connector` 4.8.0,
+  `pydantic` 2.14.2, `sqlglot` 30.27.0, `onnxruntime` 1.31.1,
+  `huggingface-hub` 2.4.0, `pyshacl` 0.40.2. (#196, #198)
+
+### Internal
+- Pre-commit hooks for black, isort, ruff, mypy and bandit run the versions
+  locked in `uv.lock` (`uv run`), as CI does, so they can no longer drift.
+  Three of them had stopped working on their own pinned versions. ruff
+  replaces flake8, which is gone from the dev group. (#199)
 
 ## [2.2.1] - 2026-10-27
 
