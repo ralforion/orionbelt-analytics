@@ -1,6 +1,6 @@
 """OrionBelt Analytics - Ontology-based MCP server for your Text-2-SQL convenience."""
 
-__version__ = "2.2.2"
+__version__ = "2.3.0"
 __author__ = "OrionBelt Analytics Contributors"
 __email__ = "contributors@example.com"
 __description__ = "OrionBelt Analytics - the Ontology-based MCP server for your Text-2-SQL convenience"
