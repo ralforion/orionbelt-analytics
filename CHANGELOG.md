@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Skills are `SKILL.md` folders, and you can serve your own.** The four
+  shipped guides moved from `.claude/skills/<name>.md` to
+  `.claude/skills/<name>/SKILL.md` with `name` and `description` frontmatter,
+  the Agent Skills layout, and are served by FastMCP's
+  `SkillsDirectoryProvider` at `skill://<name>/SKILL.md`, with a
+  `skill://<name>/_manifest` and any supporting files beside them. The new
+  `SKILLS_DIRS` setting names directories of your own skills to serve next to
+  them, for example a glossary of business terms. A name clash keeps the
+  shipped skill and logs a warning. The older `skill://<name>` URIs still
+  return the same content. The server instructions and the fan-trap error
+  now point at the new URIs, and list `analytical-workflow`, which they had
+  left out.
+
+### Fixed
+- **The PyPI package and the Docker image now include the skills.** The
+  wheel never shipped `.claude/skills/`, and `.dockerignore` left out all of
+  `.claude/`, so both answered every skill read with "Skill not found". Only
+  a source checkout served them. The release workflow now fails if a wheel
+  is missing a shipped skill.
+
 ## [2.2.2] - 2026-11-02
 
 ### Fixed

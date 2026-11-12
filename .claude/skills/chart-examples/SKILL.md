@@ -1,3 +1,12 @@
+---
+name: chart-examples
+description: >-
+  Worked generate_chart examples for every chart type: bar (simple, stacked,
+  grouped), line (single and multi-measure), scatter and correlation heatmap,
+  with the data shape, styling options and output modes each uses. Use when
+  turning query results into a chart.
+---
+
 # Chart Generation Examples
 
 **Skill for OrionBelt Analytics - Visualization Guide**

@@ -47,9 +47,9 @@ class TestPhase1TokenReduction:
         skills_dir = Path(__file__).parent.parent / ".claude" / "skills"
 
         expected_skills = [
-            "fan-trap-prevention.md",
-            "sql-best-practices.md",
-            "chart-examples.md",
+            "fan-trap-prevention/SKILL.md",
+            "sql-best-practices/SKILL.md",
+            "chart-examples/SKILL.md",
         ]
 
         for skill in expected_skills:
@@ -60,7 +60,7 @@ class TestPhase1TokenReduction:
     def test_fan_trap_skill_content(self):
         """Verify fan-trap skill contains essential content."""
         skills_dir = Path(__file__).parent.parent / ".claude" / "skills"
-        skill_path = skills_dir / "fan-trap-prevention.md"
+        skill_path = skills_dir / "fan-trap-prevention/SKILL.md"
 
         content = skill_path.read_text()
 
@@ -74,7 +74,7 @@ class TestPhase1TokenReduction:
     def test_sql_best_practices_skill_content(self):
         """Verify SQL best practices skill contains essential content."""
         skills_dir = Path(__file__).parent.parent / ".claude" / "skills"
-        skill_path = skills_dir / "sql-best-practices.md"
+        skill_path = skills_dir / "sql-best-practices/SKILL.md"
 
         content = skill_path.read_text()
 
@@ -87,7 +87,7 @@ class TestPhase1TokenReduction:
     def test_chart_examples_skill_content(self):
         """Verify chart examples skill contains essential content."""
         skills_dir = Path(__file__).parent.parent / ".claude" / "skills"
-        skill_path = skills_dir / "chart-examples.md"
+        skill_path = skills_dir / "chart-examples/SKILL.md"
 
         content = skill_path.read_text()
 
@@ -117,9 +117,8 @@ class TestPhase1TokenReduction:
         ), f"Instructions not condensed: {len(instructions)} chars"
 
         # Should contain skill references
-        assert "/fan-trap-prevention" in instructions
-        assert "/sql-best-practices" in instructions
-        assert "/chart-examples" in instructions
+        for name in ("fan-trap-prevention", "sql-best-practices", "chart-examples"):
+            assert f"skill://{name}/SKILL.md" in instructions
 
     def test_execute_sql_query_docstring_condensed(self):
         """Verify execute_sql_query docstring is condensed."""

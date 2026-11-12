@@ -45,7 +45,7 @@ Config comes from `.env` (copy from `.env.template`). At minimum set credentials
 
 **GraphRAG** (`src/graphrag/`): `manager.py` orchestrates graph traversal (`retriever.py`, up to 12 hops), embeddings (`embedder.py`), community detection, and a ChromaDB vector store. Auto-initialized by `discover_schema()` when `AUTO_GRAPHRAG=true`.
 
-**MCP resources**: skill files under `.claude/skills/` (fan-trap prevention, SQL best practices, chart examples, workflows) are exposed via `@mcp.resource()` in `main.py`.
+**MCP resources / skills**: skills are `<name>/SKILL.md` folders with `name`/`description` frontmatter. The shipped ones in `.claude/skills/` (fan-trap prevention, SQL best practices, chart examples, analytical workflow) and any under `SKILLS_DIRS` are served by FastMCP's `SkillsDirectoryProvider` as `skill://<name>/SKILL.md` (`src/resources.py`); the old `skill://<name>` URIs stay as aliases. A new shipped skill must also be added to the wheel check in `pypi-publish.yml`.
 
 `docs/development.md` has the full layout, design rationale, and contributing guide — read it for deeper context. Per-feature docs: `docs/obqc.md`, `docs/graphrag.md`, `docs/fan-trap-prevention.md`, `docs/configuration.md`, `docs/tools-reference.md`.
 

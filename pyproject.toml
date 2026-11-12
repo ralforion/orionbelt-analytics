@@ -105,9 +105,12 @@ packages = ["src"]
 
 # Ship the OBA ontology vocabulary + SHACL shapes so in-process SHACL
 # validation (Phase 4) works from an installed wheel, not only from source.
+# The skills too: served over skill://, they are read at runtime from the same
+# path relative to src/, and a wheel without them served nothing.
 [tool.hatch.build.targets.wheel.force-include]
 "ontology/oba.ttl" = "ontology/oba.ttl"
 "ontology/oba-shacl.ttl" = "ontology/oba-shacl.ttl"
+".claude/skills" = ".claude/skills"
 
 [tool.hatch.version]
 path = "src/__init__.py"

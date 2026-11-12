@@ -1,3 +1,13 @@
+---
+name: analytical-workflow
+description: >-
+  The tool chain for a full database analysis session, from list_databases and
+  connect_database through discover_schema, GraphRAG search and
+  generate_ontology to execute_sql_query and generate_chart, with shortcuts,
+  error handling and timings. Use at the start of an analysis or when unsure
+  which tool comes next.
+---
+
 # Analytical Session Workflow
 
 **Purpose:** Complete guide to the optimal tool chain for database analysis sessions with OrionBelt Analytics.
@@ -461,7 +471,7 @@ generate_chart(
 - Embedded in MCP UI viewer
 - Interactive (Plotly-based)
 
-**Tip:** See `skill://chart-examples` for complete examples
+**Tip:** See `skill://chart-examples/SKILL.md` for complete examples
 
 ---
 
@@ -607,7 +617,7 @@ generate_chart(
 
 **Automatic detection** of fan-trap patterns in queries
 
-**See:** `skill://fan-trap-prevention` for complete guide
+**See:** `skill://fan-trap-prevention/SKILL.md` for complete guide
 
 **Example:**
 ```sql
@@ -632,7 +642,7 @@ JOIN (SELECT customer_id, COUNT(*) as address_count FROM addresses GROUP BY cust
 
 **Always qualify identifiers** in multi-table queries
 
-**See:** `skill://sql-best-practices` for complete guide
+**See:** `skill://sql-best-practices/SKILL.md` for complete guide
 
 **Example:**
 ```sql

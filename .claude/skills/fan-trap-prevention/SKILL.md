@@ -1,3 +1,13 @@
+---
+name: fan-trap-prevention
+description: >-
+  Aggregate across 1:many joins without inflating totals. Explains what a
+  fan-trap is, how execute_sql_query's OBQC check reports one, and the UNION
+  ALL, separate-aggregation and window-function patterns that avoid it. Use
+  before writing SQL that joins tables and aggregates (SUM, COUNT, AVG), or
+  when a query is blocked or warned for a fan-trap.
+---
+
 # Fan-Trap Prevention Guide
 
 **Skill for OrionBelt Analytics MCP Server**

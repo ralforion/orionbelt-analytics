@@ -208,8 +208,46 @@ def adopt_legacy_connection_dirs(legacy_id: str, connection_id: str) -> list[str
 
 
 def get_skills_dir() -> Path:
-    """Get the skills documentation directory."""
+    """Directory holding the skills that ship with the server.
+
+    One folder per skill, each with a ``SKILL.md``. The wheel force-includes it
+    at the same path relative to ``src/``, so it resolves alike from a
+    checkout, the Docker image and an installed wheel.
+    """
     return PROJECT_ROOT / ".claude" / "skills"
+
+
+def get_extra_skills_dirs() -> list[Path]:
+    """Directories of the operator's own skills, from ``SKILLS_DIRS``.
+
+    Comma-separated. Each entry is a directory *of* skills -- one folder per
+    skill, each holding a ``SKILL.md`` -- laid out like ``.claude/skills``.
+    Relative entries resolve against the project root, as ``OUTPUT_DIR`` does.
+
+    An entry that is not a directory is skipped with a warning rather than
+    stopping the server: a missing skill costs the model a guide, not data.
+
+    Returns:
+        Existing directories, resolved, in the order given and without repeats.
+    """
+    dirs: list[Path] = []
+    for entry in os.getenv("SKILLS_DIRS", "").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        candidate = Path(entry).expanduser()
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        resolved = candidate.resolve()
+        if not resolved.is_dir():
+            logger.warning(
+                f"SKILLS_DIRS entry {entry!r} is not a directory ({resolved}); "
+                "skipped."
+            )
+            continue
+        if resolved not in dirs:
+            dirs.append(resolved)
+    return dirs
 
 
 def get_models_dir(connection_id: str) -> Path:
