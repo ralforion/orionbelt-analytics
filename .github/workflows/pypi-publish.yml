@@ -95,18 +95,22 @@ jobs:
             fi
           done
 
-          # ontology/*.ttl are force-included in pyproject.toml and load-bearing:
-          # a wheel without them installs cleanly and only fails later, when
-          # SHACL validation runs.
+          # ontology/*.ttl and the skills are force-included in pyproject.toml
+          # and load-bearing: a wheel without them installs cleanly and only
+          # fails later, when SHACL validation runs or a client reads a skill.
           CONTENTS="$(unzip -Z1 "${WHEEL}")"
-          for required in ontology/oba.ttl ontology/oba-shacl.ttl; do
+          for required in ontology/oba.ttl ontology/oba-shacl.ttl \
+                          .claude/skills/fan-trap-prevention/SKILL.md \
+                          .claude/skills/sql-best-practices/SKILL.md \
+                          .claude/skills/chart-examples/SKILL.md \
+                          .claude/skills/analytical-workflow/SKILL.md; do
             if ! grep -qxF "${required}" <<<"${CONTENTS}"; then
               echo "::error::Wheel is missing ${required}"
               exit 1
             fi
           done
 
-          echo "Verified ${PKG_VERSION}: tag, licence metadata, ontology files."
+          echo "Verified ${PKG_VERSION}: tag, licence metadata, ontology and skill files."
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

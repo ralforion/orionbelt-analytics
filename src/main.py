@@ -85,9 +85,10 @@ _silence_logging_deprecation()
 
 # Cache hints (MCP 2026-07-28, SEP-2549) let a client keep the tool list, the
 # resource list and resource reads instead of fetching them again on every
-# turn. All three are safe to keep here: the tool list and the skill files only
-# change with a release, and every chart widget has a URI of its own, so a
-# cached read can never be a stale chart. One hint covers them all, and chart
+# turn. All three are safe to keep here: the tool list and the skills only
+# change with a release or a restart (skills, SKILLS_DIRS included, are read at
+# startup), and every chart widget has a URI of its own, so a cached read can
+# never be a stale chart. One hint covers them all, and chart
 # reads carry a user's data, hence "private": a shared intermediary must not
 # serve one user's cached result to another.
 _CACHE_TTL = resolve_mcp_cache_ttl()
@@ -119,18 +120,21 @@ PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks.
 `list_databases()` -> `connect_database(database=...)` -> `list_schemas()` -> `discover_schema()` ->
 `generate_ontology()` -> `execute_sql_query()` -> `generate_chart()`
 
-## Critical Guides (Claude Skills)
+## Skills (MCP resources)
 
-- `/fan-trap-prevention` - prevent data multiplication in multi-table queries
-- `/sql-best-practices` - identifier qualification and safe patterns
-- `/chart-examples` - visualization guide for all chart types
+Read a skill before the work it covers. Each is `skill://<name>/SKILL.md`; list resources for any more this server offers.
+
+- `skill://fan-trap-prevention/SKILL.md` - prevent data multiplication in multi-table queries
+- `skill://sql-best-practices/SKILL.md` - identifier qualification and safe patterns
+- `skill://chart-examples/SKILL.md` - visualization guide for all chart types
+- `skill://analytical-workflow/SKILL.md` - the tool chain for a whole analysis session
 
 ## Important Notes
 
 - Always fully qualify identifiers: `schema.table.column`
 - Review `foreign_keys` from `discover_schema()` before complex JOINs
 - `execute_sql_query()` runs built-in syntax, security, and OBQC validation
-- For multi-fact aggregation, use the UNION ALL pattern (see `/fan-trap-prevention`)
+- For multi-fact aggregation, use the UNION ALL pattern (see `skill://fan-trap-prevention/SKILL.md`)
 - Databases are configured on the server by name; `list_databases()` shows them with descriptions. Match the user's wording ("the finance database") to one, and ask if more than one fits
 - Successful results name the most likely next call: `next_steps` (a list of tool, arguments, why) or a "Next step" section. Follow it unless the user asked for something else
 - `connect_database()` returns a connection handle (e.g. `ob_k2m9qa`). Every tool accepts it as the optional `connection` argument. If a call fails asking for a connection, pass the handle on every call from then on
@@ -138,7 +142,7 @@ PostgreSQL, MySQL, Snowflake, ClickHouse, Dremio, BigQuery, DuckDB, Databricks.
 )
 
 
-# --- MCP Resources: skill files exposed over skill:// URIs ---
+# --- MCP Resources: SKILL.md skills exposed over skill:// URIs ---
 from .resources import register_resources  # noqa: E402
 
 register_resources(mcp)

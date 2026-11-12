@@ -359,7 +359,7 @@ async def execute_sql_query(
                         "The user was asked and declined to run this with "
                         "allow_fan_out. Do not retry the override -- restructure "
                         "the query so each measure is aggregated before the join "
-                        "(see /fan-trap-prevention)."
+                        "(see skill://fan-trap-prevention/SKILL.md)."
                     )
                 for issue in obqc_result.issues:
                     detail = issue.message

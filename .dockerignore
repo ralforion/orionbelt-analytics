@@ -41,7 +41,9 @@ blog/
 design/
 review*
 CLAUDE.md
-.claude/
+# Everything under .claude/ except the skills, which the server serves.
+.claude/*
+!.claude/skills/
 .mcpregistry_github_token
 .mcpregistry_registry_token
 

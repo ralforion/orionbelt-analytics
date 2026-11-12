@@ -179,6 +179,16 @@ R2RML_BASE_IRI=http://mycompany.com/
 #
 OUTPUT_DIR=tmp
 
+# Your own skills (optional)
+# --------------------------
+# Comma-separated directories of skills to serve next to the shipped ones.
+# Each holds one folder per skill with a SKILL.md (YAML frontmatter with name
+# and description, then markdown), the layout of .claude/skills. Served as
+# skill://<name>/SKILL.md. Relative paths resolve against the project root;
+# prefer absolute ones. Read at startup, so restart after a change. A skill
+# named like a shipped one is ignored (logged as a warning).
+# SKILLS_DIRS=/etc/orionbelt/skills,/opt/team-skills
+
 # -----------------------------------------------------------------
 # PostgreSQL Configuration
 # -----------------------------------------------------------------
@@ -280,6 +290,7 @@ DATABRICKS_SCHEMA=default
 | `ONTOLOGY_BASE_URI` | `http://example.com/ontology/` | Base URI for generated RDF ontologies |
 | `R2RML_BASE_IRI` | `http://mycompany.com/` | Base IRI for R2RML subject templates (row resources); classes and properties use `ONTOLOGY_BASE_URI` |
 | `OUTPUT_DIR` | `tmp` | Directory for generated files (relative to project root) |
+| `SKILLS_DIRS` | *(unset)* | Comma-separated directories of your own `SKILL.md` skills, served next to the shipped ones. See [Skills](#skills) |
 | `MCP_TRANSPORT` | `http` | MCP transport mode: `http` (streamable HTTP). `sse` was removed |
 | `MCP_CACHE_TTL_SECONDS` | `300` | How long a client on MCP 2026-07-28 may cache the tool list, the resource list and resource reads. Sent as a `private` cache hint; `0` sends none. Raise it for fewer round trips, lower it while developing tools |
 | `MCP_AUTH` | `none` | `jwt` requires a bearer token on every HTTP request; see [Authentication](#authentication). Unknown values stop the server |
@@ -419,6 +430,45 @@ Either way the response is identical, and the server logs which path a request t
 **Disabling:** set `SEMANTIC_NAMING_MODE=review` to force the review path even when the client supports sampling. Useful for cost control, deterministic regression testing, or when a particular host LLM produces poor rename suggestions.
 
 **Logging:** look for lines starting with `MCP sampling:` in the server log to verify the path a request took: one when the request is handed to the client (with the item count) and one when the answer is parsed (with the suggestion counts and the model name). The two rounds are separate requests, so no elapsed time is logged. When the review path is chosen instead, a line says why: `Client cannot answer a sampling request; using the review path`, or a warning if `SEMANTIC_NAMING_MODE=input_required` asked for more than the client can do.
+
+---
+
+## Skills
+
+The server serves skills as MCP resources: guides a model reads before the work they cover. Each is a folder holding a `SKILL.md`, the [Agent Skills](https://agentskills.io) layout that Claude Code and other agents also read from their own skills directories:
+
+```
+glossary/
+|-- SKILL.md          # frontmatter (name, description), then markdown
++-- terms.md          # optional supporting files, linked from SKILL.md
+```
+
+```markdown
+---
+name: glossary
+description: What our metric names mean. Use before answering a question about revenue, churn or ARR.
+---
+
+# Glossary
+...
+```
+
+Every skill is served at three kinds of URI:
+
+| URI | Content |
+|-----|---------|
+| `skill://<name>/SKILL.md` | The skill. Its `description` is the resource description in `resources/list` |
+| `skill://<name>/_manifest` | JSON listing the skill's files with sizes and SHA-256 hashes |
+| `skill://<name>/<path>` | A supporting file. Not listed; found through the manifest |
+
+**Shipped skills** (in `.claude/skills/`): `fan-trap-prevention`, `sql-best-practices`, `chart-examples` and `analytical-workflow`. They were served at `skill://<name>` before they became `SKILL.md` folders, and those URIs still return the same content.
+
+**Your own skills:** set `SKILLS_DIRS` to one or more comma-separated directories, each holding skill folders as above -- the parent folder, not a skill folder itself. Useful for what only you know: a glossary of business terms, KPI definitions, house rules for one database. In Docker, mount the directory and point `SKILLS_DIRS` at the mount point.
+
+- Skills are read at startup; restart the server after adding or changing one.
+- Names are unique. A skill named like a shipped one, or like one in an earlier `SKILLS_DIRS` entry, is ignored, and the log says which.
+- An entry that is missing, or holds no skill folders, is skipped with a warning naming it.
+- The startup log lists every skill served: `Serving 5 skill(s): ...`.
 
 ---
 

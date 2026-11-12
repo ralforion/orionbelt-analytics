@@ -22,7 +22,7 @@ CONTRACT_DOCS = (
     ROOT / "docs" / "obqc.md",
     ROOT / "docs" / "tools-reference.md",
     ROOT / "docs" / "fan-trap-prevention.md",
-    ROOT / ".claude" / "skills" / "fan-trap-prevention.md",
+    ROOT / ".claude" / "skills" / "fan-trap-prevention" / "SKILL.md",
     ROOT / "src" / "main.py",
 )
 

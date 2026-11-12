@@ -291,7 +291,7 @@ orionbelt-analytics/
 |-- ontology/                        # Ontology specs and SHACL shapes
 |-- integrations/                    # AI framework integration examples
 |-- docs/                            # Documentation
-+-- .claude/skills/                  # MCP skill resources
++-- .claude/skills/<name>/SKILL.md   # Shipped skills, served over skill://
 ```
 
 ---
@@ -382,7 +382,7 @@ This is workflow isolation, not a security boundary: every client uses the serve
 
 **GraphRAG auto-initialization**: When `discover_schema()` runs, GraphRAG is automatically initialized in the background (controlled by `AUTO_GRAPHRAG`). The graph structure supports up to 12-hop traversal for relationship discovery, and ChromaDB stores vector embeddings for semantic similarity search.
 
-**MCP resources**: Skills stored in `.claude/skills/` (fan-trap prevention, SQL best practices, chart examples, analytical workflow) are exposed as MCP resources via `@mcp.resource()` decorators.
+**MCP resources**: Skills are `<name>/SKILL.md` folders (Agent Skills layout). The shipped ones in `.claude/skills/` (fan-trap prevention, SQL best practices, chart examples, analytical workflow), plus any in the directories `SKILLS_DIRS` names, are served by FastMCP's `SkillsDirectoryProvider` at `skill://<name>/SKILL.md`, with a `_manifest` and supporting files beside them (`src/resources.py`). The shipped skills' older `skill://<name>` URIs remain as aliases. They are force-included into the wheel and let through `.dockerignore`; a new shipped skill also needs adding to the wheel check in `pypi-publish.yml`.
 
 ---
 

@@ -1,3 +1,12 @@
+---
+name: sql-best-practices
+description: >-
+  SQL conventions for execute_sql_query: fully qualified schema.table.column
+  identifiers, JOIN, subquery, CTE and window-function patterns, and
+  cross-schema queries. Use when writing or fixing SQL against a connected
+  database.
+---
+
 # SQL Best Practices for OrionBelt Analytics
 
 **Skill for safe and effective SQL query construction**

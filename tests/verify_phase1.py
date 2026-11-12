@@ -45,9 +45,9 @@ def main():
 
     # Test 2: All 3 skills present
     expected_skills = [
-        "fan-trap-prevention.md",
-        "sql-best-practices.md",
-        "chart-examples.md",
+        "fan-trap-prevention/SKILL.md",
+        "sql-best-practices/SKILL.md",
+        "chart-examples/SKILL.md",
     ]
 
     all_skills_present = True
@@ -78,7 +78,7 @@ def main():
         failed += 1
 
     # Test 4: Fan-trap skill content
-    fan_trap_path = skills_dir / "fan-trap-prevention.md"
+    fan_trap_path = skills_dir / "fan-trap-prevention/SKILL.md"
     if fan_trap_path.exists():
         content = fan_trap_path.read_text()
         has_key_content = (
@@ -94,7 +94,7 @@ def main():
         failed += 1
 
     # Test 5: SQL best practices skill content
-    sql_path = skills_dir / "sql-best-practices.md"
+    sql_path = skills_dir / "sql-best-practices/SKILL.md"
     if sql_path.exists():
         content = sql_path.read_text()
         has_key_content = (
@@ -108,7 +108,7 @@ def main():
         failed += 1
 
     # Test 6: Chart examples skill content
-    chart_path = skills_dir / "chart-examples.md"
+    chart_path = skills_dir / "chart-examples/SKILL.md"
     if chart_path.exists():
         content = chart_path.read_text()
         has_key_content = (
@@ -168,8 +168,8 @@ def main():
 
             # Check for skill references
             has_skill_refs = (
-                "/fan-trap-prevention" in instructions
-                and "/sql-best-practices" in instructions
+                "skill://fan-trap-prevention/SKILL.md" in instructions
+                and "skill://sql-best-practices/SKILL.md" in instructions
             )
             if test("Server instructions reference skills", has_skill_refs):
                 passed += 1
