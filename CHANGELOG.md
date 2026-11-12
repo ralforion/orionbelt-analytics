@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-12
+
 ### Added
 - **Skills are `SKILL.md` folders, and you can serve your own.** The four
   shipped guides moved from `.claude/skills/<name>.md` to
@@ -19,14 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shipped skill and logs a warning. The older `skill://<name>` URIs still
   return the same content. The server instructions and the fan-trap error
   now point at the new URIs, and list `analytical-workflow`, which they had
-  left out.
+  left out. (#205)
 
 ### Fixed
 - **The PyPI package and the Docker image now include the skills.** The
   wheel never shipped `.claude/skills/`, and `.dockerignore` left out all of
   `.claude/`, so both answered every skill read with "Skill not found". Only
   a source checkout served them. The release workflow now fails if a wheel
-  is missing a shipped skill.
+  is missing a shipped skill. (#205)
+
+### Dependencies
+- `snowflake-connector-python` 5.2.0, `databricks-sql-connector` 4.9.0,
+  `pydantic` 2.14.3, `pandas` 3.1.1, `sqlglot` 30.29.0. (#203)
+
+### Internal
+- The README's FastMCP badge shows the `>=4.0.5` floor the project requires
+  and links to `PrefectHQ/fastmcp`. (#201)
+- Dev and CI tooling: `ruff` 0.17.4, `pytest-benchmark` 5.3.1,
+  `pytest-asyncio` 1.4.1.post1, `docker/login-action` 4.8.0. (#202, #203,
+  #204)
 
 ## [2.2.2] - 2026-11-02
 
