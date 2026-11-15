@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Dependency advisories cleared in the shipped tree**: `dnspython` 2.9.1 →
+  2.9.2 (CVE-2026-128089) and `opentelemetry-api` 1.45.1 → 1.45.2
+  (CVE-2026-126360), with `opentelemetry-sdk` 1.45.2 and
+  `opentelemetry-semantic-conventions` 0.66b2 moving in step. Targeted
+  upgrades, not a re-resolve. Supersedes #207 and #208.
+
 ## [2.3.0] - 2026-11-12
 
 ### Added
