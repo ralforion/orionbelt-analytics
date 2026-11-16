@@ -7,12 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-11-16
+
+Patch release for the Docker image. PyPI installs already pick up the fixed
+versions on upgrade, since the wheel does not pin its dependencies.
+
 ### Security
 - **Dependency advisories cleared in the shipped tree**: `dnspython` 2.9.1 →
   2.9.2 (CVE-2026-128089) and `opentelemetry-api` 1.45.1 → 1.45.2
   (CVE-2026-126360), with `opentelemetry-sdk` 1.45.2 and
   `opentelemetry-semantic-conventions` 0.66b2 moving in step. Targeted
   upgrades, not a re-resolve. (#209)
+  - The opentelemetry-api advisory reached the server: FastMCP parses the
+    `traceparent` in every MCP request's `_meta` by default, and a crafted
+    value took quadratic time, so any client that could reach the port could
+    tie up the server. The v2.3.0 image shipped the affected version.
+  - The dnspython advisory did not: its only path in is `email-validator`
+    through pydantic, which never performs a DNS lookup here.
+
+### Dependencies
+- `sqlalchemy-bigquery` 1.18.0, `pymysql` 1.2.4, `kaleido` 1.5.1, `sqlglot`
+  30.31.0. (#211)
+
+### Internal
+- Dev tooling: `ruff` 0.17.5, `pytest-asyncio` 1.5.0. (#211)
 
 ## [2.3.0] - 2026-11-12
 
