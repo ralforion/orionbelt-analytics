@@ -285,12 +285,18 @@ async def connect_database(
         database_path = env("DUCKDB_DATABASE_PATH", ":memory:")
         motherduck_token = env("MOTHERDUCK_TOKEN")
         read_only = env("DUCKDB_READ_ONLY", "false").lower() == "true"
+        allowed_directories = [
+            directory.strip()
+            for directory in env("DUCKDB_ALLOWED_DIRECTORIES", "").split(",")
+            if directory.strip()
+        ]
 
         success = await run_db(
             db_manager.connect_duckdb,
             database_path=database_path,
             motherduck_token=motherduck_token,
             read_only=read_only,
+            allowed_directories=allowed_directories,
         )
         db_name = database_path
 
