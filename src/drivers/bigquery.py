@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Any
 
 from sqlalchemy import MetaData, create_engine, inspect, text
@@ -28,6 +29,12 @@ from ..serialization import serialize_rows
 from .base import DatabaseDriver
 
 logger = logging.getLogger(__name__)
+
+
+#: What BigQuery accepts as a dataset name: letters, digits and underscores, at
+#: most 1,024 of them. A schema name is checked against it before it is written
+#: into SQL, since the name comes from the caller.
+_DATASET_NAME = re.compile(r"[A-Za-z0-9_]{1,1024}")
 
 
 class BigQueryDriver(DatabaseDriver):
@@ -188,6 +195,21 @@ class BigQueryDriver(DatabaseDriver):
             logger.error(f"Failed to get BigQuery datasets: {e}")
             return []
 
+    def _dataset_for(self, schema_name: str | None) -> str | None:
+        """The dataset a metadata query reads: *schema_name*, else the default.
+
+        None, and logged, when there is neither or the name is not one BigQuery
+        allows -- the name is written into the query's SQL.
+        """
+        dataset = schema_name or self._dataset
+        if not dataset:
+            logger.error("No dataset specified and no default dataset set")
+            return None
+        if not _DATASET_NAME.fullmatch(dataset):
+            logger.error(f"Not a BigQuery dataset name: {dataset!r}")
+            return None
+        return dataset
+
     def get_tables(self, schema_name: str | None = None) -> list[str]:
         """Get tables in a dataset.
 
@@ -195,9 +217,8 @@ class BigQueryDriver(DatabaseDriver):
             schema_name: BigQuery dataset name (if None, uses default dataset)
         """
         try:
-            dataset = schema_name or self._dataset
-            if not dataset:
-                logger.error("No dataset specified and no default dataset set")
+            dataset = self._dataset_for(schema_name)
+            if dataset is None:
                 return []
 
             assert self.engine is not None
@@ -216,9 +237,8 @@ class BigQueryDriver(DatabaseDriver):
 
     def get_views(self, schema_name: str | None = None) -> dict[str, str | None]:
         try:
-            dataset = schema_name or self._dataset
-            if not dataset:
-                logger.error("No dataset specified and no default dataset set")
+            dataset = self._dataset_for(schema_name)
+            if dataset is None:
                 return {}
 
             assert self.engine is not None

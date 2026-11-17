@@ -21,6 +21,7 @@ from ..security import (
     SecurityLevel,
     audit_log_security_event,
     identifier_validator,
+    table_references,
 )
 from ..serialization import serialize_rows
 from .base import DatabaseDriver
@@ -328,13 +329,62 @@ class DuckDBDriver(DatabaseDriver):
     # Query validation & execution
     # ------------------------------------------------------------------
 
+    def _names_outside_catalog(self, conn: Any, sql_query: str) -> list[str]:
+        """The table references in *sql_query* that the catalog cannot resolve.
+
+        A reference resolves when a table or view of that name exists and its
+        qualifiers match: ``schema.table`` or ``catalog.table`` for two parts,
+        ``catalog.schema.table`` for three. System views count. A query that
+        does not parse resolves nothing, so it is reported whole.
+        """
+        references = table_references(sql_query, "duckdb")
+        if references is None:
+            return [sql_query[:80]]
+        if not references:
+            return []
+        rows = conn.execute(
+            text(
+                "SELECT database_name, schema_name, table_name FROM duckdb_tables() "
+                "UNION ALL "
+                "SELECT database_name, schema_name, view_name FROM duckdb_views()"
+            )
+        ).fetchall()
+        known = [(str(c).lower(), str(s).lower(), str(n).lower()) for c, s, n in rows]
+
+        def resolves(parts: tuple[str, ...]) -> bool:
+            *qualifiers, name = parts
+            owners = [(c, s) for c, s, n in known if n == name]
+            if not qualifiers:
+                return bool(owners)
+            if len(qualifiers) == 1:
+                return any(qualifiers[0] in owner for owner in owners)
+            return tuple(qualifiers[-2:]) in owners
+
+        return [".".join(parts) for parts in references if not resolves(parts)]
+
     def validate_sql_syntax(
         self, sql_query: str, validation_result: dict[str, Any]
     ) -> dict[str, Any]:
-        """Validate DuckDB SQL syntax using EXPLAIN."""
+        """Validate DuckDB SQL syntax using EXPLAIN.
+
+        Every table the query names must first be a table or view in the
+        catalog. DuckDB reads a name it cannot resolve as a file instead
+        (``FROM data.csv`` reads ./data.csv), and binding the query for
+        EXPLAIN would already open it, so this check runs before EXPLAIN.
+        """
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
+                unknown = self._names_outside_catalog(conn, sql_query)
+                if unknown:
+                    validation_result["error"] = (
+                        "Not a table or view in this database: " f"{', '.join(unknown)}"
+                    )
+                    validation_result["error_type"] = "unknown_table"
+                    validation_result["suggestions"].append(
+                        "Check table names against list_schemas and discover_schema"
+                    )
+                    return validation_result
                 try:
                     # Use EXPLAIN to validate syntax without executing
                     explain_query = f"EXPLAIN {sql_query}"

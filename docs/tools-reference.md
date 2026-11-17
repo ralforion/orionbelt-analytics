@@ -461,7 +461,7 @@ Execute a SQL query with built-in validation, fan-trap protection, and automatic
 **Key Features:**
 - Requires `connect_database` first
 - **Pre-execution checklist must be confirmed** (`checklist_completed: true`) or the query is rejected
-- Read-only enforcement -- only SELECT statements and schema introspection queries are allowed. A SELECT is refused if it locks rows (`FOR UPDATE`), writes with `SELECT ... INTO`, or calls a function that changes state, waits, or reads files or other systems (`setval`, `pg_sleep`, `read_csv`, `dblink`, ClickHouse's `url()` ...), and on DuckDB if it names a file in `FROM` (`FROM 'data.csv'`). `EXPLAIN` is allowed for such a read, `EXPLAIN ANALYZE` is not: it runs the statement. On PostgreSQL and MySQL the query also runs in a read-only transaction
+- Read-only enforcement -- only SELECT statements and schema introspection queries are allowed. A SELECT is refused if it locks rows (`FOR UPDATE`), writes with `SELECT ... INTO`, or calls a function that changes state, waits, or reads files or other systems (`setval`, `pg_sleep`, `read_csv`, `dblink`, ClickHouse's `url()` ...), and on Snowflake if it takes a sequence's `NEXTVAL`. On DuckDB a query may name only tables and views in the catalog (`FROM 'data.csv'` or `FROM data.csv` are refused). `EXPLAIN` is allowed for such a read, `EXPLAIN ANALYZE` is not: it runs the statement. A query the SQL parser cannot read is refused, since none of these checks could run on it. On PostgreSQL and MySQL the query also runs in a read-only transaction
 - SQL injection prevention
 - Query timeout protection
 - Result size capped at 5,000 rows

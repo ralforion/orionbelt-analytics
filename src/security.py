@@ -396,6 +396,7 @@ _FORBIDDEN_FUNCTIONS = frozenset(
         # Change state a rollback does not undo, or the session itself.
         "nextval",
         "setval",
+        "getnextval",
         "set_config",
         "pg_notify",
         "get_lock",
@@ -494,9 +495,12 @@ _FORBIDDEN_FUNCTION_PREFIXES = (
     "system$abort",
 )
 
-#: Characters that make a DuckDB table name a file path or URL. DuckDB reads
-#: ``FROM 'data.csv'`` and ``FROM "data.csv"`` as files (a replacement scan),
-#: and a real table name almost never contains one of them.
+#: Characters that make part of a DuckDB table reference a file path or URL.
+#: DuckDB reads a name it cannot find in its catalog as a file, joining the
+#: parts with dots (``FROM "data"."csv"`` reads data.csv), and a real table,
+#: schema or catalog name almost never contains one of these. A plain dotted
+#: name (``FROM data.csv``) looks like schema.table, so the DuckDB driver also
+#: checks every reference against its catalog before the query runs.
 _DUCKDB_FILE_NAME_CHARS = frozenset("/\\:.")
 
 #: Where the explained statement starts, after EXPLAIN and its options.
@@ -553,13 +557,53 @@ def _unsafe_operations(stmt: Any, dialect: str) -> list[str]:
         name = func.name if isinstance(func, exp.Anonymous) else func.sql_name()
         if name and _is_forbidden_function(name):
             found.append(f"function {name.lower()}()")
+    # Snowflake advances a sequence through a column-like reference: seq.NEXTVAL.
+    found.extend(
+        f"sequence {column.sql()}"
+        for column in stmt.find_all(exp.Column)
+        if column.name.lower() == "nextval" and column.table
+    )
     if dialect == "duckdb":
-        found.extend(
-            f"file reference '{table.name}'"
-            for table in stmt.find_all(exp.Table)
-            if table.name and not table.db and _DUCKDB_FILE_NAME_CHARS & set(table.name)
-        )
+        for table in stmt.find_all(exp.Table):
+            parts = [part for part in (table.catalog, table.db, table.name) if part]
+            if table.name and any(_DUCKDB_FILE_NAME_CHARS & set(p) for p in parts):
+                found.append(f"file reference '{'.'.join(parts)}'")
     return list(dict.fromkeys(found))
+
+
+def table_references(sql_query: str, dialect: str) -> list[tuple[str, ...]] | None:
+    """The tables and views *sql_query* names, each as its lower-case name parts.
+
+    A reference keeps the parts written -- ``sales.orders`` is
+    ``("sales", "orders")`` -- and leaves out CTE names and table functions.
+
+    Args:
+        sql_query: One SQL statement.
+        dialect: sqlglot dialect name.
+
+    Returns:
+        The references, or None when the statement does not parse.
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    try:
+        statement = sqlglot.parse_one(sql_query, dialect=dialect)
+    except Exception as e:  # sqlglot.errors.ParseError and friends
+        logger.debug(f"table_references: statement does not parse: {e}")
+        return None
+    ctes = {cte.alias_or_name.lower() for cte in statement.find_all(exp.CTE)}
+    references = []
+    for table in statement.find_all(exp.Table):
+        if not table.name:
+            continue  # a table function: read_csv(...), range(10)
+        parts = tuple(
+            part.lower() for part in (table.catalog, table.db, table.name) if part
+        )
+        if len(parts) == 1 and parts[0] in ctes:
+            continue
+        references.append(parts)
+    return list(dict.fromkeys(references))
 
 
 def _explain_problem(stmt: Any, dialect: str) -> dict[str, Any] | None:

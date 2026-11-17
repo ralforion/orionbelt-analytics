@@ -48,6 +48,12 @@ BLOCKED = [
     ("clickhouse", "SELECT * FROM file('/etc/hosts', CSV)"),
     ("databricks", "SELECT * FROM read_files('s3://bucket/x')"),
     ("bigquery", "SELECT * FROM EXTERNAL_QUERY('conn', 'SELECT 1')"),
+    ("duckdb", 'SELECT * FROM "/tmp/probe"."csv"'),
+    ("duckdb", 'SELECT * FROM main."/tmp/probe.csv"'),
+    # Snowflake advances a sequence through a column-like reference too.
+    ("snowflake", "SELECT seq.NEXTVAL FROM DUAL"),
+    ("snowflake", "SELECT s.NEXTVAL FROM TABLE(GETNEXTVAL(seq)) s"),
+    ("snowflake", "SELECT db.sch.seq.nextval AS id FROM sales.orders"),
     # Inside a CTE or subquery is no different.
     ("postgres", "WITH x AS (SELECT pg_sleep(60)) SELECT * FROM x"),
     ("duckdb", "SELECT a FROM t WHERE a IN (SELECT a FROM read_csv('x.csv'))"),
@@ -160,6 +166,7 @@ def test_other_unparsed_commands_are_refused(dialect: str, sql: str) -> None:
         ("duckdb", "SELECT * FROM main.orders"),
         ("mysql", "SELECT CONCAT(first_name, ' ', last_name) FROM people"),
         ("snowflake", "SELECT SYSTEM$TYPEOF(1)"),
+        ("snowflake", "SELECT o.nextval_at, nextval FROM sales.orders o"),
     ],
 )
 def test_ordinary_reads_pass(dialect: str, sql: str) -> None:
@@ -186,7 +193,8 @@ def duckdb_manager(tmp_path: Path) -> DatabaseManager:
     con.execute(
         "CREATE SCHEMA sales; "
         "CREATE TABLE sales.orders AS SELECT range AS id FROM range(10); "
-        "CREATE SEQUENCE sales.order_seq START 1"
+        "CREATE SEQUENCE sales.order_seq START 1; "
+        "CREATE VIEW main.orders_view AS SELECT * FROM sales.orders"
     )
     con.close()
     (tmp_path / "data.csv").write_text("code\nX7Q2\n")
@@ -212,6 +220,62 @@ def test_duckdb_refuses_file_reads(
         assert not result["success"], sql
         assert result["error_type"] == "forbidden_operation", result
         assert "X7Q2" not in str(result)
+
+
+def test_duckdb_refuses_a_query_it_cannot_parse(
+    duckdb_manager: DatabaseManager, tmp_path: Path
+) -> None:
+    # Valid DuckDB that sqlglot cannot parse: every check after parsing would
+    # be skipped, so the query is refused rather than run unchecked.
+    result = duckdb_manager.execute_sql_query(
+        f"SELECT * FROM read_text('{tmp_path / 'data.csv'}') "
+        "WHERE EXISTS (PIVOT_WIDER (SELECT 1 AS a) ON a)"
+    )
+    assert not result["success"]
+    assert result["error_type"] == "syntax_error", result
+    assert "X7Q2" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM data.csv",
+        'SELECT * FROM "data"."csv"',
+        'SELECT * FROM data."CSV"',
+        "SELECT * FROM main.data.csv",
+    ],
+)
+def test_duckdb_refuses_names_outside_its_catalog(
+    duckdb_manager: DatabaseManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sql: str,
+) -> None:
+    # DuckDB reads a dotted name it cannot resolve as a file in its working
+    # directory, joining the parts: data.csv, "data"."csv" and main.data.csv
+    # all reach ./data.csv.
+    monkeypatch.chdir(tmp_path)
+    result = duckdb_manager.execute_sql_query(sql)
+    assert not result["success"], sql
+    assert result["error_type"] in ("unknown_table", "forbidden_operation"), result
+    assert "X7Q2" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT count(*) AS n FROM shop.sales.orders",
+        "SELECT count(*) AS n FROM shop.orders_view",
+        "SELECT count(*) AS n FROM information_schema.tables",
+        "WITH data AS (SELECT 1 AS a) SELECT a FROM data",
+        "SELECT count(*) AS n FROM range(3)",
+    ],
+)
+def test_duckdb_catalog_names_still_resolve(
+    duckdb_manager: DatabaseManager, sql: str
+) -> None:
+    result = duckdb_manager.execute_sql_query(sql)
+    assert result["success"], result
 
 
 def test_duckdb_cannot_advance_a_sequence(duckdb_manager: DatabaseManager) -> None:
@@ -273,3 +337,52 @@ def test_query_runs_in_a_read_only_transaction(
     assert result["success"], result
     executed = [str(call.args[0]) for call in conn.execute.call_args_list]
     assert executed == [statement, "SELECT 1"]
+
+
+# --- Schema names written into driver metadata SQL ---------------------------
+
+
+def _bigquery_driver() -> tuple[Any, MagicMock]:
+    from src.drivers.bigquery import BigQueryDriver
+
+    driver = BigQueryDriver()
+    driver._project_id = "proj"
+    driver._dataset = "shop"
+    conn = _driver_with_mock_engine(driver)
+    conn.execute.return_value.fetchall.return_value = []
+    return driver, conn
+
+
+@pytest.mark.parametrize("method", ["get_tables", "get_views"])
+def test_bigquery_refuses_a_schema_name_that_is_not_a_dataset_name(
+    method: str,
+) -> None:
+    driver, conn = _bigquery_driver()
+    crafted = "shop`.INFORMATION_SCHEMA.TABLES; SELECT 1; SELECT 1 FROM `proj.shop"
+    assert not getattr(driver, method)(crafted)
+    conn.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("method", ["get_tables", "get_views"])
+def test_bigquery_queries_a_valid_dataset(method: str) -> None:
+    driver, conn = _bigquery_driver()
+    getattr(driver, method)("Sales_2026")
+    assert "`proj.Sales_2026`.INFORMATION_SCHEMA" in str(conn.execute.call_args.args[0])
+
+
+def test_databricks_show_tables_fallback_quotes_the_schema() -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from src.drivers.databricks import DatabricksDriver
+
+    driver = DatabricksDriver()
+    driver._catalog = "main"
+    conn = _driver_with_mock_engine(driver)
+    fallback = MagicMock()
+    fallback.fetchall.return_value = []
+    conn.execute.side_effect = [SQLAlchemyError("no information_schema"), fallback]
+
+    driver.get_tables("sales` ; SELECT 1 ; `x")
+
+    sql = str(conn.execute.call_args.args[0])
+    assert sql == "SHOW TABLES IN `main`.`sales`` ; SELECT 1 ; ``x`"
