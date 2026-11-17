@@ -573,12 +573,13 @@ def _snowflake_identifier(identifier: Any) -> str:
     return str(identifier or "").translate(_ASCII_UPPER)
 
 
-def _binds_snowflake_column(column: Any, node: Any) -> bool:
-    """Whether the FROM/JOIN item *node* is what *column*'s qualifier names.
+def _binds_snowflake_column(column: Any, item: Any) -> bool:
+    """Whether the FROM/JOIN item *item* is what *column*'s qualifier names.
 
-    An aliased item answers only to its alias, and only for a one-part
-    qualifier. An unaliased table answers to its name alone, or to its name
-    with exactly the qualifiers it was written with. Anything less certain --
+    An aliased item -- table, derived table, LATERAL, table function --
+    answers only to its alias, and only for a one-part qualifier. An
+    unaliased table answers to its name alone, or to its name with exactly the
+    qualifiers it was written with. Anything less certain --
     ``otherdb.sales.seq`` against ``FROM sales.seq`` -- is not a match.
     """
     from sqlglot import expressions as exp
@@ -588,64 +589,115 @@ def _binds_snowflake_column(column: Any, node: Any) -> bool:
         for key in ("catalog", "db", "table")
         if column.args.get(key)
     ]
-    alias = node.args.get("alias")
+    alias = item.args.get("alias")
     if alias is not None and alias.args.get("this") is not None:
         return qualifier == [_snowflake_identifier(alias.this)]
-    if not isinstance(node, exp.Table):
+    if not isinstance(item, exp.Table):
         return False
     written = [
-        _snowflake_identifier(node.args[key])
+        _snowflake_identifier(item.args[key])
         for key in ("catalog", "db", "this")
-        if node.args.get(key)
+        if item.args.get(key)
     ]
     return qualifier == written or qualifier == written[-1:]
+
+
+def _contains(ancestor: Any, node: Any) -> bool:
+    """Whether *node* is *ancestor* or lies inside it."""
+    while node is not None:
+        if node is ancestor:
+            return True
+        node = node.parent
+    return False
+
+
+def _items_visible_at(select: Any, position: Any) -> list[Any]:
+    """The FROM/JOIN items of *select* that *position*, inside it, can name.
+
+    The select list, WHERE and the clauses after it see every item. A join's
+    ON condition sees the items joined so far. An item -- a LATERAL subquery
+    or a table function's arguments -- sees only the items before it.
+    """
+    from_clause = select.args.get("from_") or select.args.get("from")
+    joins = select.args.get("joins") or []
+    items = ([from_clause.this] if from_clause is not None else []) + [
+        join.this for join in joins
+    ]
+    for index, join in enumerate(joins):
+        condition = join.args.get("on")
+        if condition is not None and _contains(condition, position):
+            return items[: index + 2]
+    for index, item in enumerate(items):
+        if _contains(item, position):
+            return items[:index]
+    return items
+
+
+def _enclosing_position(select: Any) -> Any:
+    """Where *select* stands in the query around it, if it sees that query's items.
+
+    An expression subquery (in the select list, WHERE, ON, IN, EXISTS ...)
+    and a LATERAL subquery see their enclosing query; a derived table in
+    FROM, a CTE body and the root query do not. Returns the node to look up
+    visibility from in the enclosing query, or None.
+    """
+    from sqlglot import expressions as exp
+
+    node = select
+    while isinstance(node.parent, exp.SetOperation):
+        node = node.parent  # a UNION branch stands where the UNION does
+    parent = node.parent
+    if parent is None or isinstance(parent, (exp.CTE, exp.From, exp.Join)):
+        return None
+    if isinstance(parent, exp.Subquery):
+        holder = parent.parent
+        if isinstance(holder, exp.Lateral):
+            return holder
+        if holder is None or isinstance(holder, (exp.From, exp.Join, exp.CTE)):
+            return None
+        return parent
+    return node
+
+
+def _snowflake_column_is_bound(column: Any) -> bool:
+    """Whether *column*'s qualifier names a FROM/JOIN item visible where it stands."""
+    from sqlglot import expressions as exp
+
+    position = column
+    while position is not None:
+        select = position.find_ancestor(exp.Select)
+        if select is None:
+            return False
+        if any(
+            _binds_snowflake_column(column, item)
+            for item in _items_visible_at(select, position)
+        ):
+            return True
+        position = _enclosing_position(select)
+    return False
 
 
 def _snowflake_sequence_references(stmt: Any) -> list[str]:
     """``seq.NEXTVAL`` references in a Snowflake statement, which advance seq.
 
-    Snowflake reads ``x.NEXTVAL`` as a column when ``x`` is bound in a FROM or
-    JOIN visible where it is written, and as the sequence ``x`` otherwise.
-    Only items actually selected count -- a CTE nobody selects from binds
-    nothing -- and a scope sees its enclosing scope's items only when it is a
-    subquery that can be correlated with it; a CTE or derived table cannot.
-    Identifiers compare as Snowflake resolves them (see
-    :func:`_snowflake_identifier`). If the scopes cannot be built, every
-    qualified NEXTVAL is treated as a sequence.
+    Snowflake reads ``x.NEXTVAL`` as a column when ``x`` names a FROM or JOIN
+    item visible where it is written, and as the sequence ``x`` otherwise.
+    Visibility follows the query's structure rather than sqlglot's scopes,
+    which file a LATERAL subquery's columns under the enclosing query and so
+    would let an item *after* the LATERAL bind them: see
+    :func:`_items_visible_at` and :func:`_enclosing_position`. A CTE binds
+    nothing unless selected from. Identifiers compare as Snowflake resolves
+    them (see :func:`_snowflake_identifier`).
     """
     from sqlglot import expressions as exp
-    from sqlglot.optimizer.scope import traverse_scope
-
-    def is_nextval(column: Any) -> bool:
-        return bool(column.table) and column.name.upper() == "NEXTVAL"
-
-    def label(column: Any) -> str:
-        return f"sequence {column.sql(dialect='snowflake')}"
-
-    try:
-        scopes = traverse_scope(stmt)
-    except Exception as e:  # sqlglot.errors.OptimizeError and friends
-        logger.debug(f"Scopes unavailable, treating NEXTVAL as a sequence: {e}")
-        return [label(c) for c in stmt.find_all(exp.Column) if is_nextval(c)]
-
-    def bound(column: Any, scope: Any) -> bool:
-        while scope is not None:
-            if any(
-                _binds_snowflake_column(column, node)
-                for node, _ in scope.selected_sources.values()
-            ):
-                return True
-            if not scope.is_subquery:
-                return False
-            scope = scope.parent
-        return False
 
     return list(
         dict.fromkeys(
-            label(column)
-            for scope in scopes
-            for column in scope.columns
-            if is_nextval(column) and not bound(column, scope)
+            f"sequence {column.sql(dialect='snowflake')}"
+            for column in stmt.find_all(exp.Column)
+            if column.table
+            and column.name.upper() == "NEXTVAL"
+            and not _snowflake_column_is_bound(column)
         )
     )
 

@@ -66,6 +66,22 @@ BLOCKED = [
     # Quoted "seq" is not unquoted SEQ, and a database qualifier must match.
     ("snowflake", 'SELECT seq.NEXTVAL FROM DUAL AS "seq"'),
     ("snowflake", "SELECT otherdb.sales.seq.NEXTVAL FROM currentdb.sales.seq"),
+    # A LATERAL or table function sees only the items before it, an ON clause
+    # only the items joined so far, and a derived table none of its siblings.
+    (
+        "snowflake",
+        "SELECT x.n FROM LATERAL (SELECT seq.nextval AS n) x, sales.orders seq",
+    ),
+    (
+        "snowflake",
+        "SELECT f.value FROM TABLE(FLATTEN(input => seq.nextval)) f, sales.orders seq",
+    ),
+    (
+        "snowflake",
+        "SELECT 1 FROM sales.a a JOIN sales.b b ON seq.nextval = 1 "
+        "JOIN sales.orders seq ON TRUE",
+    ),
+    ("snowflake", "SELECT x.n FROM sales.orders o, (SELECT o.nextval AS n) x"),
     # Inside a CTE or subquery is no different.
     ("postgres", "WITH x AS (SELECT pg_sleep(60)) SELECT * FROM x"),
     ("duckdb", "SELECT a FROM t WHERE a IN (SELECT a FROM read_csv('x.csv'))"),
@@ -185,6 +201,30 @@ def test_other_unparsed_commands_are_refused(dialect: str, sql: str) -> None:
         ("snowflake", "SELECT orders.nextval FROM sales.orders"),
         ("snowflake", "SELECT O.nextval FROM sales.orders o"),
         ("snowflake", 'SELECT "o".nextval FROM sales.orders AS "o"'),
+        ("snowflake", "SELECT x.nextval FROM (SELECT 1 AS nextval) AS x"),
+        (
+            "snowflake",
+            "SELECT x.n FROM sales.orders o, LATERAL (SELECT o.nextval AS n) x",
+        ),
+        (
+            "snowflake",
+            "SELECT x.n FROM sales.orders o JOIN LATERAL (SELECT o.nextval AS n) x "
+            "ON TRUE",
+        ),
+        (
+            "snowflake",
+            "SELECT f.value FROM sales.orders o, LATERAL FLATTEN(input => o.nextval) f",
+        ),
+        (
+            "snowflake",
+            "SELECT f.value FROM sales.orders o, TABLE(FLATTEN(input => o.nextval)) f",
+        ),
+        ("snowflake", "SELECT 1 FROM sales.orders o WHERE EXISTS (SELECT o.nextval)"),
+        ("snowflake", "SELECT 1 FROM sales.orders o WHERE 1 IN (SELECT o.nextval)"),
+        (
+            "snowflake",
+            "SELECT (SELECT o.nextval UNION ALL SELECT 2) AS n FROM sales.orders o",
+        ),
         ("snowflake", "SELECT (SELECT o.nextval) AS n FROM sales.orders o"),
         ("snowflake", "WITH c AS (SELECT 1 AS nextval) SELECT c.nextval FROM c"),
         # Only Snowflake has seq.NEXTVAL; elsewhere it is always a column.
