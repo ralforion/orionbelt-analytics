@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_relationship` does for one, records the verdicts and reports them.
   A confirmed relationship then blocks fan-traps in `execute_sql_query` like
   a declared foreign key, instead of only warning, so warehouses without
-  declared keys get the same protection. Verdicts are kept across
+  declared keys get the same protection. Ontologies generated in the
+  background (`AUTO_ONTOLOGY`) are checked too, and so is one returned from
+  cache, which gets the verdicts added. Verdicts are kept across
   regenerations and not measured again. Off by default, since each check
   scans both tables.
 

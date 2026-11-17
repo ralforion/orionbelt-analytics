@@ -249,7 +249,7 @@ Generate an RDF/OWL ontology from the database schema with `oba:` (OrionBelt Ana
 - Generates OWL DatatypeProperties for columns with `oba:columnName`, `oba:sqlDataType`
 - Auto-persists to Oxigraph RDF store for SPARQL querying (when `auto_persist` is true)
 - Analyzes generated names and reports how many may need semantic review
-- With `AUTO_VALIDATE_RELATIONSHIPS=true`, checks every relationship inferred from column names against the data, as `validate_relationship` does, and reports the verdicts; confirmed ones then block fan-traps like declared keys. Relationships that already have a verdict are not measured again
+- With `AUTO_VALIDATE_RELATIONSHIPS=true`, checks every relationship inferred from column names against the data, as `validate_relationship` does, and reports the verdicts; confirmed ones then block fan-traps like declared keys. Relationships that already have a verdict are not measured again. This also covers a cached ontology (it is returned with the verdicts added) and one generated in the background with `AUTO_ONTOLOGY`
 - Saves ontology as `.ttl` (Turtle) file in connection-scoped output directory
 
 ---

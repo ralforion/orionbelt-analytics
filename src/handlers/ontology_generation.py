@@ -34,6 +34,7 @@ from .connection_scope import (
 from .ontology_validation import (
     auto_validation_enabled,
     reapply_recorded,
+    validate_cached_ontology,
     validate_inferred_relationships,
 )
 
@@ -219,6 +220,14 @@ async def generate_ontology(
 
     # Check if ontology is already generated
     if session.ontology_file:
+        # A cached ontology may predate AUTO_VALIDATE_RELATIONSHIPS, or have
+        # come from background generation: check what it still only guesses.
+        cached_checks = (
+            await validate_cached_ontology(ctx, services)
+            if auto_validation_enabled()
+            else None
+        )
+        note = _relationship_checks_note(cached_checks)
         if session.ontology_enriched:
             await notify_client(
                 ctx, "Ontology CACHED and already enriched — ready to use"
@@ -231,7 +240,7 @@ async def generate_ontology(
                 f"## READY TO USE:\n"
                 f"- query_sparql() for semantic queries\n"
                 f"- execute_sql_query() for data queries (includes built-in validation)"
-            )
+            ) + note
         await notify_client(
             ctx, "Ontology CACHED - call suggest_semantic_names() for enrichment"
         )
@@ -242,7 +251,7 @@ async def generate_ontology(
             f"## FOR ENRICHMENT:\n"
             f"Call suggest_semantic_names() NOW - it will use the cached ontology automatically.\n\n"
             f"That's the ONLY tool you need to call for enrichment!"
-        )
+        ) + note
 
     # Validate base_uri
     if not base_uri.endswith("/"):

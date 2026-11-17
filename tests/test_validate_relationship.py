@@ -730,3 +730,55 @@ async def test_inferred_relationships_stay_unchecked_by_default(shop, monkeypatc
         graph = _active_ontology(shop)
         assert _status_of(graph, "supplier_id") is None
         assert _status_of(graph, "customer_id") is None
+
+
+async def test_a_cached_ontology_is_checked_once_the_setting_is_on(shop, monkeypatch):
+    monkeypatch.delenv("AUTO_VALIDATE_RELATIONSHIPS", raising=False)
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool("generate_ontology", {**on, "schema_name": "main"})
+        assert _status_of(_active_ontology(shop), "supplier_id") is None
+
+        # Turned on later: the next call returns the cached ontology, checked.
+        monkeypatch.setenv("AUTO_VALIDATE_RELATIONSHIPS", "true")
+        cached = _text(
+            await client.call_tool("generate_ontology", {**on, "schema_name": "main"})
+        )
+        assert "ALREADY CACHED" in cached
+        assert "INFERRED RELATIONSHIPS CHECKED AGAINST THE DATA: 2" in cached
+        graph = _active_ontology(shop)
+        assert _status_of(graph, "supplier_id") == STATUS_CONFIRMED
+        assert _status_of(graph, "customer_id") == STATUS_REFUTED
+
+        # Checked once: a further call finds nothing left to measure.
+        again = _text(
+            await client.call_tool("generate_ontology", {**on, "schema_name": "main"})
+        )
+        assert "INFERRED RELATIONSHIPS CHECKED" not in again
+
+
+async def test_background_generation_checks_inferred_relationships(shop, monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+
+    import src.handlers.graphrag as graphrag_handler
+
+    monkeypatch.setenv("AUTO_VALIDATE_RELATIONSHIPS", "true")
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        await client.call_tool(
+            "discover_schema", {"connection": handle, "schema_name": "main"}
+        )
+        # AUTO_ONTOLOGY's path: generated after GraphRAG, without a tool call.
+        session = main_module._server_state.session_for_handle(handle)
+        monkeypatch.setattr(graphrag_handler, "notify_client", AsyncMock())
+        await graphrag_handler._auto_generate_ontology_background(
+            "main", session.get_cached_schema("main"), session, Mock()
+        )
+
+    graph = _active_ontology(shop)
+    assert _status_of(graph, "supplier_id") == STATUS_CONFIRMED
+    assert _status_of(graph, "customer_id") == STATUS_REFUTED
