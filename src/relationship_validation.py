@@ -363,6 +363,48 @@ def find_relationships(
     return found
 
 
+def inferred_relationships_to_check(graph: Graph) -> list[RelationshipRef]:
+    """The relationships the ontology only guessed and nobody has checked yet.
+
+    Inferred from column names (``oba:isInferredRelationship``), carrying no
+    verdict yet, and checkable -- one key column against one referenced
+    column. Declared foreign keys need no check, and a recorded verdict is
+    not measured again.
+
+    Args:
+        graph: The ontology.
+
+    Returns:
+        One reference per relationship, in a stable order.
+    """
+    found: dict[str, RelationshipRef] = {}
+    for prop in sorted(
+        graph.subjects(OBA.isInferredRelationship, Literal(True)), key=str
+    ):
+        if graph.value(prop, OBA.validationStatus) is not None:
+            continue
+        if why_not_checkable(graph, prop) is not None:
+            continue
+        domain = graph.value(prop, RDFS.domain)
+        from_table = _literal(graph, domain, OBA.tableName) if domain else None
+        column = _literal(graph, prop, OBA.foreignKeyColumn)
+        to_table = _literal(graph, prop, OBA.referencedTable)
+        if not (from_table and column and to_table):
+            continue
+        for ref in find_relationships(graph, from_table, column, to_table):
+            if ref.property_uri == str(prop):
+                key = relationship_key(
+                    ref.from_schema,
+                    ref.from_table,
+                    ref.column,
+                    ref.to_schema,
+                    ref.to_table,
+                    ref.to_column,
+                )
+                found.setdefault(key, ref)
+    return list(found.values())
+
+
 def record_in_graph(graph: Graph, record: ValidationRecord) -> int:
     """Write a verdict onto every property stating the relationship.
 

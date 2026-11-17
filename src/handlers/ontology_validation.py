@@ -2,6 +2,9 @@
 
 import asyncio
 import logging
+import os
+from collections import Counter
+from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 from typing import Any
@@ -25,11 +28,13 @@ from ..relationship_validation import (
     STATUS_PARTIAL,
     STATUS_REFUTED,
     STATUS_TARGET_NOT_UNIQUE,
+    RelationshipRef,
     ValidationRecord,
     apply_recorded,
     build_check_queries,
     classify,
     find_relationships,
+    inferred_relationships_to_check,
     record_in_graph,
     why_not_checkable,
 )
@@ -175,6 +180,352 @@ def _count(value: Any) -> int:
     return int(value) if value is not None else 0
 
 
+async def _measure(db_manager: Any, ref: RelationshipRef) -> ValidationRecord:
+    """Run the two check queries for *ref* and classify what they count.
+
+    Args:
+        db_manager: The connection's database manager.
+        ref: The relationship, with both schemas resolved.
+
+    Returns:
+        The verdict, not yet recorded anywhere.
+
+    Raises:
+        RuntimeError: A check query failed.
+    """
+    db_type = (getattr(db_manager, "connection_info", None) or {}).get("type", "")
+    coverage_sql, uniqueness_sql = build_check_queries(ref, db_type)
+    coverage = _first_row(await run_db(db_manager.execute_sql_query, coverage_sql, 5))
+    uniqueness = _first_row(
+        await run_db(db_manager.execute_sql_query, uniqueness_sql, 5)
+    )
+    checked = _count(coverage[0] if coverage else 0)
+    matched = _count(coverage[1] if len(coverage) > 1 else 0)
+    target_rows = _count(uniqueness[0] if uniqueness else 0)
+    target_distinct = _count(uniqueness[1] if len(uniqueness) > 1 else 0)
+    status, ratio = classify(checked, matched, target_rows, target_distinct)
+    return ValidationRecord(
+        from_schema=ref.from_schema,
+        from_table=ref.from_table,
+        column=ref.column,
+        to_schema=ref.to_schema,
+        to_table=ref.to_table,
+        to_column=ref.to_column,
+        status=status,
+        match_ratio=ratio,
+        checked_rows=checked,
+        matched_rows=matched,
+        target_rows=target_rows,
+        target_distinct=target_distinct,
+        checked_at=utc_now().isoformat(),
+    )
+
+
+#: Opt-in: check every relationship inferred from column names against the
+#: data when generate_ontology runs. Off by default -- each check scans both
+#: tables, which on a large warehouse takes as long as a full count.
+AUTO_VALIDATE_VARIABLE = "AUTO_VALIDATE_RELATIONSHIPS"
+
+
+def auto_validation_enabled() -> bool:
+    """Whether generate_ontology checks inferred relationships by itself."""
+    return os.getenv(AUTO_VALIDATE_VARIABLE, "false").strip().lower() == "true"
+
+
+async def _measure_unchecked(
+    session: Any,
+    db_manager: Any,
+    graph: Any,
+    still_current: Callable[[], bool],
+) -> tuple[list[ValidationRecord], list[str]]:
+    """Measure every unchecked inferred relationship in *graph* and record it there.
+
+    Args:
+        session: The session, to resolve tables' physical schemas.
+        db_manager: The connection's database manager.
+        graph: The ontology; each verdict is written onto it.
+        still_current: False once the work no longer belongs to the session's
+            connection; measuring stops there.
+
+    Returns:
+        The verdicts, and the relationships whose check failed.
+    """
+    refs = await asyncio.to_thread(inferred_relationships_to_check, graph)
+    records: list[ValidationRecord] = []
+    failed: list[str] = []
+    for ref in refs:
+        resolved = replace(
+            ref,
+            from_schema=_physical_schema(session, ref.from_table, ref.from_schema),
+            to_schema=_physical_schema(session, ref.to_table, ref.to_schema),
+        )
+        label = (
+            f"{resolved.from_table}.{resolved.column} -> "
+            f"{resolved.to_table}.{resolved.to_column}"
+        )
+        try:
+            record = await _measure(db_manager, resolved)
+        except Exception as e:
+            logger.warning(f"Inferred relationship check failed for {label}: {e}")
+            failed.append(label)
+            continue
+        if not still_current():
+            break
+        record_in_graph(graph, record)
+        records.append(record)
+    return records, failed
+
+
+async def _remember_verdicts(
+    connection_id: str | None, schema_name: str, records: list[ValidationRecord]
+) -> None:
+    """File verdicts in the workspace, so a regenerated ontology gets them back."""
+    if not records or not connection_id:
+        return
+
+    def _record(manager: VersionMetadataManager) -> None:
+        schema_ws = manager.get_workspace_schema(schema_name) or {}
+        verdicts = dict(schema_ws.get(METADATA_SECTION) or {})
+        for record in records:
+            verdicts[record.key()] = record.as_dict()
+        manager.update_workspace(schema_name, METADATA_SECTION, verdicts)
+
+    try:
+        await mutate_workspace_metadata(connection_id, OUTPUT_DIR, _record)
+    except Exception as e:
+        logger.warning(f"Failed to record the relationship checks: {e}")
+
+
+def _summary(records: list[ValidationRecord], failed: list[str]) -> dict[str, Any]:
+    return {
+        "checked": len(records),
+        "verdicts": dict(Counter(record.status for record in records)),
+        "failed": failed,
+    }
+
+
+async def validate_inferred_relationships(
+    ctx: Context,
+    services: "HandlerContext",
+    generator: OntologyGenerator,
+    pinned: Any,
+    schema_name: str | None,
+) -> dict[str, Any]:
+    """Check every unchecked inferred relationship of a freshly generated ontology.
+
+    Each verdict is written onto the ontology in *generator* -- the caller
+    saves it with the rest -- and into the workspace, so a regeneration
+    keeps it, exactly as validate_relationship records one. A check that
+    fails is skipped and reported; it does not stop the others.
+
+    Args:
+        ctx: FastMCP request context.
+        services: Request-scoped services.
+        generator: Holds the new ontology's graph; changed in place.
+        pinned: The connection the generation was pinned to.
+        schema_name: The ontology's schema.
+
+    Returns:
+        ``checked`` (count), ``verdicts`` (count per status) and ``failed``
+        (the relationships whose check failed).
+    """
+    session = services.get_session_data(ctx)
+    await notify_client(ctx, "Checking inferred relationships against the data")
+    records, failed = await _measure_unchecked(
+        session,
+        services.get_session_db_manager(ctx),
+        generator.graph,
+        lambda: still_connected(session, pinned),
+    )
+    await _remember_verdicts(pinned.connection_id, schema_name or "default", records)
+    return _summary(records, failed)
+
+
+async def validate_inferred_in_background(
+    session: Any,
+    connection_id: str | None,
+    generator: OntologyGenerator,
+    schema_name: str,
+) -> dict[str, Any]:
+    """The same check for an ontology generated in the background (AUTO_ONTOLOGY).
+
+    Skipped when the session has moved to another connection meanwhile: its
+    database manager is no longer the one the ontology describes.
+
+    Args:
+        session: The session the generation was started for.
+        connection_id: The connection it was pinned to.
+        generator: Holds the new ontology's graph; changed in place.
+        schema_name: The ontology's schema.
+
+    Returns:
+        The same summary as :func:`validate_inferred_relationships`.
+    """
+    db_manager = getattr(session, "db_manager", None)
+    if db_manager is None or session.connection_id != connection_id:
+        return _summary([], [])
+    records, failed = await _measure_unchecked(
+        session,
+        db_manager,
+        generator.graph,
+        lambda: session.connection_id == connection_id,
+    )
+    await _remember_verdicts(connection_id, schema_name, records)
+    return _summary(records, failed)
+
+
+async def validate_cached_ontology(
+    ctx: Context, services: "HandlerContext"
+) -> dict[str, Any] | None:
+    """The same check for the generated ontology generate_ontology returns cached.
+
+    That ontology may have been generated before the setting was turned on,
+    or enriched with semantic names since, so it is not regenerated: the
+    verdicts are added to it and it is saved as a new version, as
+    validate_relationship saves one. An uploaded ontology is left alone.
+
+    Returns:
+        The summary, or None when there was nothing to check.
+    """
+    session = services.get_session_data(ctx)
+    if session.loaded_ontology is not None:
+        return None
+    pinned = pin_connection(session)
+    try:
+        generator, is_upload = await _active_ontology(ctx, session, services)
+    except Exception as e:
+        logger.warning(f"Could not load the cached ontology to check it: {e}")
+        return None
+    if is_upload:
+        return None
+    records, failed = await _measure_unchecked(
+        session,
+        services.get_session_db_manager(ctx),
+        generator.graph,
+        lambda: still_connected(session, pinned),
+    )
+    if records:
+        await notify_client(
+            ctx, f"Checked {len(records)} inferred relationship(s) against the data"
+        )
+        await _save_active_ontology(
+            ctx, services, session, pinned, generator, is_upload, records
+        )
+    if not (records or failed):
+        return None
+    return _summary(records, failed)
+
+
+async def _save_active_ontology(
+    ctx: Context,
+    services: "HandlerContext",
+    session: Any,
+    pinned: Any,
+    generator: OntologyGenerator,
+    is_upload: bool,
+    records: list[ValidationRecord],
+) -> dict[str, Any] | None:
+    """Save the active ontology, now carrying *records*, as its new version.
+
+    Writes the file, makes it the session's active ontology, files the
+    verdicts in the workspace and refreshes the RDF store.
+
+    Returns:
+        ``filename``, ``persisted`` and ``graph_uri``; None if the session
+        moved to another connection meanwhile.
+    """
+    schema_name = (
+        session.current_schema or session.get_last_analyzed_schema() or "default"
+    )
+    schema_safe = schema_name.replace(" ", "_").replace(".", "_")
+    base_uri = str(generator.base_uri)
+    ontology_ttl = await asyncio.to_thread(generator.serialize_ontology)
+
+    conn_dir = (
+        get_connection_dir(pinned.connection_id)
+        if pinned.connection_id
+        else ensure_output_dir()
+    )
+    family = f"ontology_{pinned.connection_id or 'default'}_{schema_safe}_validated"
+    async with artifact_family_lock(conn_dir, family):
+        filename = (
+            services.get_session_safe_filename(
+                ctx, "ontology", f"{schema_safe}_validated"
+            )
+            + ".ttl"
+        )
+        path = conn_dir / filename
+        await write_text_file(path, ontology_ttl)
+        if not still_connected(session, pinned):
+            return None
+
+        previous = session.ontology_file
+        session.obqc_validator = None
+        if is_upload:
+            # Still the user's own ontology, now carrying the verdicts.
+            session.loaded_ontology = ontology_ttl
+            session.loaded_ontology_path = str(path)
+        else:
+            session.ontology_file = filename
+        if services.provides("remember_prepared_ontology"):
+            await asyncio.to_thread(
+                partial(
+                    services.remember_prepared_ontology,
+                    session,
+                    generator.graph,
+                    base_uri,
+                    **({"text": ontology_ttl} if is_upload else {"path": path}),
+                )
+            )
+
+        if pinned.connection_id:
+
+            def _record(manager: VersionMetadataManager) -> None:
+                schema_ws = manager.get_workspace_schema(schema_name) or {}
+                verdicts = dict(schema_ws.get(METADATA_SECTION) or {})
+                for record in records:
+                    verdicts[record.key()] = record.as_dict()
+                manager.update_workspace(schema_name, METADATA_SECTION, verdicts)
+                if not is_upload:
+                    ontology_ws = dict(schema_ws.get("ontology") or {})
+                    ontology_ws["ontology_file"] = filename
+                    manager.update_workspace(schema_name, "ontology", ontology_ws)
+
+            try:
+                await mutate_workspace_metadata(
+                    pinned.connection_id, OUTPUT_DIR, _record
+                )
+            except Exception as e:
+                logger.warning(f"Failed to record the validation in metadata: {e}")
+
+        if not is_upload:
+            await prune_superseded_artifacts(
+                path, protect=[previous] if previous else []
+            )
+
+    # The graph the active ontology lives in: generate_ontology(graph_uri=...)
+    # or load_my_ontology may have chosen one. Writing to the schema's default
+    # instead left the active graph unvalidated and could overwrite another.
+    graph_uri = (
+        session.ontology_graph_uri
+        or _recorded_graph_uri(pinned.connection_id, schema_name)
+        or schema_graph_uri(schema_name)
+    )
+    persisted = False
+    if OXIGRAPH_AVAILABLE and services.provides("get_oxigraph_store"):
+        try:
+            store = services.get_oxigraph_store(ctx)
+            if store is not None:
+                await asyncio.to_thread(
+                    store.load_ontology, ontology_ttl, graph_uri, schema_name
+                )
+                session.ontology_graph_uri = graph_uri
+                persisted = True
+        except Exception as e:
+            logger.warning(f"Could not refresh the RDF store: {e}")
+    return {"filename": filename, "persisted": persisted, "graph_uri": graph_uri}
+
+
 async def _active_ontology(
     ctx: Context, session: Any, services: "HandlerContext"
 ) -> tuple[OntologyGenerator, bool]:
@@ -297,12 +648,7 @@ async def validate_relationship(
     db_type = (getattr(db_manager, "connection_info", None) or {}).get("type", "")
     coverage_sql, uniqueness_sql = build_check_queries(ref, db_type)
     try:
-        coverage = _first_row(
-            await run_db(db_manager.execute_sql_query, coverage_sql, 5)
-        )
-        uniqueness = _first_row(
-            await run_db(db_manager.execute_sql_query, uniqueness_sql, 5)
-        )
+        record = await _measure(db_manager, ref)
     except Exception as e:
         err = services.create_error_response(
             f"Checking {ref.from_table}.{ref.column} -> {ref.to_table}."
@@ -315,119 +661,23 @@ async def validate_relationship(
         return connection_changed_response(
             services, "the relationship was being checked", "validate_relationship()"
         )
+    status, ratio, checked = record.status, record.match_ratio, record.checked_rows
+    matched, target_rows = record.matched_rows, record.target_rows
+    target_distinct = record.target_distinct
 
-    checked = _count(coverage[0] if coverage else 0)
-    matched = _count(coverage[1] if len(coverage) > 1 else 0)
-    target_rows = _count(uniqueness[0] if uniqueness else 0)
-    target_distinct = _count(uniqueness[1] if len(uniqueness) > 1 else 0)
-    status, ratio = classify(checked, matched, target_rows, target_distinct)
-    record = ValidationRecord(
-        from_schema=ref.from_schema,
-        from_table=ref.from_table,
-        column=ref.column,
-        to_schema=ref.to_schema,
-        to_table=ref.to_table,
-        to_column=ref.to_column,
-        status=status,
-        match_ratio=ratio,
-        checked_rows=checked,
-        matched_rows=matched,
-        target_rows=target_rows,
-        target_distinct=target_distinct,
-        checked_at=utc_now().isoformat(),
-    )
-
-    schema_name = (
-        session.current_schema or session.get_last_analyzed_schema() or "default"
-    )
-    schema_safe = schema_name.replace(" ", "_").replace(".", "_")
-    base_uri = str(generator.base_uri)
     record_in_graph(generator.graph, record)
-    ontology_ttl = await asyncio.to_thread(generator.serialize_ontology)
-
-    conn_dir = (
-        get_connection_dir(pinned.connection_id)
-        if pinned.connection_id
-        else ensure_output_dir()
+    saved = await _save_active_ontology(
+        ctx, services, session, pinned, generator, is_upload, [record]
     )
-    family = f"ontology_{pinned.connection_id or 'default'}_{schema_safe}_validated"
-    async with artifact_family_lock(conn_dir, family):
-        filename = (
-            services.get_session_safe_filename(
-                ctx, "ontology", f"{schema_safe}_validated"
-            )
-            + ".ttl"
+    if saved is None:
+        return connection_changed_response(
+            services, "the verdict was being recorded", "validate_relationship()"
         )
-        path = conn_dir / filename
-        await write_text_file(path, ontology_ttl)
-        if not still_connected(session, pinned):
-            return connection_changed_response(
-                services, "the verdict was being recorded", "validate_relationship()"
-            )
-
-        previous = session.ontology_file
-        session.obqc_validator = None
-        if is_upload:
-            # Still the user's own ontology, now carrying the verdict.
-            session.loaded_ontology = ontology_ttl
-            session.loaded_ontology_path = str(path)
-        else:
-            session.ontology_file = filename
-        if services.provides("remember_prepared_ontology"):
-            await asyncio.to_thread(
-                partial(
-                    services.remember_prepared_ontology,
-                    session,
-                    generator.graph,
-                    base_uri,
-                    **({"text": ontology_ttl} if is_upload else {"path": path}),
-                )
-            )
-
-        if pinned.connection_id:
-
-            def _record(manager: VersionMetadataManager) -> None:
-                schema_ws = manager.get_workspace_schema(schema_name) or {}
-                verdicts = dict(schema_ws.get(METADATA_SECTION) or {})
-                verdicts[record.key()] = record.as_dict()
-                manager.update_workspace(schema_name, METADATA_SECTION, verdicts)
-                if not is_upload:
-                    ontology_ws = dict(schema_ws.get("ontology") or {})
-                    ontology_ws["ontology_file"] = filename
-                    manager.update_workspace(schema_name, "ontology", ontology_ws)
-
-            try:
-                await mutate_workspace_metadata(
-                    pinned.connection_id, OUTPUT_DIR, _record
-                )
-            except Exception as e:
-                logger.warning(f"Failed to record the validation in metadata: {e}")
-
-        if not is_upload:
-            await prune_superseded_artifacts(
-                path, protect=[previous] if previous else []
-            )
-
-    # The graph the active ontology lives in: generate_ontology(graph_uri=...)
-    # or load_my_ontology may have chosen one. Writing to the schema's default
-    # instead left the active graph unvalidated and could overwrite another.
-    graph_uri = (
-        session.ontology_graph_uri
-        or _recorded_graph_uri(pinned.connection_id, schema_name)
-        or schema_graph_uri(schema_name)
+    filename, persisted, graph_uri = (
+        saved["filename"],
+        saved["persisted"],
+        saved["graph_uri"],
     )
-    persisted = False
-    if OXIGRAPH_AVAILABLE and services.provides("get_oxigraph_store"):
-        try:
-            store = services.get_oxigraph_store(ctx)
-            if store is not None:
-                await asyncio.to_thread(
-                    store.load_ontology, ontology_ttl, graph_uri, schema_name
-                )
-                session.ontology_graph_uri = graph_uri
-                persisted = True
-        except Exception as e:
-            logger.warning(f"Could not refresh the RDF store: {e}")
 
     await notify_client(
         ctx,

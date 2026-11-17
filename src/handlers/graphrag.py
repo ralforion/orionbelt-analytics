@@ -308,7 +308,11 @@ async def _auto_generate_ontology_background(
                 ),
             )
         )
-        from .ontology_validation import reapply_recorded
+        from .ontology_validation import (
+            auto_validation_enabled,
+            reapply_recorded,
+            validate_inferred_in_background,
+        )
 
         ontology_ttl = await asyncio.to_thread(
             reapply_recorded,
@@ -317,6 +321,16 @@ async def _auto_generate_ontology_background(
             schema_name,
             ontology_ttl,
         )
+        # Opt-in (AUTO_VALIDATE_RELATIONSHIPS), as in generate_ontology.
+        if auto_validation_enabled():
+            checks = await validate_inferred_in_background(
+                session, connection_id, ontology_generator, schema_name
+            )
+            if checks["checked"]:
+                ontology_ttl = await asyncio.to_thread(
+                    ontology_generator.serialize_ontology
+                )
+            logger.info(f"Inferred relationships checked in background: {checks}")
 
         conn_dir = (
             get_connection_dir(connection_id) if connection_id else ensure_output_dir()
@@ -353,6 +367,10 @@ async def _auto_generate_ontology_background(
                 # one a later rewrite of the active ontology must refresh.
                 if getattr(schema_state.ontology, "loaded_ontology", None) is None:
                     schema_state.ontology.rdf_graph_uri = f"{base_uri}{schema_name}"
+                    # The validator was built from the ontology this one
+                    # replaces; the next query builds it from this file, with
+                    # whatever relationships it now confirms.
+                    schema_state.ontology.obqc_validator = None
 
             graph_uri = ""
             triple_count = 0

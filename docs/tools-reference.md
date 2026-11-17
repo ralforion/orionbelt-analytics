@@ -249,6 +249,7 @@ Generate an RDF/OWL ontology from the database schema with `oba:` (OrionBelt Ana
 - Generates OWL DatatypeProperties for columns with `oba:columnName`, `oba:sqlDataType`
 - Auto-persists to Oxigraph RDF store for SPARQL querying (when `auto_persist` is true)
 - Analyzes generated names and reports how many may need semantic review
+- With `AUTO_VALIDATE_RELATIONSHIPS=true`, checks every relationship inferred from column names against the data, as `validate_relationship` does, and reports the verdicts; confirmed ones then block fan-traps like declared keys. Relationships that already have a verdict are not measured again. This also covers a cached ontology (it is returned with the verdicts added) and one generated in the background with `AUTO_ONTOLOGY`
 - Saves ontology as `.ttl` (Turtle) file in connection-scoped output directory
 
 ---
@@ -376,7 +377,7 @@ Check a relationship the ontology states -- declared, inferred from column names
 | `target_not_unique` | The referenced column repeats values, so the join multiplies rows |
 | `no_data` | The key column holds no values |
 
-**Where it is recorded:** on the relationship in the active ontology (a new version, generated or uploaded), with `oba:validationStatus`, `oba:validationMatchRatio`, `oba:validationCheckedRows` and `oba:validationCheckedAt`; in the RDF store; and in the workspace, so a regenerated ontology gets it back. `graphrag_find_join_path` shows each join's verdict, and warns about refuted, partial or non-unique ones.
+**Where it is recorded:** on the relationship in the active ontology (a new version, generated or uploaded), with `oba:validationStatus`, `oba:validationMatchRatio`, `oba:validationCheckedRows` and `oba:validationCheckedAt`; in the RDF store; and in the workspace, so a regenerated ontology gets it back. `graphrag_find_join_path` shows each join's verdict, and warns about refuted, partial or non-unique ones. With `AUTO_VALIDATE_RELATIONSHIPS=true`, `generate_ontology` runs this check on every inferred relationship itself.
 
 **Returns:** the verdict with its counts, the two queries run, and where it was recorded.
 
