@@ -19,14 +19,74 @@ from ..result_limits import fetch_bounded
 from ..security import (
     SecureCredentialManager,
     SecurityLevel,
+    ascii_lower,
     audit_log_security_event,
     identifier_validator,
+    table_references,
 )
 from ..serialization import serialize_rows
 from .base import DatabaseDriver
 from .reflection import column_fk_entries, reflect_tables
 
 logger = logging.getLogger(__name__)
+
+
+def _resolves_in_catalog(
+    parts: tuple[str, ...],
+    known: set[tuple[str, ...]],
+    schemas: set[tuple[str, ...]],
+    databases: set[str],
+    default_catalog: str,
+    default_schema: str,
+) -> bool:
+    """Whether DuckDB's catalog lookup finds a table or view for *parts*.
+
+    DuckDB's rules with the default search path (temp, the current database,
+    then the system catalog's main and pg_catalog):
+
+    - ``name``: the first search-path schema holding it.
+    - ``a.name``: if a database ``a`` is attached, catalog ``a`` in its
+      search-path schemas, else ``main`` -- and an error if the current
+      database also has a schema ``a``. Otherwise schema ``a`` in the
+      search-path catalogs listing it, else the current database or ``system``.
+    - ``catalog.schema.name``: exactly that.
+
+    Checked against DuckDB itself in tests/test_read_only_sql_gate.py.
+
+    Every name is folded with :func:`ascii_lower`, as DuckDB compares them.
+
+    Args:
+        parts: The reference's name parts.
+        known: Every (catalog, schema, name) of a table or view.
+        schemas: Every (catalog, schema).
+        databases: Every attached catalog.
+        default_catalog: ``current_database()``.
+        default_schema: ``current_schema()``.
+
+    Returns:
+        True when the reference resolves to a catalog entry.
+    """
+    path = [
+        ("temp", "main"),
+        (default_catalog, default_schema),
+        ("system", "main"),
+        ("system", "pg_catalog"),
+    ]
+    *qualifiers, name = parts
+    if not qualifiers:
+        return any((c, s, name) in known for c, s in path)
+    if len(qualifiers) == 1:
+        (first,) = qualifiers
+        if first in databases:
+            holders = [c for c, s in path if s == first] or [default_catalog]
+            if any((c, first) in schemas for c in holders):
+                return False  # DuckDB refuses it as ambiguous
+            in_path = [s for c, s in path if c == first] or ["main"]
+            return any((first, s, name) in known for s in in_path)
+        catalogs = [c for c, s in path if s == first] or [default_catalog, "system"]
+        return any((c, first, name) in known for c in catalogs)
+    catalog, schema = qualifiers[-2:]
+    return (catalog, schema, name) in known
 
 
 class DuckDBDriver(DatabaseDriver):
@@ -328,13 +388,81 @@ class DuckDBDriver(DatabaseDriver):
     # Query validation & execution
     # ------------------------------------------------------------------
 
+    def _names_outside_catalog(self, conn: Any, sql_query: str) -> list[str]:
+        """The table references in *sql_query* that DuckDB's catalog cannot resolve.
+
+        Resolution follows DuckDB's own lookup (see :func:`_resolves_in_catalog`),
+        since a reference that misses the catalog is read as a file. A query
+        that does not parse resolves nothing, so it is reported whole.
+        """
+        references = table_references(sql_query, "duckdb")
+        if references is None:
+            return [sql_query[:80]]
+        if not references:
+            return []
+
+        def lowered(rows: Any) -> set[tuple[str, ...]]:
+            return {tuple(ascii_lower(str(value)) for value in row) for row in rows}
+
+        known = lowered(
+            conn.execute(
+                text(
+                    "SELECT database_name, schema_name, table_name "
+                    "FROM duckdb_tables() UNION ALL "
+                    "SELECT database_name, schema_name, view_name FROM duckdb_views()"
+                )
+            ).fetchall()
+        )
+        schemas = lowered(
+            conn.execute(
+                text("SELECT database_name, schema_name FROM duckdb_schemas()")
+            ).fetchall()
+        )
+        databases = {
+            name
+            for (name,) in lowered(
+                conn.execute(
+                    text("SELECT database_name FROM duckdb_databases()")
+                ).fetchall()
+            )
+        }
+        default_catalog, default_schema = (
+            ascii_lower(str(value))
+            for value in conn.execute(
+                text("SELECT current_database(), current_schema()")
+            ).one()
+        )
+        return [
+            ".".join(parts)
+            for parts in references
+            if not _resolves_in_catalog(
+                parts, known, schemas, databases, default_catalog, default_schema
+            )
+        ]
+
     def validate_sql_syntax(
         self, sql_query: str, validation_result: dict[str, Any]
     ) -> dict[str, Any]:
-        """Validate DuckDB SQL syntax using EXPLAIN."""
+        """Validate DuckDB SQL syntax using EXPLAIN.
+
+        Every table the query names must first be a table or view in the
+        catalog. DuckDB reads a name it cannot resolve as a file instead
+        (``FROM data.csv`` reads ./data.csv), and binding the query for
+        EXPLAIN would already open it, so this check runs before EXPLAIN.
+        """
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
+                unknown = self._names_outside_catalog(conn, sql_query)
+                if unknown:
+                    validation_result["error"] = (
+                        "Not a table or view in this database: " f"{', '.join(unknown)}"
+                    )
+                    validation_result["error_type"] = "unknown_table"
+                    validation_result["suggestions"].append(
+                        "Check table names against list_schemas and discover_schema"
+                    )
+                    return validation_result
                 try:
                     # Use EXPLAIN to validate syntax without executing
                     explain_query = f"EXPLAIN {sql_query}"

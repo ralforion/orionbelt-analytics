@@ -386,6 +386,11 @@ class PostgreSQLDriver(DatabaseDriver):
             assert self.engine is not None
             with self.engine.connect() as conn:
                 logger.info(f"\U0001f50d {db_type} SQL QUERY: {sql_query}")
+                # The query runs in a read-only transaction, so whatever the
+                # parsed gate cannot see -- a user-defined function that
+                # writes, say -- PostgreSQL refuses itself. The transaction
+                # is never committed either way.
+                conn.execute(text("SET TRANSACTION READ ONLY"))
                 result = conn.execute(text(sql_query))
 
                 try:

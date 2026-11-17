@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import string
 from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar
@@ -370,7 +371,9 @@ def audit_log_security_event(
     )
 
 
-#: AST node types that mutate data or schema — never allowed for analytics SQL.
+#: AST node types that mutate data or schema, or lock rows -- never allowed for
+#: analytics SQL. ``Into`` is ``SELECT ... INTO new_table``, which PostgreSQL
+#: runs as CREATE TABLE AS; ``Lock`` is ``FOR UPDATE`` / ``FOR SHARE``.
 _WRITE_EXPRESSIONS = (
     "Insert",
     "Update",
@@ -380,7 +383,362 @@ _WRITE_EXPRESSIONS = (
     "Drop",
     "Alter",
     "TruncateTable",
+    "Into",
+    "Lock",
 )
+
+#: Functions no analytics query may call, whatever the dialect. A plain SELECT
+#: can still change state, hold the server or reach past the database through
+#: a function call, and neither the statement type nor OBQC notices: OBQC
+#: checks tables and columns, and a table function such as ``read_csv(...)``
+#: has no table name to check. Lower case.
+_FORBIDDEN_FUNCTIONS = frozenset(
+    {
+        # Change state a rollback does not undo, or the session itself.
+        "nextval",
+        "setval",
+        "getnextval",
+        "set_config",
+        "pg_notify",
+        "get_lock",
+        "release_lock",
+        "release_all_locks",
+        # Act on other sessions or on the server.
+        "pg_terminate_backend",
+        "pg_cancel_backend",
+        "pg_reload_conf",
+        "pg_rotate_logfile",
+        "pg_promote",
+        "pg_start_backup",
+        "pg_stop_backup",
+        # Hold a connection for as long as the caller likes.
+        "pg_sleep",
+        "pg_sleep_for",
+        "pg_sleep_until",
+        "sleep",
+        "sleepeachrow",
+        "benchmark",
+        "master_pos_wait",
+        "source_pos_wait",
+        "system$wait",
+        # Read files on the database host.
+        "pg_read_file",
+        "pg_read_binary_file",
+        "pg_stat_file",
+        "load_file",
+        "loread",
+        "lowrite",
+        "glob",
+        "sniff_csv",
+        "file",
+        "executable",
+        # Reach other databases, object stores or the network.
+        "url",
+        "urlcluster",
+        "s3",
+        "s3cluster",
+        "gcs",
+        "hdfs",
+        "hdfscluster",
+        "azureblobstorage",
+        "azureblobstoragecluster",
+        "deltalake",
+        "iceberg",
+        "hudi",
+        "remote",
+        "remotesecure",
+        "mysql",
+        "postgresql",
+        "mongodb",
+        "redis",
+        "sqlite",
+        "jdbc",
+        "odbc",
+        "external_query",
+        "http_request",
+        # Run SQL passed as a string, past every check in this module.
+        "query",
+        "query_table",
+        "query_to_xml",
+        "query_to_xmlschema",
+        "query_to_xml_and_xmlschema",
+        "cursor_to_xml",
+        "cursor_to_xmlschema",
+    }
+)
+
+#: Families of the same, matched by prefix.
+_FORBIDDEN_FUNCTION_PREFIXES = (
+    "pg_advisory_",  # session-level locks
+    "pg_try_advisory_",
+    "pg_ls_",  # list directories on the database host
+    "lo_",  # large objects: lo_import and lo_export touch host files
+    "dblink",  # SQL on another database, committed there
+    "pg_create_",  # replication slots, restore points
+    "pg_drop_",
+    "pg_replication_",
+    "pg_logical_",
+    "pg_switch_",
+    "pg_backup_",
+    "pg_wal_replay_",
+    "pg_stat_reset",
+    "read_",  # DuckDB read_csv/read_parquet/read_text, Databricks read_files
+    "parquet_",
+    "iceberg_",
+    "delta_",
+    "postgres_",  # DuckDB scanners for other databases
+    "mysql_",
+    "sqlite_",
+    "table_to_xml",  # whole tables as XML, past OBQC's table check
+    "schema_to_xml",
+    "database_to_xml",
+    "system$cancel",  # Snowflake: stop other queries and sessions
+    "system$abort",
+)
+
+#: Characters that make part of a DuckDB table reference a file path or URL.
+#: DuckDB reads a name it cannot find in its catalog as a file, joining the
+#: parts with dots (``FROM "data"."csv"`` reads data.csv), and a real table,
+#: schema or catalog name almost never contains one of these. A plain dotted
+#: name (``FROM data.csv``) looks like schema.table, so the DuckDB driver also
+#: checks every reference against its catalog before the query runs.
+_DUCKDB_FILE_NAME_CHARS = frozenset("/\\:.")
+
+#: Where the explained statement starts, after EXPLAIN and its options.
+_EXPLAIN_BODY = re.compile(
+    r"\b(?:SELECT|WITH|VALUES|TABLE|FROM|INSERT|UPDATE|DELETE|MERGE|UPSERT|"
+    r"REPLACE|CREATE|DROP|ALTER|TRUNCATE|COPY|CALL|EXEC|EXECUTE)\b",
+    re.IGNORECASE,
+)
+
+#: The EXPLAIN option that runs the statement instead of only planning it.
+_EXPLAIN_ANALYZE = re.compile(r"\bANALY[SZ]E\b", re.IGNORECASE)
+
+_EXPLAIN_ANALYZE_ERROR = (
+    "EXPLAIN ANALYZE runs the statement it explains; use EXPLAIN without ANALYZE"
+)
+
+
+def _is_forbidden_function(name: str) -> bool:
+    """Whether a function of this name may not appear in an analytics query."""
+    name = name.lower()
+    return name in _FORBIDDEN_FUNCTIONS or name.startswith(_FORBIDDEN_FUNCTION_PREFIXES)
+
+
+def explain_runs_statement(sql_query: str) -> bool:
+    """Whether *sql_query* is an EXPLAIN that executes the statement it explains.
+
+    ``EXPLAIN ANALYZE`` (PostgreSQL, MySQL, DuckDB, Trino) runs the statement to
+    time it, so ``EXPLAIN ANALYZE DELETE ...`` deletes. Only the options before
+    the explained statement are read, so a column named ``analyze`` is not
+    mistaken for one.
+
+    Args:
+        sql_query: SQL text with any leading comments already removed.
+
+    Returns:
+        True for an EXPLAIN carrying the ANALYZE option, False otherwise.
+    """
+    text = sql_query.strip()
+    if not re.match(r"EXPLAIN\b", text, re.IGNORECASE):
+        return False
+    options = text[len("EXPLAIN") :]
+    body = _EXPLAIN_BODY.search(options)
+    if body is not None:
+        options = options[: body.start()]
+    return _EXPLAIN_ANALYZE.search(options) is not None
+
+
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+_ASCII_UPPER = str.maketrans(string.ascii_lowercase, string.ascii_uppercase)
+
+
+def ascii_lower(name: str) -> str:
+    """*name* with ASCII letters lower-cased and every other character kept.
+
+    DuckDB compares identifiers this way: ``DÀTA`` and ``dÀta`` are one name,
+    ``dàta`` is another. Python's ``str.lower`` folds the ``À`` too, which
+    would call two different DuckDB names the same.
+    """
+    return name.translate(_ASCII_LOWER)
+
+
+def _snowflake_identifier(identifier: Any) -> str:
+    """An identifier as Snowflake resolves it: unquoted upper-cased, quoted as is."""
+    from sqlglot import expressions as exp
+
+    if isinstance(identifier, exp.Identifier):
+        text = str(identifier.this)
+        return text if identifier.quoted else text.translate(_ASCII_UPPER)
+    return str(identifier or "").translate(_ASCII_UPPER)
+
+
+def _names_from_item(column: Any, item: Any) -> bool:
+    """Whether *column*'s qualifier names the FROM/JOIN item *item*.
+
+    An aliased item answers only to its alias. An unaliased table answers to
+    its name, or to its name with exactly the qualifiers it was written with.
+    A pivoted item answers to nothing.
+    """
+    from sqlglot import expressions as exp
+
+    if item.args.get("pivots"):
+        return False
+    qualifier = [
+        _snowflake_identifier(column.args[key])
+        for key in ("catalog", "db", "table")
+        if column.args.get(key)
+    ]
+    alias = item.args.get("alias")
+    if alias is not None and alias.args.get("this") is not None:
+        return qualifier == [_snowflake_identifier(alias.this)]
+    if not isinstance(item, exp.Table):
+        return False
+    written = [
+        _snowflake_identifier(item.args[key])
+        for key in ("catalog", "db", "this")
+        if item.args.get(key)
+    ]
+    return qualifier == written or qualifier == written[-1:]
+
+
+def _within(ancestor: Any, node: Any) -> bool:
+    """Whether *node* lies inside *ancestor*."""
+    while node is not None:
+        if node is ancestor:
+            return True
+        node = node.parent
+    return False
+
+
+def _snowflake_sequence_references(stmt: Any) -> list[str]:
+    """``x.NEXTVAL`` references in a Snowflake statement that may advance x.
+
+    Snowflake advances a sequence through ``seq.NEXTVAL`` (and through
+    ``GETNEXTVAL(seq)``, refused with the functions). ``x.NEXTVAL`` passes
+    only as a plain column read: ``x`` names a table, alias or derived table
+    in the FROM of the SELECT it stands in, and it stands in that SELECT's
+    select list, WHERE, GROUP BY, HAVING, QUALIFY or ORDER BY, where every
+    FROM item is in view. Everywhere else -- a correlated subquery, an ON
+    condition, a LATERAL or table function's arguments, a parenthesized join
+    group, a PIVOT, a set operation's ORDER BY -- it is refused rather than
+    resolved, which is rare for a column named NEXTVAL and can never let a
+    sequence through.
+    """
+    from sqlglot import expressions as exp
+
+    def reads_a_column(column: Any) -> bool:
+        holder = column.find_ancestor(exp.Select, exp.SetOperation)
+        if not isinstance(holder, exp.Select):
+            return False
+        from_clause = holder.args.get("from_") or holder.args.get("from")
+        if from_clause is None:
+            return False
+        joins = holder.args.get("joins") or []
+        if any(_within(node, column) for node in (from_clause, *joins)):
+            return False
+        items = [from_clause.this, *(join.this for join in joins)]
+        return any(_names_from_item(column, item) for item in items)
+
+    return list(
+        dict.fromkeys(
+            f"sequence {column.sql(dialect='snowflake')}"
+            for column in stmt.find_all(exp.Column)
+            if column.table
+            and column.name.upper() == "NEXTVAL"
+            and not reads_a_column(column)
+        )
+    )
+
+
+def _unsafe_operations(stmt: Any, dialect: str) -> list[str]:
+    """Function calls and file references *stmt* makes that a read may not."""
+    from sqlglot import expressions as exp
+
+    found = []
+    for func in stmt.find_all(exp.Func):
+        name = func.name if isinstance(func, exp.Anonymous) else func.sql_name()
+        if name and _is_forbidden_function(name):
+            found.append(f"function {name.lower()}()")
+    if dialect == "snowflake":
+        found.extend(_snowflake_sequence_references(stmt))
+    if dialect == "duckdb":
+        for table in stmt.find_all(exp.Table):
+            parts = [part for part in (table.catalog, table.db, table.name) if part]
+            if table.name and any(_DUCKDB_FILE_NAME_CHARS & set(p) for p in parts):
+                found.append(f"file reference '{'.'.join(parts)}'")
+    return list(dict.fromkeys(found))
+
+
+def table_references(sql_query: str, dialect: str) -> list[tuple[str, ...]] | None:
+    """The tables and views *sql_query* names, each as its name parts.
+
+    A reference keeps the parts written -- ``sales.orders`` is
+    ``("sales", "orders")`` -- folded with :func:`ascii_lower`, the way DuckDB
+    compares names, and leaves out CTE names and table functions.
+
+    Args:
+        sql_query: One SQL statement.
+        dialect: sqlglot dialect name.
+
+    Returns:
+        The references, or None when the statement does not parse.
+    """
+    import sqlglot
+    from sqlglot import expressions as exp
+
+    try:
+        statement = sqlglot.parse_one(sql_query, dialect=dialect)
+    except Exception as e:  # sqlglot.errors.ParseError and friends
+        logger.debug(f"table_references: statement does not parse: {e}")
+        return None
+    ctes = {ascii_lower(cte.alias_or_name) for cte in statement.find_all(exp.CTE)}
+    references = []
+    for table in statement.find_all(exp.Table):
+        if not table.name:
+            continue  # a table function: read_csv(...), range(10)
+        parts = tuple(
+            ascii_lower(part) for part in (table.catalog, table.db, table.name) if part
+        )
+        if len(parts) == 1 and parts[0] in ctes:
+            continue
+        references.append(parts)
+    return list(dict.fromkeys(references))
+
+
+def _explain_problem(stmt: Any, dialect: str) -> dict[str, Any] | None:
+    """Why an EXPLAIN that sqlglot kept as a raw command may not run, if it may not.
+
+    sqlglot parses EXPLAIN as an opaque ``Command`` in most dialects, so the
+    explained statement is cut out of the text and analysed on its own: it has
+    to be a read the gate would allow by itself.
+    """
+    explained = stmt.expression.name if stmt.expression is not None else ""
+    text = f"EXPLAIN {explained}"
+    if explain_runs_statement(text):
+        return {
+            "query_type": "UNSAFE",
+            "unsafe_operations": ["EXPLAIN ANALYZE"],
+            "error": _EXPLAIN_ANALYZE_ERROR,
+        }
+    body = _EXPLAIN_BODY.search(text, len("EXPLAIN"))
+    if body is None:
+        return {
+            "query_type": "UNKNOWN",
+            "error": "EXPLAIN must be followed by a SELECT query",
+        }
+    inner = analyze_sql_statement(text[body.start() :], dialect=dialect)
+    if inner["query_type"] in ("SELECT", "CTE_SELECT"):
+        return None
+    return {
+        "query_type": (
+            inner["query_type"] if inner["query_type"] != "METADATA" else "UNKNOWN"
+        ),
+        "write_operations": inner["write_operations"],
+        "unsafe_operations": inner["unsafe_operations"],
+        "error": f"EXPLAIN of a statement that may not run: "
+        f"{inner['error'] or 'not a SELECT query'}",
+    }
 
 
 def analyze_sql_statement(sql_query: str, dialect: str = "postgres") -> dict[str, Any]:
@@ -393,15 +751,22 @@ def analyze_sql_statement(sql_query: str, dialect: str = "postgres") -> dict[str
     wrongly allow). The regex :class:`SQLInjectionValidator` remains a first
     filter; this is the authoritative read-only / single-statement decision.
 
+    A statement only counts as a read if it also calls none of the functions
+    that change state, hold the server or reach outside the database
+    (``pg_sleep``, ``setval``, ``read_csv``, ``dblink`` ...), takes no row locks,
+    reads no file by name (DuckDB's ``FROM 'data.csv'``), and -- for EXPLAIN --
+    explains such a read without running it (no ``ANALYZE``).
+
     Args:
         sql_query: The SQL statement to analyze.
         dialect: sqlglot dialect name (e.g. ``postgres``, ``snowflake``).
 
     Returns:
         Dict with: ``parsed`` (bool), ``single_statement`` (bool),
-        ``query_type`` (SELECT|CTE_SELECT|METADATA|WRITE|UNKNOWN),
+        ``query_type`` (SELECT|CTE_SELECT|METADATA|WRITE|UNSAFE|UNKNOWN),
         ``is_read_only`` (bool), ``write_operations`` (list[str]),
-        ``affected_tables`` (list[str]), ``error`` (str|None).
+        ``unsafe_operations`` (list[str]), ``affected_tables`` (list[str]),
+        ``error`` (str|None).
     """
     import sqlglot
     from sqlglot import expressions as exp
@@ -412,6 +777,7 @@ def analyze_sql_statement(sql_query: str, dialect: str = "postgres") -> dict[str
         "query_type": "UNKNOWN",
         "is_read_only": False,
         "write_operations": [],
+        "unsafe_operations": [],
         "affected_tables": [],
         "error": None,
     }
@@ -446,13 +812,41 @@ def analyze_sql_statement(sql_query: str, dialect: str = "postgres") -> dict[str
         result["error"] = f"Write/DDL operations are not allowed: {', '.join(writes)}"
         return result
 
+    unsafe = _unsafe_operations(stmt, dialect)
+    if unsafe:
+        result["query_type"] = "UNSAFE"
+        result["unsafe_operations"] = unsafe
+        result["error"] = f"Not allowed in a read query: {', '.join(unsafe)}"
+        return result
+
     if isinstance(stmt, (exp.Select, exp.Union)):
         result["query_type"] = (
             "CTE_SELECT" if stmt.find(exp.With) is not None else "SELECT"
         )
         result["is_read_only"] = True
-    elif isinstance(stmt, (exp.Describe, exp.Show, exp.Command)):
-        # EXPLAIN parses to Command in sqlglot; DESCRIBE/SHOW are metadata.
+    elif isinstance(stmt, exp.Describe) and (
+        str(stmt.args.get("style") or "").upper() == "ANALYZE"
+    ):
+        # MySQL's EXPLAIN parses to Describe; its body was walked above.
+        result["query_type"] = "UNSAFE"
+        result["unsafe_operations"] = ["EXPLAIN ANALYZE"]
+        result["error"] = _EXPLAIN_ANALYZE_ERROR
+        return result
+    elif isinstance(stmt, (exp.Describe, exp.Show)):
+        result["query_type"] = "METADATA"
+        result["is_read_only"] = True
+    elif isinstance(stmt, exp.Command):
+        # Anything sqlglot cannot parse becomes a Command, so only the metadata
+        # keywords pass, and EXPLAIN only for a read it does not run.
+        keyword = str(stmt.this or "").upper()
+        if keyword == "EXPLAIN":
+            problem = _explain_problem(stmt, dialect)
+            if problem is not None:
+                result.update(problem)
+                return result
+        elif keyword not in ("SHOW", "DESCRIBE", "DESC"):
+            result["error"] = "Only SELECT, CTE, and metadata queries are allowed"
+            return result
         result["query_type"] = "METADATA"
         result["is_read_only"] = True
     else:

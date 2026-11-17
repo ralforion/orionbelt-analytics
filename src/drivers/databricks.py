@@ -31,6 +31,11 @@ from .reflection import column_fk_entries
 logger = logging.getLogger(__name__)
 
 
+def _quote_identifier(name: str | None) -> str:
+    """*name* as a backtick-quoted Databricks identifier, backticks doubled."""
+    return "`" + (name or "").replace("`", "``") + "`"
+
+
 class DatabricksDriver(DatabaseDriver):
     """Databricks SQL database driver.
 
@@ -234,7 +239,10 @@ class DatabricksDriver(DatabaseDriver):
                 assert self.engine is not None
                 with self.engine.connect() as conn:
                     result = conn.execute(
-                        text(f"SHOW TABLES IN {self._catalog}.{schema}")
+                        text(
+                            f"SHOW TABLES IN {_quote_identifier(self._catalog)}"
+                            f".{_quote_identifier(schema)}"
+                        )
                     )
                     return [
                         row[1] for row in result.fetchall()
