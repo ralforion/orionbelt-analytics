@@ -782,3 +782,59 @@ async def test_background_generation_checks_inferred_relationships(shop, monkeyp
     graph = _active_ontology(shop)
     assert _status_of(graph, "supplier_id") == STATUS_CONFIRMED
     assert _status_of(graph, "customer_id") == STATUS_REFUTED
+
+
+@pytest.fixture
+def credit(monkeypatch, tmp_path):
+    """A customer measure that a join to orders would multiply; keys undeclared."""
+    import duckdb
+
+    path = tmp_path / "credit.duckdb"
+    con = duckdb.connect(str(path))
+    con.execute("CREATE TABLE customers (id INTEGER, credit_limit DECIMAL(10, 2))")
+    con.execute("INSERT INTO customers VALUES (1, 100), (2, 200)")
+    con.execute("CREATE TABLE orders (id INTEGER, customer_id INTEGER)")
+    con.execute("INSERT INTO orders VALUES (10, 1), (11, 1), (12, 2)")
+    con.close()
+    yield from _serve_duckdb(monkeypatch, tmp_path, path)
+
+
+FAN_TRAP = (
+    "SELECT SUM(customers.credit_limit) AS total FROM customers "
+    "JOIN orders ON orders.customer_id = customers.id"
+)
+
+
+async def test_background_verdicts_reach_a_validator_already_built(credit, monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+
+    import src.handlers.graphrag as graphrag_handler
+
+    monkeypatch.delenv("AUTO_VALIDATE_RELATIONSHIPS", raising=False)
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool("generate_ontology", {**on, "schema_name": "main"})
+        query = {"sql_query": FAN_TRAP, "checklist_completed": True, **on}
+
+        # The relationship is only guessed: the fan-trap warns, and the query
+        # builds the session's validator from this ontology.
+        first = (await client.call_tool("execute_sql_query", query)).data
+        assert first["obqc_fan_trap"]["detected"]
+        assert not first["obqc_fan_trap"]["blocking"]
+
+        # Background generation confirms it against the data...
+        monkeypatch.setenv("AUTO_VALIDATE_RELATIONSHIPS", "true")
+        session = main_module._server_state.session_for_handle(handle)
+        monkeypatch.setattr(graphrag_handler, "notify_client", AsyncMock())
+        await graphrag_handler._auto_generate_ontology_background(
+            "main", session.get_cached_schema("main"), session, Mock()
+        )
+        assert _status_of(_active_ontology(credit), "customer_id") == STATUS_CONFIRMED
+
+        # ...and the next query is checked against it, not the old validator.
+        second = (await client.call_tool("execute_sql_query", query)).data
+        assert second["success"] is False
+        assert second["obqc_fan_trap"]["blocking"] is True

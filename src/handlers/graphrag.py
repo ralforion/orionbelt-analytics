@@ -367,6 +367,10 @@ async def _auto_generate_ontology_background(
                 # one a later rewrite of the active ontology must refresh.
                 if getattr(schema_state.ontology, "loaded_ontology", None) is None:
                     schema_state.ontology.rdf_graph_uri = f"{base_uri}{schema_name}"
+                    # The validator was built from the ontology this one
+                    # replaces; the next query builds it from this file, with
+                    # whatever relationships it now confirms.
+                    schema_state.ontology.obqc_validator = None
 
             graph_uri = ""
             triple_count = 0
