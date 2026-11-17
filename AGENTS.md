@@ -58,6 +58,7 @@ Config comes from `.env` (copy from `.env.template`). At minimum set credentials
   copyleft terms, does — and a new copyleft dependency fails the check until it
   has a written notice. See `THIRD_PARTY_NOTICES.md`.
 - Type hints required on all public functions (strict mypy); Google-style docstrings; 88-char lines; async handlers.
+- SQL a driver sends on its own behalf is built with the helpers in `src/sql_build.py` (sqlglot trees: names as identifiers, values as literals), never with f-strings or string concatenation.
 - Tests in `tests/` as `test_*.py`; `pytest-asyncio` in `auto` mode (no `@pytest.mark.asyncio` needed).
 - Releases are **squash-only** (merge commits disabled). Tagging `v*.*.*` publishes
   both artefacts: `docker-publish.yml` builds the multi-arch image, and

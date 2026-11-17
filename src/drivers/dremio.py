@@ -14,12 +14,18 @@ from ..constants import (
     QUERY_TIMEOUT,
 )
 from ..database_manager import ColumnInfo, TableInfo
+from ..sql_build import plain, quoted
+from ..sql_build import sample_rows as sample_rows_sql
+from ..sql_build import select_where, table_path
 from .base import DatabaseDriver
 
 if TYPE_CHECKING:
     from ..dremio_client import DremioClient
 
 logger = logging.getLogger(__name__)
+
+# Dremio speaks Trino-compatible SQL (see DB_SQLGLOT_DIALECTS).
+_DIALECT = "trino"
 
 
 class DremioDriver(DatabaseDriver):
@@ -58,26 +64,6 @@ class DremioDriver(DatabaseDriver):
                 password=conn.get("password"),
                 ssl=conn.get("ssl", False),
             )
-
-    # ------------------------------------------------------------------
-    # Identifier helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _escape_sql_literal(value: str) -> str:
-        """Escape a value for safe use inside a single-quoted SQL literal."""
-        return value.replace("'", "''")
-
-    @staticmethod
-    def _quote_dremio_identifier(identifier: str | None) -> str:
-        """Quote and escape a Dremio identifier or path safely."""
-        if identifier is None:
-            return ""
-        parts = [p for p in str(identifier).split(".") if p != ""]
-        if not parts:
-            return ""
-        escaped_parts = [part.replace('"', '""') for part in parts]
-        return ".".join(f'"{part}"' for part in escaped_parts)
 
     # ------------------------------------------------------------------
     # Connection
@@ -316,12 +302,11 @@ class DremioDriver(DatabaseDriver):
                             "WHERE TABLE_TYPE = 'TABLE'"
                         )
                     else:
-                        safe_schema = self._escape_sql_literal(schema_name)
-                        query = (
-                            f"SELECT TABLE_NAME "
-                            f'FROM INFORMATION_SCHEMA."TABLES" '
-                            f"WHERE TABLE_SCHEMA = '{safe_schema}' "
-                            f"AND TABLE_TYPE = 'TABLE'"
+                        query = select_where(
+                            _DIALECT,
+                            ["TABLE_NAME"],
+                            table_path(plain("INFORMATION_SCHEMA"), quoted("TABLES")),
+                            {"TABLE_SCHEMA": schema_name, "TABLE_TYPE": "TABLE"},
                         )
 
                     result = await client.execute_query(query)
@@ -371,11 +356,11 @@ class DremioDriver(DatabaseDriver):
                             "WHERE TABLE_SCHEMA <> 'INFORMATION_SCHEMA'"
                         )
                     else:
-                        safe_schema = self._escape_sql_literal(schema_name)
-                        query = (
-                            "SELECT TABLE_SCHEMA, TABLE_NAME, VIEW_DEFINITION "
-                            'FROM INFORMATION_SCHEMA."VIEWS" '
-                            f"WHERE TABLE_SCHEMA = '{safe_schema}'"
+                        query = select_where(
+                            _DIALECT,
+                            ["TABLE_SCHEMA", "TABLE_NAME", "VIEW_DEFINITION"],
+                            table_path(plain("INFORMATION_SCHEMA"), quoted("VIEWS")),
+                            {"TABLE_SCHEMA": schema_name},
                         )
 
                     result = await client.execute_query(query)
@@ -419,26 +404,22 @@ class DremioDriver(DatabaseDriver):
                         schema_name = ".".join(parts[:-1]) if len(parts) > 1 else None
                         table_name = parts[-1]
 
+                    filters = {"TABLE_NAME": table_name}
                     if schema_name:
-                        safe_schema = self._escape_sql_literal(schema_name)
-                        safe_table = self._escape_sql_literal(table_name)
-                        column_query = f"""
-                        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE,
-                               COLUMN_DEFAULT, ORDINAL_POSITION
-                        FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_NAME = '{safe_table}'
-                          AND TABLE_SCHEMA = '{safe_schema}'
-                        ORDER BY ORDINAL_POSITION
-                        """
-                    else:
-                        safe_table = self._escape_sql_literal(table_name)
-                        column_query = f"""
-                        SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE,
-                               COLUMN_DEFAULT, ORDINAL_POSITION
-                        FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_NAME = '{safe_table}'
-                        ORDER BY ORDINAL_POSITION
-                        """
+                        filters["TABLE_SCHEMA"] = schema_name
+                    column_query = select_where(
+                        _DIALECT,
+                        [
+                            "COLUMN_NAME",
+                            "DATA_TYPE",
+                            "IS_NULLABLE",
+                            "COLUMN_DEFAULT",
+                            "ORDINAL_POSITION",
+                        ],
+                        table_path(plain("INFORMATION_SCHEMA"), plain("COLUMNS")),
+                        filters,
+                        order_by="ORDINAL_POSITION",
+                    )
 
                     result = await client.execute_query(column_query)
 
@@ -608,15 +589,13 @@ class DremioDriver(DatabaseDriver):
         async def fetch_sample() -> list[dict[str, Any]]:
             try:
                 async with await self._create_dremio_client() as client:
-                    if schema_name:
-                        full_table_name = (
-                            f"{self._quote_dremio_identifier(schema_name)}"
-                            f".{self._quote_dremio_identifier(table_name)}"
-                        )
-                    else:
-                        full_table_name = self._quote_dremio_identifier(table_name)
-
-                    query = f"SELECT * FROM {full_table_name} LIMIT {limit}"
+                    # A Dremio path splits on dots: space.folder.table.
+                    path = [
+                        part
+                        for name in (schema_name, table_name)
+                        for part in str(name or "").split(".")
+                    ]
+                    query = sample_rows_sql(_DIALECT, limit, *path)
                     result = await client.execute_query(query, limit)
 
                     if result.get("success"):

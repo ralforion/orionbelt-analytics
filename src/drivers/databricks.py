@@ -25,15 +25,11 @@ from ..security import (
     identifier_validator,
 )
 from ..serialization import serialize_rows
+from ..sql_build import qualified_name, sample_rows
 from .base import DatabaseDriver
 from .reflection import column_fk_entries
 
 logger = logging.getLogger(__name__)
-
-
-def _quote_identifier(name: str | None) -> str:
-    """*name* as a backtick-quoted Databricks identifier, backticks doubled."""
-    return "`" + (name or "").replace("`", "``") + "`"
 
 
 class DatabricksDriver(DatabaseDriver):
@@ -202,7 +198,12 @@ class DatabricksDriver(DatabaseDriver):
             try:
                 assert self.engine is not None
                 with self.engine.connect() as conn:
-                    result = conn.execute(text(f"SHOW SCHEMAS IN {self._catalog}"))
+                    result = conn.execute(
+                        text(
+                            "SHOW SCHEMAS IN "
+                            + qualified_name("databricks", self._catalog)
+                        )
+                    )
                     schemas = [row[0] for row in result.fetchall()]
                     return [s for s in schemas if s not in DATABRICKS_SYSTEM_SCHEMAS]
             except Exception as fallback_error:
@@ -240,8 +241,8 @@ class DatabricksDriver(DatabaseDriver):
                 with self.engine.connect() as conn:
                     result = conn.execute(
                         text(
-                            f"SHOW TABLES IN {_quote_identifier(self._catalog)}"
-                            f".{_quote_identifier(schema)}"
+                            "SHOW TABLES IN "
+                            + qualified_name("databricks", self._catalog, schema)
                         )
                     )
                     return [
@@ -507,10 +508,10 @@ class DatabricksDriver(DatabaseDriver):
 
             assert self.engine is not None
             with self.engine.connect() as conn:
-                # Use three-part name for Unity Catalog
-                full_table_name = f"`{self._catalog}`.`{schema}`.`{table_name}`"
-
-                query_str = f"SELECT * FROM {full_table_name} LIMIT {limit}"
+                # Three-part name for Unity Catalog
+                query_str = sample_rows(
+                    "databricks", limit, self._catalog, schema, table_name
+                )
                 logger.info(f"🔍 DATABRICKS SQL QUERY: {query_str}")
                 result = conn.execute(text(query_str))
                 columns = list(result.keys())

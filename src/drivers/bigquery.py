@@ -26,6 +26,14 @@ from ..security import (
     identifier_validator,
 )
 from ..serialization import serialize_rows
+from ..sql_build import (
+    names_except,
+    plain,
+    quoted,
+    sample_rows,
+    select_where,
+    table_path,
+)
 from .base import DatabaseDriver
 
 logger = logging.getLogger(__name__)
@@ -181,12 +189,18 @@ class BigQueryDriver(DatabaseDriver):
         """
         try:
             # Query INFORMATION_SCHEMA to get datasets
-            query = text(f"""
-                SELECT schema_name
-                FROM `{self._project_id}`.INFORMATION_SCHEMA.SCHEMATA
-                WHERE schema_name NOT IN UNNEST({BIGQUERY_SYSTEM_SCHEMAS})
-                ORDER BY schema_name
-            """)
+            query = text(
+                names_except(
+                    "bigquery",
+                    "schema_name",
+                    table_path(
+                        quoted(self._project_id or ""),
+                        plain("INFORMATION_SCHEMA"),
+                        plain("SCHEMATA"),
+                    ),
+                    BIGQUERY_SYSTEM_SCHEMAS,
+                )
+            )
             assert self.engine is not None
             with self.engine.connect() as conn:
                 result = conn.execute(query)
@@ -194,6 +208,15 @@ class BigQueryDriver(DatabaseDriver):
         except SQLAlchemyError as e:
             logger.error(f"Failed to get BigQuery datasets: {e}")
             return []
+
+    def _information_schema(self, dataset: str, view: str) -> Any:
+        """``project.dataset.INFORMATION_SCHEMA.<view>`` as a sqlglot table."""
+        return table_path(
+            quoted(self._project_id or ""),
+            quoted(dataset),
+            plain("INFORMATION_SCHEMA"),
+            plain(view),
+        )
 
     def _dataset_for(self, schema_name: str | None) -> str | None:
         """The dataset a metadata query reads: *schema_name*, else the default.
@@ -223,12 +246,15 @@ class BigQueryDriver(DatabaseDriver):
 
             assert self.engine is not None
             with self.engine.connect() as conn:
-                query = text(f"""
-                    SELECT table_name
-                    FROM `{self._project_id}.{dataset}`.INFORMATION_SCHEMA.TABLES
-                    WHERE table_type = 'BASE TABLE'
-                    ORDER BY table_name
-                """)
+                query = text(
+                    select_where(
+                        "bigquery",
+                        ["table_name"],
+                        self._information_schema(dataset, "TABLES"),
+                        {"table_type": "BASE TABLE"},
+                        order_by="table_name",
+                    )
+                )
                 result = conn.execute(query)
                 return [row[0] for row in result.fetchall()]
         except SQLAlchemyError as e:
@@ -243,11 +269,14 @@ class BigQueryDriver(DatabaseDriver):
 
             assert self.engine is not None
             with self.engine.connect() as conn:
-                query = text(f"""
-                    SELECT table_name, view_definition
-                    FROM `{self._project_id}.{dataset}`.INFORMATION_SCHEMA.VIEWS
-                    ORDER BY table_name
-                """)
+                query = text(
+                    select_where(
+                        "bigquery",
+                        ["table_name", "view_definition"],
+                        self._information_schema(dataset, "VIEWS"),
+                        order_by="table_name",
+                    )
+                )
                 result = conn.execute(query)
                 return {row[0]: row[1] for row in result.fetchall()}
         except SQLAlchemyError as e:
@@ -467,10 +496,9 @@ class BigQueryDriver(DatabaseDriver):
 
             assert self.engine is not None
             with self.engine.connect() as conn:
-                # BigQuery requires backticks for fully qualified names
-                full_table_name = f"`{self._project_id}.{dataset}.{table_name}`"
-
-                query_str = f"SELECT * FROM {full_table_name} LIMIT {limit}"
+                query_str = sample_rows(
+                    "bigquery", limit, self._project_id, dataset, table_name
+                )
                 logger.info(f"🔍 BIGQUERY SQL QUERY: {query_str}")
                 result = conn.execute(text(query_str))
                 columns = list(result.keys())

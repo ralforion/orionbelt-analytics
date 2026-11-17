@@ -418,24 +418,6 @@ class DatabaseManager:
 
         return "\n".join(result_lines).strip()
 
-    def _escape_sql_literal(self, value: str) -> str:
-        """Escape a value for safe use inside a single-quoted SQL literal."""
-        return value.replace("'", "''")
-
-    def _quote_dremio_identifier(self, identifier: str | None) -> str:
-        """Quote and escape a Dremio identifier or path safely."""
-        if identifier is None:
-            return ""
-        parts = [p for p in str(identifier).split(".") if p != ""]
-        if not parts:
-            return ""
-        escaped_parts = [part.replace('"', '""') for part in parts]
-        return ".".join(f'"{part}"' for part in escaped_parts)
-
-    # ------------------------------------------------------------------
-    # Connection lifecycle helpers
-    # ------------------------------------------------------------------
-
     def _sync_engine_from_driver(self) -> None:
         """Keep legacy ``self.engine`` attribute in sync with the active driver."""
         if self._driver and hasattr(self._driver, "engine"):

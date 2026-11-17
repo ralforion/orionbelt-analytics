@@ -25,6 +25,7 @@ from ..security import (
     identifier_validator,
 )
 from ..serialization import serialize_rows
+from ..sql_build import names_except, plain, sample_rows, table_path
 from .base import DatabaseDriver
 from .reflection import column_fk_entries, reflect_tables
 
@@ -134,15 +135,15 @@ class PostgreSQLDriver(DatabaseDriver):
     # ------------------------------------------------------------------
 
     def get_schemas(self) -> list[str]:
-        excluded_schemas = "', '".join(POSTGRES_SYSTEM_SCHEMAS)
-        query = text(f"""
-            SELECT schema_name
-            FROM information_schema.schemata
-            WHERE schema_name NOT IN ('{excluded_schemas}')
-              AND schema_name NOT LIKE 'pg_temp_%'
-              AND schema_name NOT LIKE 'pg_toast_temp_%'
-            ORDER BY schema_name
-        """)
+        query = text(
+            names_except(
+                "postgres",
+                "schema_name",
+                table_path(plain("information_schema"), plain("schemata")),
+                POSTGRES_SYSTEM_SCHEMAS,
+                not_like=["pg_temp_%", "pg_toast_temp_%"],
+            )
+        )
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
@@ -463,17 +464,11 @@ class PostgreSQLDriver(DatabaseDriver):
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
-                if schema_name:
-                    full_table_name = f'"{schema_name}"."{table_name}"'
-                else:
-                    full_table_name = f'"{table_name}"'
-
-                query_str = f"SELECT * FROM {full_table_name} LIMIT :limit"
-                params = {"limit": limit}
+                query_str = sample_rows("postgres", limit, schema_name, table_name)
                 logger.info(
-                    f"\U0001f50d {self.db_type.upper()} SQL QUERY: {query_str} | PARAMS: {params}"
+                    f"\U0001f50d {self.db_type.upper()} SQL QUERY: {query_str} "
                 )
-                result = conn.execute(text(query_str), params)
+                result = conn.execute(text(query_str))
                 columns = list(result.keys())
                 return serialize_rows(result.fetchall(), columns)
 

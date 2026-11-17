@@ -28,6 +28,7 @@ from ..security import (
     table_references,
 )
 from ..serialization import serialize_rows
+from ..sql_build import names_except, plain, sample_rows, table_path
 from .base import DatabaseDriver
 from .reflection import column_fk_entries, reflect_tables
 
@@ -365,13 +366,14 @@ class DuckDBDriver(DatabaseDriver):
         or attached from other databases.
         """
         try:
-            excluded_schemas = "', '".join(DUCKDB_SYSTEM_SCHEMAS)
-            query = text(f"""
-                SELECT schema_name
-                FROM information_schema.schemata
-                WHERE schema_name NOT IN ('{excluded_schemas}')
-                ORDER BY schema_name
-            """)
+            query = text(
+                names_except(
+                    "duckdb",
+                    "schema_name",
+                    table_path(plain("information_schema"), plain("schemata")),
+                    DUCKDB_SYSTEM_SCHEMAS,
+                )
+            )
             assert self.engine is not None
             with self.engine.connect() as conn:
                 result = conn.execute(query)
@@ -730,15 +732,10 @@ class DuckDBDriver(DatabaseDriver):
 
             assert self.engine is not None
             with self.engine.connect() as conn:
-                full_table_name = f'"{schema}"."{table_name}"'
-
-                query_str = f"SELECT * FROM {full_table_name} LIMIT :limit"
-                params = {"limit": limit}
+                query_str = sample_rows("duckdb", limit, schema, table_name)
                 db_type_str = "MOTHERDUCK" if self._is_motherduck else "DUCKDB"
-                logger.info(
-                    f"🔍 {db_type_str} SQL QUERY: {query_str} | PARAMS: {params}"
-                )
-                result = conn.execute(text(query_str), params)
+                logger.info(f"🔍 {db_type_str} SQL QUERY: {query_str} ")
+                result = conn.execute(text(query_str))
                 columns = list(result.keys())
                 return serialize_rows(result.fetchall(), columns)
 
