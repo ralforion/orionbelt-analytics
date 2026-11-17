@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+from collections import Counter
 from dataclasses import replace
 from functools import partial
 from typing import Any
@@ -25,11 +27,13 @@ from ..relationship_validation import (
     STATUS_PARTIAL,
     STATUS_REFUTED,
     STATUS_TARGET_NOT_UNIQUE,
+    RelationshipRef,
     ValidationRecord,
     apply_recorded,
     build_check_queries,
     classify,
     find_relationships,
+    inferred_relationships_to_check,
     record_in_graph,
     why_not_checkable,
 )
@@ -175,6 +179,134 @@ def _count(value: Any) -> int:
     return int(value) if value is not None else 0
 
 
+async def _measure(db_manager: Any, ref: RelationshipRef) -> ValidationRecord:
+    """Run the two check queries for *ref* and classify what they count.
+
+    Args:
+        db_manager: The connection's database manager.
+        ref: The relationship, with both schemas resolved.
+
+    Returns:
+        The verdict, not yet recorded anywhere.
+
+    Raises:
+        RuntimeError: A check query failed.
+    """
+    db_type = (getattr(db_manager, "connection_info", None) or {}).get("type", "")
+    coverage_sql, uniqueness_sql = build_check_queries(ref, db_type)
+    coverage = _first_row(await run_db(db_manager.execute_sql_query, coverage_sql, 5))
+    uniqueness = _first_row(
+        await run_db(db_manager.execute_sql_query, uniqueness_sql, 5)
+    )
+    checked = _count(coverage[0] if coverage else 0)
+    matched = _count(coverage[1] if len(coverage) > 1 else 0)
+    target_rows = _count(uniqueness[0] if uniqueness else 0)
+    target_distinct = _count(uniqueness[1] if len(uniqueness) > 1 else 0)
+    status, ratio = classify(checked, matched, target_rows, target_distinct)
+    return ValidationRecord(
+        from_schema=ref.from_schema,
+        from_table=ref.from_table,
+        column=ref.column,
+        to_schema=ref.to_schema,
+        to_table=ref.to_table,
+        to_column=ref.to_column,
+        status=status,
+        match_ratio=ratio,
+        checked_rows=checked,
+        matched_rows=matched,
+        target_rows=target_rows,
+        target_distinct=target_distinct,
+        checked_at=utc_now().isoformat(),
+    )
+
+
+#: Opt-in: check every relationship inferred from column names against the
+#: data when generate_ontology runs. Off by default -- each check scans both
+#: tables, which on a large warehouse takes as long as a full count.
+AUTO_VALIDATE_VARIABLE = "AUTO_VALIDATE_RELATIONSHIPS"
+
+
+def auto_validation_enabled() -> bool:
+    """Whether generate_ontology checks inferred relationships by itself."""
+    return os.getenv(AUTO_VALIDATE_VARIABLE, "false").strip().lower() == "true"
+
+
+async def validate_inferred_relationships(
+    ctx: Context,
+    services: "HandlerContext",
+    generator: OntologyGenerator,
+    pinned: Any,
+    schema_name: str | None,
+) -> dict[str, Any]:
+    """Check every unchecked inferred relationship of a freshly generated ontology.
+
+    Each verdict is written onto the ontology in *generator* -- the caller
+    saves it with the rest -- and into the workspace, so a regeneration
+    keeps it, exactly as validate_relationship records one. A check that
+    fails is skipped and reported; it does not stop the others.
+
+    Args:
+        ctx: FastMCP request context.
+        services: Request-scoped services.
+        generator: Holds the new ontology's graph; changed in place.
+        pinned: The connection the generation was pinned to.
+        schema_name: The ontology's schema.
+
+    Returns:
+        ``checked`` (count), ``verdicts`` (count per status) and ``failed``
+        (the relationships whose check failed).
+    """
+    session = services.get_session_data(ctx)
+    refs = await asyncio.to_thread(inferred_relationships_to_check, generator.graph)
+    summary: dict[str, Any] = {"checked": 0, "verdicts": {}, "failed": []}
+    if not refs:
+        return summary
+    db_manager = services.get_session_db_manager(ctx)
+    await notify_client(
+        ctx, f"Checking {len(refs)} inferred relationship(s) against the data"
+    )
+    records: list[ValidationRecord] = []
+    for ref in refs:
+        resolved = replace(
+            ref,
+            from_schema=_physical_schema(session, ref.from_table, ref.from_schema),
+            to_schema=_physical_schema(session, ref.to_table, ref.to_schema),
+        )
+        label = (
+            f"{resolved.from_table}.{resolved.column} -> "
+            f"{resolved.to_table}.{resolved.to_column}"
+        )
+        try:
+            record = await _measure(db_manager, resolved)
+        except Exception as e:
+            logger.warning(f"Inferred relationship check failed for {label}: {e}")
+            summary["failed"].append(label)
+            continue
+        if not still_connected(session, pinned):
+            break
+        record_in_graph(generator.graph, record)
+        records.append(record)
+
+    if records and pinned.connection_id:
+        workspace_schema = schema_name or "default"
+
+        def _record(manager: VersionMetadataManager) -> None:
+            schema_ws = manager.get_workspace_schema(workspace_schema) or {}
+            verdicts = dict(schema_ws.get(METADATA_SECTION) or {})
+            for record in records:
+                verdicts[record.key()] = record.as_dict()
+            manager.update_workspace(workspace_schema, METADATA_SECTION, verdicts)
+
+        try:
+            await mutate_workspace_metadata(pinned.connection_id, OUTPUT_DIR, _record)
+        except Exception as e:
+            logger.warning(f"Failed to record the relationship checks: {e}")
+
+    summary["checked"] = len(records)
+    summary["verdicts"] = dict(Counter(record.status for record in records))
+    return summary
+
+
 async def _active_ontology(
     ctx: Context, session: Any, services: "HandlerContext"
 ) -> tuple[OntologyGenerator, bool]:
@@ -297,12 +429,7 @@ async def validate_relationship(
     db_type = (getattr(db_manager, "connection_info", None) or {}).get("type", "")
     coverage_sql, uniqueness_sql = build_check_queries(ref, db_type)
     try:
-        coverage = _first_row(
-            await run_db(db_manager.execute_sql_query, coverage_sql, 5)
-        )
-        uniqueness = _first_row(
-            await run_db(db_manager.execute_sql_query, uniqueness_sql, 5)
-        )
+        record = await _measure(db_manager, ref)
     except Exception as e:
         err = services.create_error_response(
             f"Checking {ref.from_table}.{ref.column} -> {ref.to_table}."
@@ -315,27 +442,9 @@ async def validate_relationship(
         return connection_changed_response(
             services, "the relationship was being checked", "validate_relationship()"
         )
-
-    checked = _count(coverage[0] if coverage else 0)
-    matched = _count(coverage[1] if len(coverage) > 1 else 0)
-    target_rows = _count(uniqueness[0] if uniqueness else 0)
-    target_distinct = _count(uniqueness[1] if len(uniqueness) > 1 else 0)
-    status, ratio = classify(checked, matched, target_rows, target_distinct)
-    record = ValidationRecord(
-        from_schema=ref.from_schema,
-        from_table=ref.from_table,
-        column=ref.column,
-        to_schema=ref.to_schema,
-        to_table=ref.to_table,
-        to_column=ref.to_column,
-        status=status,
-        match_ratio=ratio,
-        checked_rows=checked,
-        matched_rows=matched,
-        target_rows=target_rows,
-        target_distinct=target_distinct,
-        checked_at=utc_now().isoformat(),
-    )
+    status, ratio, checked = record.status, record.match_ratio, record.checked_rows
+    matched, target_rows = record.matched_rows, record.target_rows
+    target_distinct = record.target_distinct
 
     schema_name = (
         session.current_schema or session.get_last_analyzed_schema() or "default"

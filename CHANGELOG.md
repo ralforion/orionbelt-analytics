@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`AUTO_VALIDATE_RELATIONSHIPS`** (opt-in): `generate_ontology` checks
+  every relationship inferred from column names against the data, as
+  `validate_relationship` does for one, records the verdicts and reports them.
+  A confirmed relationship then blocks fan-traps in `execute_sql_query` like
+  a declared foreign key, instead of only warning, so warehouses without
+  declared keys get the same protection. Verdicts are kept across
+  regenerations and not measured again. Off by default, since each check
+  scans both tables.
+
 ### Security
 - **Tighter read-only SQL check**: `execute_sql_query` now also refuses
   SELECTs that call functions which change state, wait, or reach files, other

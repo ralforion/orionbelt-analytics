@@ -659,3 +659,74 @@ async def test_a_saved_composite_key_without_its_constraint_is_refused(lines):
         _status_of(_active_ontology(lines), column) is None
         for column in ("order_id", "line_no")
     )
+
+
+# --- Opt-in: generate_ontology checks inferred relationships itself ----------
+
+
+def test_only_unchecked_inferred_relationships_are_picked():
+    from src.relationship_validation import inferred_relationships_to_check
+
+    declared = _graph_with_relationship("sales")
+    assert inferred_relationships_to_check(declared) == []
+
+    inferred = _graph_with_relationship("sales")
+    prop = URIRef("http://e/purchases_has_suppliers")
+    inferred.add((prop, OBA.isInferredRelationship, Literal(True)))
+    (ref,) = inferred_relationships_to_check(inferred)
+    assert (ref.from_table, ref.column, ref.to_table) == (
+        "purchases",
+        "supplier_id",
+        "suppliers",
+    )
+
+    inferred.add((prop, OBA.validationStatus, Literal(STATUS_CONFIRMED)))
+    assert inferred_relationships_to_check(inferred) == []
+
+
+async def test_generate_ontology_checks_inferred_relationships_when_asked(
+    shop, monkeypatch
+):
+    monkeypatch.setenv("AUTO_VALIDATE_RELATIONSHIPS", "true")
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        generated = _text(
+            await client.call_tool("generate_ontology", {**on, "schema_name": "main"})
+        )
+
+        # Measured during generation, no validate_relationship call needed.
+        assert "INFERRED RELATIONSHIPS CHECKED AGAINST THE DATA: 2" in generated
+        assert f"1 {STATUS_CONFIRMED}" in generated
+        assert f"1 {STATUS_REFUTED}" in generated
+        graph = _active_ontology(shop)
+        assert _status_of(graph, "supplier_id") == STATUS_CONFIRMED
+        assert _status_of(graph, "customer_id") == STATUS_REFUTED
+
+        # A regeneration keeps the verdicts and does not measure them again.
+        again = _text(
+            await client.call_tool("generate_ontology", {**on, "schema_name": "main"})
+        )
+        assert "INFERRED RELATIONSHIPS CHECKED" not in again
+        regenerated = _active_ontology(shop)
+        assert _status_of(regenerated, "supplier_id") == STATUS_CONFIRMED
+        assert _status_of(regenerated, "customer_id") == STATUS_REFUTED
+
+
+async def test_inferred_relationships_stay_unchecked_by_default(shop, monkeypatch):
+    monkeypatch.delenv("AUTO_VALIDATE_RELATIONSHIPS", raising=False)
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        handle = re.search(r"(ob_[a-z0-9]{6})", _text(connected)).group(1)
+        on = {"connection": handle}
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        generated = _text(
+            await client.call_tool("generate_ontology", {**on, "schema_name": "main"})
+        )
+
+        assert "INFERRED RELATIONSHIPS CHECKED" not in generated
+        graph = _active_ontology(shop)
+        assert _status_of(graph, "supplier_id") is None
+        assert _status_of(graph, "customer_id") is None
