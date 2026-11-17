@@ -82,6 +82,29 @@ BLOCKED = [
         "JOIN sales.orders seq ON TRUE",
     ),
     ("snowflake", "SELECT x.n FROM sales.orders o, (SELECT o.nextval AS n) x"),
+    ("snowflake", "SELECT x.n FROM sales.orders o, ((SELECT o.nextval AS n)) x"),
+    # Parentheses around a UNION branch do not lift it out of its CTE.
+    (
+        "snowflake",
+        "WITH c AS ((SELECT seq.NEXTVAL AS n FROM DUAL) UNION ALL SELECT 1) "
+        "SELECT * FROM c, sales.orders seq",
+    ),
+    # Inside a join group, ON and LATERAL see only what precedes them.
+    (
+        "snowflake",
+        "SELECT 1 FROM (sales.a a JOIN sales.b b ON seq.nextval = 1) "
+        "JOIN sales.orders seq ON TRUE",
+    ),
+    (
+        "snowflake",
+        "SELECT 1 FROM (sales.a a JOIN LATERAL (SELECT seq.nextval AS n) x ON TRUE), "
+        "sales.orders seq",
+    ),
+    (
+        "snowflake",
+        "SELECT 1 FROM sales.items i JOIN sales.orders o "
+        "ON i.id = (SELECT seq.nextval) JOIN sales.x seq ON TRUE",
+    ),
     # Inside a CTE or subquery is no different.
     ("postgres", "WITH x AS (SELECT pg_sleep(60)) SELECT * FROM x"),
     ("duckdb", "SELECT a FROM t WHERE a IN (SELECT a FROM read_csv('x.csv'))"),
@@ -224,6 +247,35 @@ def test_other_unparsed_commands_are_refused(dialect: str, sql: str) -> None:
         (
             "snowflake",
             "SELECT (SELECT o.nextval UNION ALL SELECT 2) AS n FROM sales.orders o",
+        ),
+        # Tables inside a parenthesized join group bind like any other.
+        (
+            "snowflake",
+            "SELECT o.nextval FROM (sales.orders o JOIN sales.items i ON o.id = i.id)",
+        ),
+        (
+            "snowflake",
+            "SELECT b.nextval FROM (sales.a a JOIN (sales.b b JOIN sales.c c "
+            "ON b.x = c.x) ON a.y = b.y) JOIN sales.d d ON d.z = a.z",
+        ),
+        (
+            "snowflake",
+            "SELECT 1 FROM (sales.orders o JOIN sales.items i ON o.nextval = i.id)",
+        ),
+        (
+            "snowflake",
+            "SELECT x.n FROM (sales.orders o JOIN LATERAL (SELECT o.nextval AS n) x "
+            "ON TRUE)",
+        ),
+        (
+            "snowflake",
+            "SELECT 1 FROM sales.orders o WHERE 1 IN ((SELECT o.nextval) "
+            "UNION ALL SELECT 2)",
+        ),
+        (
+            "snowflake",
+            "SELECT 1 FROM sales.orders o JOIN sales.items i ON i.id = "
+            "(SELECT o.nextval)",
         ),
         ("snowflake", "SELECT (SELECT o.nextval) AS n FROM sales.orders o"),
         ("snowflake", "WITH c AS (SELECT 1 AS nextval) SELECT c.nextval FROM c"),

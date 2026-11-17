@@ -611,51 +611,82 @@ def _contains(ancestor: Any, node: Any) -> bool:
     return False
 
 
+def _flatten_items(
+    item: Any, leaves: list[Any], join_ends: list[tuple[Any, int]]
+) -> None:
+    """Append *item*'s FROM items to *leaves* in written order.
+
+    A parenthesized join group -- ``(a JOIN b ON ...)``, which sqlglot keeps
+    as an unaliased Subquery around a table carrying the joins -- is opened
+    up, so its tables bind like any other. For each join, *join_ends* records
+    how many leaves its ON condition can see: all of them up to its own.
+    """
+    from sqlglot import expressions as exp
+
+    if (
+        isinstance(item, exp.Subquery)
+        and not item.alias
+        and item.this is not None
+        and item.this.args.get("joins")
+    ):
+        item = item.this
+    leaves.append(item)
+    if isinstance(item, exp.Select):
+        return  # a derived table's own joins are its business
+    for join in item.args.get("joins") or []:
+        _flatten_items(join.this, leaves, join_ends)
+        join_ends.append((join, len(leaves)))
+
+
 def _items_visible_at(select: Any, position: Any) -> list[Any]:
     """The FROM/JOIN items of *select* that *position*, inside it, can name.
 
     The select list, WHERE and the clauses after it see every item. A join's
     ON condition sees the items joined so far. An item -- a LATERAL subquery
     or a table function's arguments -- sees only the items before it.
+    Parenthesized join groups count item by item (see :func:`_flatten_items`).
     """
+    leaves: list[Any] = []
+    join_ends: list[tuple[Any, int]] = []
     from_clause = select.args.get("from_") or select.args.get("from")
-    joins = select.args.get("joins") or []
-    items = ([from_clause.this] if from_clause is not None else []) + [
-        join.this for join in joins
-    ]
-    for index, join in enumerate(joins):
+    if from_clause is not None:
+        _flatten_items(from_clause.this, leaves, join_ends)
+    for join in select.args.get("joins") or []:
+        _flatten_items(join.this, leaves, join_ends)
+        join_ends.append((join, len(leaves)))
+    for join, end in join_ends:
         condition = join.args.get("on")
         if condition is not None and _contains(condition, position):
-            return items[: index + 2]
-    for index, item in enumerate(items):
-        if _contains(item, position):
-            return items[:index]
-    return items
+            return leaves[:end]
+    # Last first: a group's first table also holds the group's later joins.
+    for index in range(len(leaves) - 1, -1, -1):
+        if _contains(leaves[index], position):
+            return leaves[:index]
+    return leaves
 
 
 def _enclosing_position(select: Any) -> Any:
     """Where *select* stands in the query around it, if it sees that query's items.
 
-    An expression subquery (in the select list, WHERE, ON, IN, EXISTS ...)
-    and a LATERAL subquery see their enclosing query; a derived table in
-    FROM, a CTE body and the root query do not. Returns the node to look up
+    Parentheses and set operations are looked through first: a UNION branch,
+    parenthesized or not, stands where its UNION does. Then an expression
+    subquery (in the select list, WHERE, ON, IN, EXISTS ...) and a LATERAL
+    subquery see their enclosing query, while a derived table in FROM or a
+    JOIN, a CTE body and the root query do not. Returns the node to look up
     visibility from in the enclosing query, or None.
     """
     from sqlglot import expressions as exp
 
     node = select
-    while isinstance(node.parent, exp.SetOperation):
-        node = node.parent  # a UNION branch stands where the UNION does
+    while isinstance(node.parent, (exp.Subquery, exp.SetOperation, exp.Paren)):
+        node = node.parent
     parent = node.parent
-    if parent is None or isinstance(parent, (exp.CTE, exp.From, exp.Join)):
+    if parent is None or isinstance(parent, (exp.CTE, exp.From)):
         return None
-    if isinstance(parent, exp.Subquery):
-        holder = parent.parent
-        if isinstance(holder, exp.Lateral):
-            return holder
-        if holder is None or isinstance(holder, (exp.From, exp.Join, exp.CTE)):
-            return None
+    if isinstance(parent, exp.Lateral):
         return parent
+    if isinstance(parent, exp.Join) and node is parent.this:
+        return None
     return node
 
 
