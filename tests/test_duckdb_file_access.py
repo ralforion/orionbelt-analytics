@@ -171,3 +171,76 @@ def test_reconnecting_keeps_the_allowed_directories(files: Path) -> None:
     db._reconnect()
     assert db.execute_sql_query("SELECT a FROM v")["data"] == [{"a": 1}]
     assert db.connection_info["allowed_directories"] == [str(files / "data") + "/"]
+
+
+# --- Policy set by a concurrent connection; symlinks -------------------------
+
+
+class _Interleaved:
+    """A cursor on *mine*; *meanwhile* runs on *other* right after the first query.
+
+    That is the gap a concurrent connection can use: this one has looked and
+    seen external access still on, the other has not finished yet.
+    """
+
+    def __init__(self, mine: Any, other: Any, meanwhile: list[str]) -> None:
+        self.cursor = mine.cursor()
+        self.other = other
+        self.meanwhile = meanwhile
+
+    def execute(self, sql: str) -> None:
+        self.cursor.execute(sql)
+        for statement in self.meanwhile:
+            self.other.execute(statement)
+        self.meanwhile = []
+
+    def fetchone(self) -> Any:
+        return self.cursor.fetchone()
+
+
+def _concurrent(files: Path, other_allows: Path) -> tuple[Any, Any, list[str]]:
+    path = str(files / "shop.duckdb")
+    mine, other = duckdb.connect(path), duckdb.connect(path)  # one instance
+    meanwhile = [
+        f"SET allowed_directories = ['{other_allows}/']",
+        "SET enable_external_access = false",
+    ]
+    return mine, other, meanwhile
+
+
+def test_a_policy_installed_meanwhile_is_not_inherited(files: Path) -> None:
+    from src.drivers.duckdb import FileAccessPolicyConflict, _apply_file_access_policy
+
+    mine, other, meanwhile = _concurrent(files, files / "data")
+    with pytest.raises(FileAccessPolicyConflict):
+        _apply_file_access_policy(_Interleaved(mine, other, meanwhile), [])
+
+
+def test_the_same_policy_installed_meanwhile_is_accepted(files: Path) -> None:
+    from src.drivers.duckdb import (
+        _apply_file_access_policy,
+        normalize_allowed_directories,
+    )
+
+    mine, other, meanwhile = _concurrent(files, files / "data")
+    # Setting the directories fails once the other switched access off; what
+    # counts is that the database ends up with the policy asked for.
+    _apply_file_access_policy(
+        _Interleaved(mine, other, meanwhile),
+        normalize_allowed_directories([str(files / "data")]),
+    )
+
+
+def test_symlinked_directories_are_one_policy(files: Path) -> None:
+    from src.drivers.duckdb import normalize_allowed_directories
+
+    link = files / "lake"
+    link.symlink_to(files / "data", target_is_directory=True)
+    assert normalize_allowed_directories([str(link)]) == normalize_allowed_directories(
+        [str(files / "data")]
+    )
+    first = _driver(str(files / "shop.duckdb"), [str(link)])
+    assert first.engine is not None
+    with first.engine.connect():
+        second = _driver(str(files / "shop.duckdb"), [str(link)])
+        assert _run(second, "SELECT a FROM v")["data"] == [{"a": 1}]
