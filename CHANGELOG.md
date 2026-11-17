@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`AUTO_VALIDATE_RELATIONSHIPS`** (opt-in): `generate_ontology` checks
+  every relationship inferred from column names against the data, as
+  `validate_relationship` does for one, records the verdicts and reports them.
+  A confirmed relationship then blocks fan-traps in `execute_sql_query` like
+  a declared foreign key, instead of only warning, so warehouses without
+  declared keys get the same protection. Ontologies generated in the
+  background (`AUTO_ONTOLOGY`) are checked too, and so is one returned from
+  cache, which gets the verdicts added. Verdicts are kept across
+  regenerations and not measured again. Off by default, since each check
+  scans both tables.
+
 ### Changed
 - **Driver SQL is built with sqlglot, not string templates**: every driver's
   own metadata and sample queries (schema lists, BigQuery and Dremio
@@ -18,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the read-only check.
 
 ### Security
+- **DuckDB reads files only where allowed**: a local DuckDB connection now
+  has DuckDB's own external access switched off, so files and network
+  locations outside `DUCKDB_ALLOWED_DIRECTORIES` are refused by the database,
+  whatever the query looks like. Views that read CSV or Parquet files need
+  their directories listed there; MotherDuck connections are not affected.
 - **Tighter read-only SQL check**: `execute_sql_query` now also refuses
   SELECTs that call functions which change state, wait, or reach files, other
   databases or the network; row locks (`FOR UPDATE`/`FOR SHARE`);

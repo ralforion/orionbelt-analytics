@@ -99,7 +99,19 @@ class TestReconnectAllBackends(unittest.TestCase):
         }
         with patch.object(self.db_manager, "connect_duckdb", return_value=True) as m:
             self.db_manager._reconnect()
-            m.assert_called_once_with("/tmp/test.duckdb", None, False)
+            m.assert_called_once_with("/tmp/test.duckdb", None, False, None)
+
+    def test_reconnect_duckdb_keeps_allowed_directories(self):
+        self.db_manager._last_connection_params = {
+            "type": "duckdb",
+            "database_path": "/tmp/test.duckdb",
+            "motherduck_token": None,
+            "read_only": False,
+            "allowed_directories": ["/data/lake"],
+        }
+        with patch.object(self.db_manager, "connect_duckdb", return_value=True) as m:
+            self.db_manager._reconnect()
+            m.assert_called_once_with("/tmp/test.duckdb", None, False, ["/data/lake"])
 
     def test_reconnect_databricks(self):
         self.db_manager._last_connection_params = {

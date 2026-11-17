@@ -31,7 +31,12 @@ from .connection_scope import (
     pin_connection,
     still_connected,
 )
-from .ontology_validation import reapply_recorded
+from .ontology_validation import (
+    auto_validation_enabled,
+    reapply_recorded,
+    validate_cached_ontology,
+    validate_inferred_relationships,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +164,29 @@ def _build_minimal_graph_summary(ontology_ttl: str) -> str:
     return "\n".join(lines)
 
 
+def _relationship_checks_note(checks: dict[str, Any] | None) -> str:
+    """What the automatic relationship checks found, for the tool result."""
+    if not checks or not (checks["checked"] or checks["failed"]):
+        return ""
+    verdicts = ", ".join(
+        f"{count} {status}" for status, count in sorted(checks["verdicts"].items())
+    )
+    note = (
+        f"\n\nINFERRED RELATIONSHIPS CHECKED AGAINST THE DATA: {checks['checked']}"
+        + (f" ({verdicts})" if verdicts else "")
+        + "\nConfirmed ones now block fan-traps in execute_sql_query like "
+        "declared keys; refuted ones should not be joined on."
+    )
+    if checks["failed"]:
+        note += (
+            f"\nCould not check {len(checks['failed'])}: "
+            + "; ".join(checks["failed"][:5])
+            + (" ..." if len(checks["failed"]) > 5 else "")
+            + ". Retry one with validate_relationship()."
+        )
+    return note
+
+
 async def generate_ontology(
     ctx: Context,
     schema_info: str | None,
@@ -192,6 +220,14 @@ async def generate_ontology(
 
     # Check if ontology is already generated
     if session.ontology_file:
+        # A cached ontology may predate AUTO_VALIDATE_RELATIONSHIPS, or have
+        # come from background generation: check what it still only guesses.
+        cached_checks = (
+            await validate_cached_ontology(ctx, services)
+            if auto_validation_enabled()
+            else None
+        )
+        note = _relationship_checks_note(cached_checks)
         if session.ontology_enriched:
             await notify_client(
                 ctx, "Ontology CACHED and already enriched — ready to use"
@@ -204,7 +240,7 @@ async def generate_ontology(
                 f"## READY TO USE:\n"
                 f"- query_sparql() for semantic queries\n"
                 f"- execute_sql_query() for data queries (includes built-in validation)"
-            )
+            ) + note
         await notify_client(
             ctx, "Ontology CACHED - call suggest_semantic_names() for enrichment"
         )
@@ -215,7 +251,7 @@ async def generate_ontology(
             f"## FOR ENRICHMENT:\n"
             f"Call suggest_semantic_names() NOW - it will use the cached ontology automatically.\n\n"
             f"That's the ONLY tool you need to call for enrichment!"
-        )
+        ) + note
 
     # Validate base_uri
     if not base_uri.endswith("/"):
@@ -360,6 +396,16 @@ async def generate_ontology(
     ontology_ttl = await asyncio.to_thread(
         reapply_recorded, generator, pinned.connection_id, schema_name, ontology_ttl
     )
+    # Opt-in (AUTO_VALIDATE_RELATIONSHIPS): check what was only guessed from
+    # column names, so OBQC blocks a fan-trap on a confirmed relationship as
+    # on a declared key instead of only warning.
+    relationship_checks: dict[str, Any] | None = None
+    if auto_validation_enabled():
+        relationship_checks = await validate_inferred_relationships(
+            ctx, services, generator, pinned, schema_name
+        )
+        if relationship_checks["checked"]:
+            ontology_ttl = await asyncio.to_thread(generator.serialize_ontology)
 
     # Optional SHACL conformance check (Phase 4). Default on, gated by setting;
     # never hard-fails generation — surfaces violations as a warning only.
@@ -645,7 +691,7 @@ To improve ontology for business users:
 2. Review suggestions and provide alternatives
 3. Call apply_semantic_names() with your suggestions"""
 
-                    return result
+                    return result + _relationship_checks_note(relationship_checks)
             except Exception as e:
                 logger.warning(
                     f"Auto-persist to Oxigraph failed: {e}, falling back to full TTL return"
@@ -665,7 +711,7 @@ To improve ontology for business users:
             )
             result += "\n3. Call apply_semantic_names() with your suggestions"
 
-        return result
+        return result + _relationship_checks_note(relationship_checks)
 
     except Exception as e:
         logger.warning(f"Failed to save ontology to file: {e}")

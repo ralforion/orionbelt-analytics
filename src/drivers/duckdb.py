@@ -1,12 +1,15 @@
 """DuckDB/MotherDuck database driver."""
 
 import logging
+import os
+import threading
 from typing import Any
 
-from sqlalchemy import MetaData, create_engine, inspect, text
+from sqlalchemy import MetaData, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import NullPool, Pool, StaticPool
+from sqlglot import expressions as exp
 
 from ..constants import (
     DEFAULT_SAMPLE_LIMIT,
@@ -30,6 +33,137 @@ from .base import DatabaseDriver
 from .reflection import column_fk_entries, reflect_tables
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_allowed_directories(directories: list[str] | None) -> list[str]:
+    """Allowed directories as DuckDB keeps them: real paths, ending in a
+    separator, without duplicates, sorted.
+
+    Symlinks are resolved because DuckDB resolves them in the list it stores;
+    the trailing separator keeps ``/data`` from also allowing ``/database``;
+    the sorting makes two spellings of one policy compare equal.
+    """
+    return sorted(
+        {
+            os.path.join(os.path.realpath(os.path.expanduser(directory)), "")
+            for directory in directories or []
+            if directory and directory.strip()
+        }
+    )
+
+
+class FileAccessPolicyConflict(RuntimeError):
+    """This DuckDB database is already open with a different file-access policy."""
+
+
+# Connections to one DuckDB file share a database instance, and a policy is
+# set in two steps (allowed directories, then external access off), so two
+# connections initializing at once could interleave. One lock for all DuckDB
+# initializations in the process: they are a few milliseconds each.
+_POLICY_LOCK = threading.Lock()
+
+
+def _policy_statements(directories: list[str]) -> list[str]:
+    """The SET statements that install *directories* and switch access off."""
+
+    def setting(name: str, value: exp.Expression) -> str:
+        item = exp.SetItem(this=exp.EQ(this=exp.column(name), expression=value))
+        return exp.Set(expressions=[item]).sql(dialect="duckdb")
+
+    statements = []
+    if directories:
+        statements.append(
+            setting(
+                "allowed_directories",
+                exp.Array(expressions=[exp.Literal.string(d) for d in directories]),
+            )
+        )
+    statements.append(setting("enable_external_access", exp.false()))
+    return statements
+
+
+def _apply_file_access_policy(cursor: Any, directories: list[str]) -> None:
+    """Make the database behind *cursor* run with exactly *directories*.
+
+    If external access is still on, the policy is installed. Either way the
+    policy the database ends up with is then read back and compared, so a
+    connection can only proceed under the policy it was configured with --
+    not under one another connection installed first, or concurrently.
+
+    Args:
+        cursor: A DB-API cursor on the new connection.
+        directories: Normalized allowed directories.
+
+    Raises:
+        FileAccessPolicyConflict: The database runs with other allowed
+            directories, or external access is still on.
+    """
+    cursor.execute("SELECT current_setting('enable_external_access')")
+    row = cursor.fetchone()
+    if row is not None and row[0]:
+        for statement in _policy_statements(directories):
+            try:
+                cursor.execute(statement)
+            except Exception as e:  # set meanwhile by another connection
+                logger.debug(f"DuckDB file-access setting not applied: {e}")
+                break
+    cursor.execute(
+        "SELECT current_setting('enable_external_access'), "
+        "current_setting('allowed_directories'), "
+        "current_setting('temp_directory')"
+    )
+    row = cursor.fetchone()
+    if row is None or row[0]:
+        raise FileAccessPolicyConflict(
+            "External file access could not be switched off for this DuckDB " "database"
+        )
+    inherited = normalize_allowed_directories(list(row[1]) if row[1] else [])
+    # DuckDB adds its own spill directory once external access is off.
+    spill = normalize_allowed_directories([row[2]] if row[2] else [])
+    expected = [d for d in directories if d not in spill]
+    if [d for d in inherited if d not in spill] != expected:
+        raise FileAccessPolicyConflict(
+            "This DuckDB database is already open in this server with "
+            "different allowed directories; it cannot be opened with "
+            "another set until those connections close"
+        )
+
+
+def _restrict_file_access(engine: Engine, allowed_directories: list[str]) -> None:
+    """Let DuckDB read files only inside *allowed_directories*.
+
+    With ``enable_external_access`` off, DuckDB itself refuses every file and
+    network access outside the allowed directories -- a table function, a
+    file named in FROM, COPY, ATTACH, an extension install -- however the
+    query is written, so it holds where a check on the query's text could
+    miss something. The database's own file and spill directory stay usable.
+
+    DuckDB will not switch it back on, and within one process connections to
+    the same file share one database instance and so its settings. Every new
+    connection therefore installs the policy if the instance has none yet,
+    and then checks the policy the instance actually has: another, set by a
+    differently configured connection, is refused rather than inherited
+    (see :func:`_apply_file_access_policy`).
+
+    Args:
+        engine: The DuckDB engine to restrict.
+        allowed_directories: Directories DuckDB may still read, e.g. the
+            files a view reads; none by default.
+
+    Raises:
+        FileAccessPolicyConflict: On connect, when the database runs with
+            other allowed directories.
+    """
+    directories = normalize_allowed_directories(allowed_directories)
+
+    @event.listens_for(engine, "connect")
+    def _restrict(dbapi_connection: Any, _record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            with _POLICY_LOCK:
+                _apply_file_access_policy(cursor, directories)
+        finally:
+            cursor.close()
 
 
 def _resolves_in_catalog(
@@ -123,10 +257,15 @@ class DuckDBDriver(DatabaseDriver):
         - database_path: Path to DuckDB file, ":memory:", or "md:database_name"
         - motherduck_token: API token for MotherDuck (optional, for MotherDuck connections)
         - read_only: Whether to open in read-only mode (default: False)
+        - allowed_directories: Directories a local database may read files
+          from, e.g. for views over CSV or Parquet files (default: none).
+          Every other file and network access is refused by DuckDB itself;
+          MotherDuck connections, which need the network, are left as they are.
         """
         database_path = params.get("database_path", ":memory:")
         motherduck_token = params.get("motherduck_token")
         read_only = params.get("read_only", False)
+        allowed_directories = list(params.get("allowed_directories") or [])
 
         try:
             self._database_path = database_path
@@ -179,6 +318,8 @@ class DuckDBDriver(DatabaseDriver):
                 echo=False,
             )
             self.metadata = MetaData()
+            if not self._is_motherduck:
+                _restrict_file_access(self.engine, allowed_directories)
 
             # Initialize encryption
             try:

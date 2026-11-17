@@ -249,6 +249,7 @@ Generate an RDF/OWL ontology from the database schema with `oba:` (OrionBelt Ana
 - Generates OWL DatatypeProperties for columns with `oba:columnName`, `oba:sqlDataType`
 - Auto-persists to Oxigraph RDF store for SPARQL querying (when `auto_persist` is true)
 - Analyzes generated names and reports how many may need semantic review
+- With `AUTO_VALIDATE_RELATIONSHIPS=true`, checks every relationship inferred from column names against the data, as `validate_relationship` does, and reports the verdicts; confirmed ones then block fan-traps like declared keys. Relationships that already have a verdict are not measured again. This also covers a cached ontology (it is returned with the verdicts added) and one generated in the background with `AUTO_ONTOLOGY`
 - Saves ontology as `.ttl` (Turtle) file in connection-scoped output directory
 
 ---
@@ -376,7 +377,7 @@ Check a relationship the ontology states -- declared, inferred from column names
 | `target_not_unique` | The referenced column repeats values, so the join multiplies rows |
 | `no_data` | The key column holds no values |
 
-**Where it is recorded:** on the relationship in the active ontology (a new version, generated or uploaded), with `oba:validationStatus`, `oba:validationMatchRatio`, `oba:validationCheckedRows` and `oba:validationCheckedAt`; in the RDF store; and in the workspace, so a regenerated ontology gets it back. `graphrag_find_join_path` shows each join's verdict, and warns about refuted, partial or non-unique ones.
+**Where it is recorded:** on the relationship in the active ontology (a new version, generated or uploaded), with `oba:validationStatus`, `oba:validationMatchRatio`, `oba:validationCheckedRows` and `oba:validationCheckedAt`; in the RDF store; and in the workspace, so a regenerated ontology gets it back. `graphrag_find_join_path` shows each join's verdict, and warns about refuted, partial or non-unique ones. With `AUTO_VALIDATE_RELATIONSHIPS=true`, `generate_ontology` runs this check on every inferred relationship itself.
 
 **Returns:** the verdict with its counts, the two queries run, and where it was recorded.
 
@@ -756,7 +757,7 @@ No tool is open-world (`openWorldHint: false`): each acts only on the configured
 
 All tools operate within these security constraints:
 
-- **Read-only SQL** -- only SELECT statements and schema introspection queries are permitted, and only SELECTs that read: no row locks, no `SELECT ... INTO`, no `EXPLAIN ANALYZE`, and no functions that change state, wait, or reach files, other databases or the network. PostgreSQL and MySQL queries also run in a read-only transaction. These checks know names, not intent: a user-defined function can still do anything its owner allowed, so connect with a database role that can only read (see [Security Notes](configuration.md#security-notes))
+- **Read-only SQL** -- only SELECT statements and schema introspection queries are permitted, and only SELECTs that read: no row locks, no `SELECT ... INTO`, no `EXPLAIN ANALYZE`, and no functions that change state, wait, or reach files, other databases or the network. PostgreSQL and MySQL queries also run in a read-only transaction, and a local DuckDB connection cannot read files outside `DUCKDB_ALLOWED_DIRECTORIES`: DuckDB itself refuses. These checks know names, not intent: a user-defined function can still do anything its owner allowed, so connect with a database role that can only read (see [Security Notes](configuration.md#security-notes))
 - **SQL injection prevention** -- queries are scanned for injection patterns before execution
 - **Query timeout protection** -- queries honor a configurable timeout. For SPARQL this is best-effort: the caller is released when the timeout elapses, but the underlying query may keep running in the background (pyoxigraph exposes no native query cancellation), so a timeout bounds caller latency, not server CPU
 - **Result size limits** -- maximum 5,000 rows per query

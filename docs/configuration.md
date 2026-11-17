@@ -261,6 +261,7 @@ DUCKDB_DATABASE_PATH=:memory:  # or /path/to/file.db
 # For MotherDuck cloud:
 # DUCKDB_DATABASE_PATH=md:your_database
 # MOTHERDUCK_TOKEN=your_motherduck_token
+# DUCKDB_ALLOWED_DIRECTORIES=/data/lake,/data/exports  # files views may read
 
 # -----------------------------------------------------------------
 # Databricks SQL Configuration
@@ -280,6 +281,7 @@ DATABRICKS_SCHEMA=default
 | `AUTO_GRAPHRAG` | `true` | Auto-initialize GraphRAG when schema is analyzed |
 | `GRAPHRAG_EMBEDDING_MODEL` | `minilm` | Embedding backend for semantic schema search. `minilm` matches meaning (downloads ~79 MB on first use); `multilingual` also matches across languages (~118 MB); `tfidf` is a keyword-only offline fallback that cannot match synonyms. See [Embedding model](#embedding-model) |
 | `AUTO_ONTOLOGY` | `false` | Auto-generate ontology after GraphRAG completes |
+| `AUTO_VALIDATE_RELATIONSHIPS` | `false` | Check every relationship inferred from column names against the data when `generate_ontology` runs, as `validate_relationship` does for one, so a confirmed one blocks fan-traps like a declared foreign key. Also applies to an ontology generated in the background (`AUTO_ONTOLOGY`) and to one `generate_ontology` returns from cache, which gets the verdicts added as a new version. Each check scans both tables, so it is off by default; verdicts are kept across regenerations and not measured again |
 | `ARTIFACT_KEEP_VERSIONS` | `3` | Generations of each ontology / schema / R2RML file to keep per schema. Older ones are pruned when a new one is written. Minimum 1 |
 | `AUTO_CLEANUP_ON_STARTUP` | `false` | Delete whole workspaces at startup: `false` (keep all), `true` (orphaned, or older than `WORKSPACE_MAX_AGE_DAYS`), `all` (delete every workspace). See [Startup workspace cleanup](#startup-workspace-cleanup) |
 | `WORKSPACE_MAX_AGE_DAYS` | `30` | Age threshold for `AUTO_CLEANUP_ON_STARTUP=true`, measured from the workspace's last update. Ignored in the other modes |
@@ -604,6 +606,7 @@ The server validates `MCP_TRANSPORT` on startup. `sse` stops it with an error, s
 - **Token**: Obtain your MotherDuck access token from the MotherDuck web UI under Settings > Access Tokens.
 - **File locking**: DuckDB uses file-level locking. Only one process can write to a database file at a time. If you see lock errors, close other connections first.
 - **Read-only mode**: Pass `read_only=true` when connecting if you only need to query data and want to avoid lock contention.
+- **File access**: A local DuckDB connection reads only its own database. DuckDB itself refuses every other file and network access (`read_csv`, a file named in `FROM`, `COPY`, `ATTACH`, installing extensions), whatever the query says. If your views read CSV or Parquet files, list their directories in `DUCKDB_ALLOWED_DIRECTORIES`, comma-separated (e.g. `/data/lake,/data/exports`); a directory allows everything below it, and symlinks are resolved. Don't list the directory holding the server's `.env`. Views over remote files (S3, HTTP) and extensions loaded on demand don't work this way. MotherDuck connections need the network and are not restricted. The allowed directories are part of the connection's identity: changing them starts a new workspace, so run `discover_schema` again. Within one server, a DuckDB file has one file-access policy at a time: while one connection to it is open, a connection configured with other allowed directories is refused rather than given the first one's.
 
 ### Databricks SQL
 
