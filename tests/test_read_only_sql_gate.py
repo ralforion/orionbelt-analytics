@@ -228,91 +228,26 @@ def test_other_unparsed_commands_are_refused(dialect: str, sql: str) -> None:
         ("mysql", "SELECT CONCAT(first_name, ' ', last_name) FROM people"),
         ("snowflake", "SELECT SYSTEM$TYPEOF(1)"),
         ("snowflake", "SELECT o.nextval_at, nextval FROM sales.orders o"),
-        # NEXTVAL on a table, alias or CTE in view is a column, not a sequence.
+        ("snowflake", "SELECT nextval FROM sales.orders"),
+        # x.NEXTVAL where x is a table, alias, derived table or CTE in the
+        # SELECT's own FROM is a column read.
         ("snowflake", "SELECT o.nextval FROM sales.orders o"),
         ("snowflake", "SELECT sales.orders.nextval FROM sales.orders"),
         ("snowflake", "SELECT orders.nextval FROM sales.orders"),
         ("snowflake", "SELECT O.nextval FROM sales.orders o"),
         ("snowflake", 'SELECT "o".nextval FROM sales.orders AS "o"'),
         ("snowflake", "SELECT x.nextval FROM (SELECT 1 AS nextval) AS x"),
-        (
-            "snowflake",
-            "SELECT x.n FROM sales.orders o, LATERAL (SELECT o.nextval AS n) x",
-        ),
-        (
-            "snowflake",
-            "SELECT x.n FROM sales.orders o JOIN LATERAL (SELECT o.nextval AS n) x "
-            "ON TRUE",
-        ),
-        (
-            "snowflake",
-            "SELECT f.value FROM sales.orders o, LATERAL FLATTEN(input => o.nextval) f",
-        ),
-        (
-            "snowflake",
-            "SELECT f.value FROM sales.orders o, TABLE(FLATTEN(input => o.nextval)) f",
-        ),
-        ("snowflake", "SELECT 1 FROM sales.orders o WHERE EXISTS (SELECT o.nextval)"),
-        ("snowflake", "SELECT 1 FROM sales.orders o WHERE 1 IN (SELECT o.nextval)"),
-        (
-            "snowflake",
-            "SELECT (SELECT o.nextval UNION ALL SELECT 2) AS n FROM sales.orders o",
-        ),
-        # Tables inside a parenthesized join group bind like any other.
-        (
-            "snowflake",
-            "SELECT o.nextval FROM (sales.orders o JOIN sales.items i ON o.id = i.id)",
-        ),
-        # Parentheses nest any number of levels deep.
-        (
-            "snowflake",
-            "SELECT o.nextval FROM ((sales.orders o JOIN sales.items i "
-            "ON o.id = i.id))",
-        ),
-        (
-            "snowflake",
-            "SELECT o.nextval FROM (((sales.orders o JOIN sales.items i "
-            "ON o.id = i.id)))",
-        ),
-        (
-            "snowflake",
-            "SELECT c.nextval FROM ((sales.a a JOIN sales.b b ON a.x = b.x) "
-            "JOIN sales.c c ON c.y = a.y)",
-        ),
-        ("snowflake", "SELECT o.nextval FROM ((sales.orders o))"),
-        ("snowflake", "SELECT x.nextval FROM ((SELECT 1 AS nextval)) x"),
-        ("snowflake", "SELECT o.nextval FROM sales.t t, ((SELECT 1 AS nextval) o)"),
-        ("snowflake", "SELECT 1 FROM sales.orders o WHERE 1 IN (((SELECT o.nextval)))"),
-        (
-            "snowflake",
-            "SELECT p.nextval FROM sales.orders o PIVOT(SUM(a) FOR b IN (1, 2)) AS p",
-        ),
-        (
-            "snowflake",
-            "SELECT b.nextval FROM (sales.a a JOIN (sales.b b JOIN sales.c c "
-            "ON b.x = c.x) ON a.y = b.y) JOIN sales.d d ON d.z = a.z",
-        ),
-        (
-            "snowflake",
-            "SELECT 1 FROM (sales.orders o JOIN sales.items i ON o.nextval = i.id)",
-        ),
-        (
-            "snowflake",
-            "SELECT x.n FROM (sales.orders o JOIN LATERAL (SELECT o.nextval AS n) x "
-            "ON TRUE)",
-        ),
-        (
-            "snowflake",
-            "SELECT 1 FROM sales.orders o WHERE 1 IN ((SELECT o.nextval) "
-            "UNION ALL SELECT 2)",
-        ),
-        (
-            "snowflake",
-            "SELECT 1 FROM sales.orders o JOIN sales.items i ON i.id = "
-            "(SELECT o.nextval)",
-        ),
-        ("snowflake", "SELECT (SELECT o.nextval) AS n FROM sales.orders o"),
         ("snowflake", "WITH c AS (SELECT 1 AS nextval) SELECT c.nextval FROM c"),
+        (
+            "snowflake",
+            "SELECT o.id FROM sales.orders o JOIN sales.items i ON o.id = i.id "
+            "WHERE i.nextval > 1 ORDER BY o.nextval",
+        ),
+        (
+            "snowflake",
+            "SELECT o.nextval FROM sales.orders o UNION ALL "
+            "SELECT p.nextval FROM sales.p p",
+        ),
         # Only Snowflake has seq.NEXTVAL; elsewhere it is always a column.
         ("duckdb", "SELECT o.nextval FROM sales.orders o"),
         ("postgres", "SELECT x.nextval FROM sales.orders x"),
@@ -322,6 +257,28 @@ def test_ordinary_reads_pass(dialect: str, sql: str) -> None:
     result = analyze_sql_statement(sql, dialect=dialect)
     assert result["is_read_only"], result
     assert result["unsafe_operations"] == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT (SELECT o.nextval) AS n FROM sales.orders o",
+        "SELECT 1 FROM sales.orders o WHERE EXISTS (SELECT o.nextval)",
+        "SELECT x.n FROM sales.orders o, LATERAL (SELECT o.nextval AS n) x",
+        "SELECT f.value FROM sales.orders o, LATERAL FLATTEN(input => o.nextval) f",
+        "SELECT 1 FROM sales.orders o JOIN sales.items i ON o.nextval = i.id",
+        "SELECT o.nextval FROM (sales.orders o JOIN sales.items i ON o.id = i.id)",
+        "SELECT p.nextval FROM sales.orders o PIVOT(SUM(a) FOR b IN (1, 2)) AS p",
+        "SELECT 1 FROM sales.orders o WHERE 1 IN "
+        "(SELECT a FROM b UNION SELECT a FROM c ORDER BY o.nextval)",
+    ],
+)
+def test_snowflake_refuses_nextval_outside_a_plain_column_read(sql: str) -> None:
+    # Outside the select list, WHERE and the clauses after it, x.NEXTVAL is
+    # refused rather than resolved -- even where x would be a real table.
+    # Rare for a column named NEXTVAL, and it can never let a sequence through.
+    result = analyze_sql_statement(sql, dialect="snowflake")
+    assert result["query_type"] == "UNSAFE", result
 
 
 def test_explain_runs_statement_reads_only_the_options() -> None:

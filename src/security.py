@@ -573,32 +573,22 @@ def _snowflake_identifier(identifier: Any) -> str:
     return str(identifier or "").translate(_ASCII_UPPER)
 
 
-def _binds_snowflake_column(column: Any, item: Any) -> bool:
-    """Whether the FROM/JOIN item *item* is what *column*'s qualifier names.
+def _names_from_item(column: Any, item: Any) -> bool:
+    """Whether *column*'s qualifier names the FROM/JOIN item *item*.
 
-    An aliased item -- table, derived table, LATERAL, table function --
-    answers only to its alias, and only for a one-part qualifier; a pivoted
-    table only to its PIVOT's alias. An
-    unaliased table answers to its name alone, or to its name with exactly the
-    qualifiers it was written with. Anything less certain --
-    ``otherdb.sales.seq`` against ``FROM sales.seq`` -- is not a match.
+    An aliased item answers only to its alias. An unaliased table answers to
+    its name, or to its name with exactly the qualifiers it was written with.
+    A pivoted item answers to nothing.
     """
     from sqlglot import expressions as exp
 
+    if item.args.get("pivots"):
+        return False
     qualifier = [
         _snowflake_identifier(column.args[key])
         for key in ("catalog", "db", "table")
         if column.args.get(key)
     ]
-    pivots = item.args.get("pivots") or []
-    if pivots:
-        # A PIVOT or UNPIVOT makes a new row source: only its alias names it.
-        return any(
-            (alias := pivot.args.get("alias")) is not None
-            and alias.args.get("this") is not None
-            and qualifier == [_snowflake_identifier(alias.this)]
-            for pivot in pivots
-        )
     alias = item.args.get("alias")
     if alias is not None and alias.args.get("this") is not None:
         return qualifier == [_snowflake_identifier(alias.this)]
@@ -612,8 +602,8 @@ def _binds_snowflake_column(column: Any, item: Any) -> bool:
     return qualifier == written or qualifier == written[-1:]
 
 
-def _contains(ancestor: Any, node: Any) -> bool:
-    """Whether *node* is *ancestor* or lies inside it."""
+def _within(ancestor: Any, node: Any) -> bool:
+    """Whether *node* lies inside *ancestor*."""
     while node is not None:
         if node is ancestor:
             return True
@@ -621,118 +611,34 @@ def _contains(ancestor: Any, node: Any) -> bool:
     return False
 
 
-def _flatten_items(
-    item: Any, leaves: list[Any], join_ends: list[tuple[Any, int]]
-) -> None:
-    """Append *item*'s FROM items to *leaves* in written order.
-
-    Parentheses that wrap no query of their own are transparent -- ``(a)``,
-    ``((a JOIN b ON ...))``, ``((a JOIN b) JOIN c)`` -- however deeply they
-    nest, and joins hanging off any level are followed, so the tables in a
-    join group bind like any other. Parentheses with an alias, or around a
-    SELECT or UNION, are a derived table: one item, bound by its alias. For
-    each join, *join_ends* records how many leaves its ON condition can see:
-    all of them up to its own.
-    """
-    from sqlglot import expressions as exp
-
-    if (
-        isinstance(item, exp.Subquery)
-        and not item.alias
-        and item.this is not None
-        and not isinstance(item.this, (exp.Select, exp.SetOperation))
-    ):
-        _flatten_items(item.this, leaves, join_ends)
-    else:
-        leaves.append(item)
-    for join in item.args.get("joins") or []:
-        _flatten_items(join.this, leaves, join_ends)
-        join_ends.append((join, len(leaves)))
-
-
-def _items_visible_at(select: Any, position: Any) -> list[Any]:
-    """The FROM/JOIN items of *select* that *position*, inside it, can name.
-
-    The select list, WHERE and the clauses after it see every item. A join's
-    ON condition sees the items joined so far. An item -- a LATERAL subquery
-    or a table function's arguments -- sees only the items before it.
-    Parenthesized join groups count item by item (see :func:`_flatten_items`).
-    """
-    leaves: list[Any] = []
-    join_ends: list[tuple[Any, int]] = []
-    from_clause = select.args.get("from_") or select.args.get("from")
-    if from_clause is not None:
-        _flatten_items(from_clause.this, leaves, join_ends)
-    for join in select.args.get("joins") or []:
-        _flatten_items(join.this, leaves, join_ends)
-        join_ends.append((join, len(leaves)))
-    for join, end in join_ends:
-        condition = join.args.get("on")
-        if condition is not None and _contains(condition, position):
-            return leaves[:end]
-    # Last first: a group's first table also holds the group's later joins.
-    for index in range(len(leaves) - 1, -1, -1):
-        if _contains(leaves[index], position):
-            return leaves[:index]
-    return leaves
-
-
-def _enclosing_position(select: Any) -> Any:
-    """Where *select* stands in the query around it, if it sees that query's items.
-
-    Parentheses and set operations are looked through first: a UNION branch,
-    parenthesized or not, stands where its UNION does. Then an expression
-    subquery (in the select list, WHERE, ON, IN, EXISTS ...) and a LATERAL
-    subquery see their enclosing query, while a derived table in FROM or a
-    JOIN, a CTE body and the root query do not. Returns the node to look up
-    visibility from in the enclosing query, or None.
-    """
-    from sqlglot import expressions as exp
-
-    node = select
-    while isinstance(node.parent, (exp.Subquery, exp.SetOperation, exp.Paren)):
-        node = node.parent
-    parent = node.parent
-    if parent is None or isinstance(parent, (exp.CTE, exp.From)):
-        return None
-    if isinstance(parent, exp.Lateral):
-        return parent
-    if isinstance(parent, exp.Join) and node is parent.this:
-        return None
-    return node
-
-
-def _snowflake_column_is_bound(column: Any) -> bool:
-    """Whether *column*'s qualifier names a FROM/JOIN item visible where it stands."""
-    from sqlglot import expressions as exp
-
-    position = column
-    while position is not None:
-        select = position.find_ancestor(exp.Select)
-        if select is None:
-            return False
-        if any(
-            _binds_snowflake_column(column, item)
-            for item in _items_visible_at(select, position)
-        ):
-            return True
-        position = _enclosing_position(select)
-    return False
-
-
 def _snowflake_sequence_references(stmt: Any) -> list[str]:
-    """``seq.NEXTVAL`` references in a Snowflake statement, which advance seq.
+    """``x.NEXTVAL`` references in a Snowflake statement that may advance x.
 
-    Snowflake reads ``x.NEXTVAL`` as a column when ``x`` names a FROM or JOIN
-    item visible where it is written, and as the sequence ``x`` otherwise.
-    Visibility follows the query's structure rather than sqlglot's scopes,
-    which file a LATERAL subquery's columns under the enclosing query and so
-    would let an item *after* the LATERAL bind them: see
-    :func:`_items_visible_at` and :func:`_enclosing_position`. A CTE binds
-    nothing unless selected from. Identifiers compare as Snowflake resolves
-    them (see :func:`_snowflake_identifier`).
+    Snowflake advances a sequence through ``seq.NEXTVAL`` (and through
+    ``GETNEXTVAL(seq)``, refused with the functions). ``x.NEXTVAL`` passes
+    only as a plain column read: ``x`` names a table, alias or derived table
+    in the FROM of the SELECT it stands in, and it stands in that SELECT's
+    select list, WHERE, GROUP BY, HAVING, QUALIFY or ORDER BY, where every
+    FROM item is in view. Everywhere else -- a correlated subquery, an ON
+    condition, a LATERAL or table function's arguments, a parenthesized join
+    group, a PIVOT, a set operation's ORDER BY -- it is refused rather than
+    resolved, which is rare for a column named NEXTVAL and can never let a
+    sequence through.
     """
     from sqlglot import expressions as exp
+
+    def reads_a_column(column: Any) -> bool:
+        holder = column.find_ancestor(exp.Select, exp.SetOperation)
+        if not isinstance(holder, exp.Select):
+            return False
+        from_clause = holder.args.get("from_") or holder.args.get("from")
+        if from_clause is None:
+            return False
+        joins = holder.args.get("joins") or []
+        if any(_within(node, column) for node in (from_clause, *joins)):
+            return False
+        items = [from_clause.this, *(join.this for join in joins)]
+        return any(_names_from_item(column, item) for item in items)
 
     return list(
         dict.fromkeys(
@@ -740,7 +646,7 @@ def _snowflake_sequence_references(stmt: Any) -> list[str]:
             for column in stmt.find_all(exp.Column)
             if column.table
             and column.name.upper() == "NEXTVAL"
-            and not _snowflake_column_is_bound(column)
+            and not reads_a_column(column)
         )
     )
 
