@@ -86,8 +86,8 @@ def test_names_except_keeps_fixed_names_unquoted() -> None:
     )
     assert sql == (
         "SELECT schema_name FROM information_schema.schemata "
-        "WHERE NOT schema_name IN ('information_schema', 'x''y') "
-        "AND NOT schema_name LIKE 'pg_temp_%' ORDER BY schema_name"
+        "WHERE NOT (schema_name IN ('information_schema', 'x''y')) "
+        "AND NOT (schema_name LIKE 'pg_temp_%') ORDER BY schema_name"
     )
 
 
@@ -115,16 +115,16 @@ def _sent(conn: MagicMock) -> list[str]:
         (
             PostgreSQLDriver,
             "SELECT schema_name FROM information_schema.schemata "
-            "WHERE NOT schema_name IN ('information_schema', 'pg_catalog', "
-            "'pg_toast') AND NOT schema_name LIKE 'pg_temp_%' "
-            "AND NOT schema_name LIKE 'pg_toast_temp_%' ORDER BY schema_name",
+            "WHERE NOT (schema_name IN ('information_schema', 'pg_catalog', "
+            "'pg_toast')) AND NOT (schema_name LIKE 'pg_temp_%') "
+            "AND NOT (schema_name LIKE 'pg_toast_temp_%') ORDER BY schema_name",
             'SELECT * FROM "sales"."orders" LIMIT 5',
         ),
         (
             MySQLDriver,
             "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA "
-            "WHERE NOT SCHEMA_NAME IN ('information_schema', 'mysql', "
-            "'performance_schema', 'sys') ORDER BY SCHEMA_NAME",
+            "WHERE NOT (SCHEMA_NAME IN ('information_schema', 'mysql', "
+            "'performance_schema', 'sys')) ORDER BY SCHEMA_NAME",
             "SELECT * FROM `sales`.`orders` LIMIT 5",
         ),
         (
@@ -136,14 +136,14 @@ def _sent(conn: MagicMock) -> list[str]:
         (
             SnowflakeDriver,
             "SELECT schema_name FROM information_schema.schemata "
-            "WHERE NOT schema_name IN ('INFORMATION_SCHEMA', 'SNOWFLAKE', "
-            "'SNOWFLAKE_SAMPLE_DATA') ORDER BY schema_name",
+            "WHERE NOT (schema_name IN ('INFORMATION_SCHEMA', 'SNOWFLAKE', "
+            "'SNOWFLAKE_SAMPLE_DATA')) ORDER BY schema_name",
             'SELECT * FROM "sales"."orders" LIMIT 5',
         ),
         (
             DuckDBDriver,
             "SELECT schema_name FROM information_schema.schemata "
-            "WHERE NOT schema_name IN ('information_schema', 'pg_catalog') "
+            "WHERE NOT (schema_name IN ('information_schema', 'pg_catalog')) "
             "ORDER BY schema_name",
             'SELECT * FROM "sales"."orders" LIMIT 5',
         ),
@@ -170,7 +170,7 @@ def test_bigquery_sends_built_sql() -> None:
     driver.sample_table_data("orders", "shop", 5)
     assert _sent(conn) == [
         "SELECT schema_name FROM `my-proj`.INFORMATION_SCHEMA.SCHEMATA "
-        "WHERE NOT schema_name IN ('INFORMATION_SCHEMA', 'information_schema') "
+        "WHERE NOT (schema_name IN ('INFORMATION_SCHEMA', 'information_schema')) "
         "ORDER BY schema_name",
         "SELECT table_name FROM `my-proj`.`shop`.INFORMATION_SCHEMA.TABLES "
         "WHERE table_type = 'BASE TABLE' ORDER BY table_name",
@@ -242,3 +242,18 @@ def test_dremio_sends_built_sql(monkeypatch: pytest.MonkeyPatch) -> None:
         "INFORMATION_SCHEMA.\"VIEWS\" WHERE TABLE_SCHEMA = 'it''s'",
         'SELECT * FROM "space"."folder"."orders" LIMIT 5',
     ]
+
+
+def test_negations_are_bracketed_for_high_not_precedence() -> None:
+    # Under MySQL's HIGH_NOT_PRECEDENCE, NOT x IN (...) reads (NOT x) IN (...)
+    # and drops every schema; NOT (x IN (...)) means the same in every mode.
+    sql = names_except(
+        "mysql",
+        "SCHEMA_NAME",
+        table_path(plain("information_schema"), plain("SCHEMATA")),
+        ["mysql"],
+        not_like=["tmp_%"],
+    )
+    assert "NOT (SCHEMA_NAME IN ('mysql'))" in sql
+    assert "NOT (SCHEMA_NAME LIKE 'tmp_%')" in sql
+    assert "NOT SCHEMA_NAME" not in sql

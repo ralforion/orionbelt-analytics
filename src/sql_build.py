@@ -57,6 +57,11 @@ def sample_rows(dialect: str, limit: int, *path: str | None) -> str:
     )
 
 
+def _negated(condition: exp.Expression) -> exp.Expression:
+    """``NOT (<condition>)``, bracketed whatever the dialect's NOT precedence."""
+    return exp.not_(exp.Paren(this=condition))
+
+
 def names_except(
     dialect: str,
     column: str,
@@ -76,12 +81,14 @@ def names_except(
     Returns:
         The query.
     """
+    # Each negated test in brackets: NOT (x IN (...)). Bare NOT x IN (...)
+    # reads as (NOT x) IN (...) under MySQL's HIGH_NOT_PRECEDENCE mode.
     conditions = [
-        exp.not_(
+        _negated(
             exp.column(column).isin(*(exp.Literal.string(name) for name in excluded))
         ),
         *(
-            exp.not_(exp.column(column).like(exp.Literal.string(pattern)))
+            _negated(exp.column(column).like(exp.Literal.string(pattern)))
             for pattern in not_like
         ),
     ]
