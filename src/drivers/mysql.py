@@ -382,6 +382,13 @@ class MySQLDriver(DatabaseDriver):
             assert self.engine is not None
             with self.engine.connect() as conn:
                 logger.info(f"🐬 {db_type} SQL QUERY: {sql_query}")
+                # The query runs in a read-only transaction, so whatever the
+                # parsed gate cannot see -- a stored function that writes,
+                # say -- MySQL refuses itself. START TRANSACTION rather than
+                # SET TRANSACTION: it is valid whether or not the driver has
+                # already opened a transaction, and the connection rolls back
+                # on close either way.
+                conn.execute(text("START TRANSACTION READ ONLY"))
                 result = conn.execute(text(sql_query))
 
                 try:

@@ -386,6 +386,7 @@ Ontology, schema and R2RML **files** are additionally pruned by count as they ar
 ### Security Notes
 
 - **Master password**: Used to encrypt database credentials in memory via AES-128-CBC with HMAC. Creates a persistent salt file at `~/.mcp_credential_salt`. Without this setting, credentials are stored in plain text.
+- **Database role**: Connect with a role that can only read the schemas you analyze (`SELECT` and `USAGE`, nothing else). The server refuses writes and side-effecting functions before a query runs, and runs PostgreSQL and MySQL queries in a read-only transaction, but a role without write rights is the boundary the database itself enforces.
 - **File permissions**: Restrict `.env` to owner-only access: `chmod 600 .env`
 - **Version control**: Never commit `.env` -- add it to `.gitignore`.
 - **Production**: Consider using environment variables directly, or a secrets management service (AWS Secrets Manager, Azure Key Vault, HashiCorp Vault).

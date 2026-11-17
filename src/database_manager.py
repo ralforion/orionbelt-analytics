@@ -28,6 +28,7 @@ from .security import (
     SecurityLevel,
     analyze_sql_statement,
     audit_log_security_event,
+    explain_runs_statement,
     identifier_validator,
     sql_validator,
 )
@@ -1452,6 +1453,23 @@ class DatabaseManager:
                         "Use SELECT queries for data retrieval only"
                     )
                     return validation_result
+                if parsed["query_type"] == "UNSAFE":
+                    validation_result["error"] = parsed["error"]
+                    validation_result["error_type"] = "forbidden_operation"
+                    validation_result["suggestions"].append(
+                        "Query the database's own tables and views with a plain "
+                        "SELECT; functions that change state, wait, or read "
+                        "files or other systems are not allowed"
+                    )
+                    audit_log_security_event(
+                        "unsafe_sql_blocked",
+                        {
+                            "query_preview": sql_query[:100],
+                            "operations": parsed["unsafe_operations"],
+                        },
+                        SecurityLevel.HIGH,
+                    )
+                    return validation_result
                 if parsed["query_type"] == "UNKNOWN":
                     validation_result["error"] = (
                         "Only SELECT, CTE, and metadata queries are allowed"
@@ -1488,6 +1506,13 @@ class DatabaseManager:
                         validation_result["warnings"].append(
                             "CTE should end with SELECT statement"
                         )
+                elif explain_runs_statement(query_without_comments):
+                    validation_result["error"] = (
+                        "EXPLAIN ANALYZE runs the statement it explains; "
+                        "use EXPLAIN without ANALYZE"
+                    )
+                    validation_result["error_type"] = "forbidden_operation"
+                    return validation_result
                 elif query_upper.startswith(("EXPLAIN", "DESCRIBE", "DESC", "SHOW")):
                     validation_result["query_type"] = "METADATA"
                 else:

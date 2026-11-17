@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Tighter read-only SQL check**: `execute_sql_query` now also refuses
+  SELECTs that call functions which change state, wait, or reach files, other
+  databases or the network; row locks (`FOR UPDATE`/`FOR SHARE`);
+  `SELECT ... INTO`; and on DuckDB, a file named in `FROM`. `EXPLAIN` must
+  explain a read that would pass on its own, and `EXPLAIN ANALYZE` is refused
+  because it runs the statement. Statements the SQL parser cannot read are
+  refused unless they are `SHOW` or `DESCRIBE`.
+- **Read-only transactions**: PostgreSQL and MySQL queries now run in a
+  read-only transaction, so the database itself refuses a write the checks
+  cannot see.
+
 ## [2.3.1] - 2026-11-16
 
 Patch release for the Docker image. PyPI installs already pick up the fixed

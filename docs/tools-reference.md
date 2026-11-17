@@ -461,7 +461,7 @@ Execute a SQL query with built-in validation, fan-trap protection, and automatic
 **Key Features:**
 - Requires `connect_database` first
 - **Pre-execution checklist must be confirmed** (`checklist_completed: true`) or the query is rejected
-- Read-only enforcement -- only SELECT statements and schema introspection queries are allowed
+- Read-only enforcement -- only SELECT statements and schema introspection queries are allowed. A SELECT is refused if it locks rows (`FOR UPDATE`), writes with `SELECT ... INTO`, or calls a function that changes state, waits, or reads files or other systems (`setval`, `pg_sleep`, `read_csv`, `dblink`, ClickHouse's `url()` ...), and on DuckDB if it names a file in `FROM` (`FROM 'data.csv'`). `EXPLAIN` is allowed for such a read, `EXPLAIN ANALYZE` is not: it runs the statement. On PostgreSQL and MySQL the query also runs in a read-only transaction
 - SQL injection prevention
 - Query timeout protection
 - Result size capped at 5,000 rows
@@ -756,7 +756,7 @@ No tool is open-world (`openWorldHint: false`): each acts only on the configured
 
 All tools operate within these security constraints:
 
-- **Read-only SQL** -- only SELECT statements and schema introspection queries are permitted
+- **Read-only SQL** -- only SELECT statements and schema introspection queries are permitted, and only SELECTs that read: no row locks, no `SELECT ... INTO`, no `EXPLAIN ANALYZE`, and no functions that change state, wait, or reach files, other databases or the network. PostgreSQL and MySQL queries also run in a read-only transaction. These checks know names, not intent: a user-defined function can still do anything its owner allowed, so connect with a database role that can only read (see [Security Notes](configuration.md#security-notes))
 - **SQL injection prevention** -- queries are scanned for injection patterns before execution
 - **Query timeout protection** -- queries honor a configurable timeout. For SPARQL this is best-effort: the caller is released when the timeout elapses, but the underlying query may keep running in the background (pyoxigraph exposes no native query cancellation), so a timeout bounds caller latency, not server CPU
 - **Result size limits** -- maximum 5,000 rows per query
