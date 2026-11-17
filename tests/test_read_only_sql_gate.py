@@ -54,6 +54,8 @@ BLOCKED = [
     ("snowflake", "SELECT seq.NEXTVAL FROM DUAL"),
     ("snowflake", "SELECT s.NEXTVAL FROM TABLE(GETNEXTVAL(seq)) s"),
     ("snowflake", "SELECT db.sch.seq.nextval AS id FROM sales.orders"),
+    # An alias in a sibling subquery is not visible where seq.nextval stands.
+    ("snowflake", "SELECT seq.nextval, (SELECT 1 FROM sales.orders seq) FROM dual"),
     # Inside a CTE or subquery is no different.
     ("postgres", "WITH x AS (SELECT pg_sleep(60)) SELECT * FROM x"),
     ("duckdb", "SELECT a FROM t WHERE a IN (SELECT a FROM read_csv('x.csv'))"),
@@ -167,6 +169,14 @@ def test_other_unparsed_commands_are_refused(dialect: str, sql: str) -> None:
         ("mysql", "SELECT CONCAT(first_name, ' ', last_name) FROM people"),
         ("snowflake", "SELECT SYSTEM$TYPEOF(1)"),
         ("snowflake", "SELECT o.nextval_at, nextval FROM sales.orders o"),
+        # NEXTVAL on a table, alias or CTE in view is a column, not a sequence.
+        ("snowflake", "SELECT o.nextval FROM sales.orders o"),
+        ("snowflake", "SELECT sales.orders.nextval FROM sales.orders"),
+        ("snowflake", "SELECT (SELECT o.nextval) AS n FROM sales.orders o"),
+        ("snowflake", "WITH c AS (SELECT 1 AS nextval) SELECT c.nextval FROM c"),
+        # Only Snowflake has seq.NEXTVAL; elsewhere it is always a column.
+        ("duckdb", "SELECT o.nextval FROM sales.orders o"),
+        ("postgres", "SELECT x.nextval FROM sales.orders x"),
     ],
 )
 def test_ordinary_reads_pass(dialect: str, sql: str) -> None:
@@ -386,3 +396,121 @@ def test_databricks_show_tables_fallback_quotes_the_schema() -> None:
 
     sql = str(conn.execute.call_args.args[0])
     assert sql == "SHOW TABLES IN `main`.`sales`` ; SELECT 1 ; ``x`"
+
+
+# --- DuckDB name resolution, checked against DuckDB itself -------------------
+
+
+def test_duckdb_resolver_agrees_with_duckdb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every reference the resolver accepts, DuckDB finds in its catalog.
+
+    DuckDB reads a reference its catalog misses as a file, so the resolver
+    must never accept one DuckDB would miss. Ground truth is EXPLAIN in an
+    empty working directory: it succeeds only when the catalog resolves the
+    name, since there is no file to fall back on.
+    """
+    from src.drivers.duckdb import _resolves_in_catalog
+
+    con = duckdb.connect(str(tmp_path / "data.duckdb"))
+    con.execute(
+        "CREATE SCHEMA sales; CREATE TABLE sales.csv(a int); "
+        "CREATE TABLE sales.orders(a int); CREATE TABLE main.items(a int); "
+        "CREATE VIEW main.v AS SELECT 1 AS a; CREATE SCHEMA data; "
+        "CREATE TABLE data.data.only_here(a int); CREATE TEMP TABLE tmp1(a int)"
+    )
+    con.execute(
+        f"ATTACH '{tmp_path / 'other.duckdb'}' AS other; "
+        "CREATE SCHEMA other.sales; CREATE TABLE other.sales.csv(a int); "
+        "CREATE TABLE other.main.x(a int)"
+    )
+
+    def lowered(sql: str) -> set[tuple[str, ...]]:
+        return {
+            tuple(str(v).lower() for v in row) for row in con.execute(sql).fetchall()
+        }
+
+    known = lowered(
+        "SELECT database_name, schema_name, table_name FROM duckdb_tables() "
+        "UNION ALL SELECT database_name, schema_name, view_name FROM duckdb_views()"
+    )
+    schemas = lowered("SELECT database_name, schema_name FROM duckdb_schemas()")
+    databases = {
+        name for (name,) in lowered("SELECT database_name FROM duckdb_databases()")
+    }
+    catalog, schema = (
+        str(v).lower()
+        for v in con.execute("SELECT current_database(), current_schema()").fetchone()
+    )
+
+    names = [
+        "csv",
+        "orders",
+        "items",
+        "v",
+        "tmp1",
+        "x",
+        "tables",
+        "pg_class",
+        "only_here",
+        "duckdb_tables",
+    ]
+    firsts = [
+        "data",
+        "sales",
+        "main",
+        "other",
+        "temp",
+        "system",
+        "information_schema",
+        "pg_catalog",
+        "memory",
+    ]
+    references = [(n,) for n in names] + [(f, n) for f in firsts for n in names]
+    references += [
+        (c, sc, n)
+        for c in ["data", "other", "system", "temp"]
+        for sc in ["main", "sales", "data", "information_schema", "pg_catalog"]
+        for n in names
+    ]
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    disagreements = []
+    for parts in references:
+        quoted = ".".join(f'"{p}"' for p in parts)
+        try:
+            con.execute(f"EXPLAIN SELECT * FROM {quoted}")
+            duckdb_finds = True
+        except duckdb.Error:
+            duckdb_finds = False
+        ours = _resolves_in_catalog(parts, known, schemas, databases, catalog, schema)
+        if ours != duckdb_finds:
+            disagreements.append((parts, ours, duckdb_finds))
+    assert not disagreements
+    # The reviewer's case: catalog "data" has sales.csv but no main.csv.
+    assert not _resolves_in_catalog(
+        ("data", "csv"), known, schemas, databases, catalog, schema
+    )
+
+
+def test_duckdb_catalog_name_does_not_cover_a_file_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # data.duckdb holds sales.csv; DuckDB reads data.csv as catalog "data",
+    # schema main -- which has no csv -- so it falls back to ./data.csv.
+    con = duckdb.connect(str(tmp_path / "data.duckdb"))
+    con.execute("CREATE SCHEMA sales; CREATE TABLE sales.csv(a int)")
+    con.close()
+    (tmp_path / "data.csv").write_text("code\nX7Q2\n")
+    monkeypatch.chdir(tmp_path)
+    db = DatabaseManager()
+    assert db.connect_duckdb(str(tmp_path / "data.duckdb"))
+
+    result = db.execute_sql_query("SELECT * FROM data.csv")
+
+    assert not result["success"]
+    assert result["error_type"] == "unknown_table", result
+    assert "X7Q2" not in str(result)
+    assert db.execute_sql_query("SELECT count(*) AS n FROM sales.csv")["success"]

@@ -548,6 +548,54 @@ def explain_runs_statement(sql_query: str) -> bool:
     return _EXPLAIN_ANALYZE.search(options) is not None
 
 
+def _snowflake_sequence_references(stmt: Any) -> list[str]:
+    """``seq.NEXTVAL`` references in a Snowflake statement, which advance seq.
+
+    Snowflake reads ``x.NEXTVAL`` as a column when ``x`` is a table, alias,
+    subquery or CTE visible where it is written, and as the sequence ``x``
+    otherwise. Visibility follows sqlglot's scopes: the reference's own scope
+    and the scopes enclosing it, so an alias declared in a sibling subquery
+    does not count. If the scopes cannot be built, every qualified NEXTVAL is
+    treated as a sequence.
+    """
+    from sqlglot import expressions as exp
+    from sqlglot.optimizer.scope import traverse_scope
+
+    def is_nextval(column: Any) -> bool:
+        return bool(column.table) and column.name.lower() == "nextval"
+
+    try:
+        scopes = traverse_scope(stmt)
+    except Exception as e:  # sqlglot.errors.OptimizeError and friends
+        logger.debug(f"Scopes unavailable, treating NEXTVAL as a sequence: {e}")
+        return [
+            f"sequence {column.sql(dialect='snowflake')}"
+            for column in stmt.find_all(exp.Column)
+            if is_nextval(column)
+        ]
+
+    def visible(column: Any, scope: Any) -> bool:
+        qualifier = column.table.lower()
+        schema = (column.db or "").lower()
+        while scope is not None:
+            for alias, source in scope.sources.items():
+                if alias.lower() != qualifier:
+                    continue
+                if not schema or (
+                    isinstance(source, exp.Table) and source.db.lower() == schema
+                ):
+                    return True
+            scope = scope.parent
+        return False
+
+    return [
+        f"sequence {column.sql(dialect='snowflake')}"
+        for scope in scopes
+        for column in scope.columns
+        if is_nextval(column) and not visible(column, scope)
+    ]
+
+
 def _unsafe_operations(stmt: Any, dialect: str) -> list[str]:
     """Function calls and file references *stmt* makes that a read may not."""
     from sqlglot import expressions as exp
@@ -557,12 +605,8 @@ def _unsafe_operations(stmt: Any, dialect: str) -> list[str]:
         name = func.name if isinstance(func, exp.Anonymous) else func.sql_name()
         if name and _is_forbidden_function(name):
             found.append(f"function {name.lower()}()")
-    # Snowflake advances a sequence through a column-like reference: seq.NEXTVAL.
-    found.extend(
-        f"sequence {column.sql()}"
-        for column in stmt.find_all(exp.Column)
-        if column.name.lower() == "nextval" and column.table
-    )
+    if dialect == "snowflake":
+        found.extend(_snowflake_sequence_references(stmt))
     if dialect == "duckdb":
         for table in stmt.find_all(exp.Table):
             parts = [part for part in (table.catalog, table.db, table.name) if part]

@@ -30,6 +30,62 @@ from .reflection import column_fk_entries, reflect_tables
 logger = logging.getLogger(__name__)
 
 
+def _resolves_in_catalog(
+    parts: tuple[str, ...],
+    known: set[tuple[str, ...]],
+    schemas: set[tuple[str, ...]],
+    databases: set[str],
+    default_catalog: str,
+    default_schema: str,
+) -> bool:
+    """Whether DuckDB's catalog lookup finds a table or view for *parts*.
+
+    DuckDB's rules with the default search path (temp, the current database,
+    then the system catalog's main and pg_catalog):
+
+    - ``name``: the first search-path schema holding it.
+    - ``a.name``: if a database ``a`` is attached, catalog ``a`` in its
+      search-path schemas, else ``main`` -- and an error if the current
+      database also has a schema ``a``. Otherwise schema ``a`` in the
+      search-path catalogs listing it, else the current database or ``system``.
+    - ``catalog.schema.name``: exactly that.
+
+    Checked against DuckDB itself in tests/test_read_only_sql_gate.py.
+
+    Args:
+        parts: The reference's lower-case name parts.
+        known: Every (catalog, schema, name) of a table or view.
+        schemas: Every (catalog, schema).
+        databases: Every attached catalog.
+        default_catalog: ``current_database()``.
+        default_schema: ``current_schema()``.
+
+    Returns:
+        True when the reference resolves to a catalog entry.
+    """
+    path = [
+        ("temp", "main"),
+        (default_catalog, default_schema),
+        ("system", "main"),
+        ("system", "pg_catalog"),
+    ]
+    *qualifiers, name = parts
+    if not qualifiers:
+        return any((c, s, name) in known for c, s in path)
+    if len(qualifiers) == 1:
+        (first,) = qualifiers
+        if first in databases:
+            holders = [c for c, s in path if s == first] or [default_catalog]
+            if any((c, first) in schemas for c in holders):
+                return False  # DuckDB refuses it as ambiguous
+            in_path = [s for c, s in path if c == first] or ["main"]
+            return any((first, s, name) in known for s in in_path)
+        catalogs = [c for c, s in path if s == first] or [default_catalog, "system"]
+        return any((c, first, name) in known for c in catalogs)
+    catalog, schema = qualifiers[-2:]
+    return (catalog, schema, name) in known
+
+
 class DuckDBDriver(DatabaseDriver):
     """DuckDB/MotherDuck database driver.
 
@@ -330,37 +386,56 @@ class DuckDBDriver(DatabaseDriver):
     # ------------------------------------------------------------------
 
     def _names_outside_catalog(self, conn: Any, sql_query: str) -> list[str]:
-        """The table references in *sql_query* that the catalog cannot resolve.
+        """The table references in *sql_query* that DuckDB's catalog cannot resolve.
 
-        A reference resolves when a table or view of that name exists and its
-        qualifiers match: ``schema.table`` or ``catalog.table`` for two parts,
-        ``catalog.schema.table`` for three. System views count. A query that
-        does not parse resolves nothing, so it is reported whole.
+        Resolution follows DuckDB's own lookup (see :func:`_resolves_in_catalog`),
+        since a reference that misses the catalog is read as a file. A query
+        that does not parse resolves nothing, so it is reported whole.
         """
         references = table_references(sql_query, "duckdb")
         if references is None:
             return [sql_query[:80]]
         if not references:
             return []
-        rows = conn.execute(
-            text(
-                "SELECT database_name, schema_name, table_name FROM duckdb_tables() "
-                "UNION ALL "
-                "SELECT database_name, schema_name, view_name FROM duckdb_views()"
+
+        def lowered(rows: Any) -> set[tuple[str, ...]]:
+            return {tuple(str(value).lower() for value in row) for row in rows}
+
+        known = lowered(
+            conn.execute(
+                text(
+                    "SELECT database_name, schema_name, table_name "
+                    "FROM duckdb_tables() UNION ALL "
+                    "SELECT database_name, schema_name, view_name FROM duckdb_views()"
+                )
+            ).fetchall()
+        )
+        schemas = lowered(
+            conn.execute(
+                text("SELECT database_name, schema_name FROM duckdb_schemas()")
+            ).fetchall()
+        )
+        databases = {
+            name
+            for (name,) in lowered(
+                conn.execute(
+                    text("SELECT database_name FROM duckdb_databases()")
+                ).fetchall()
             )
-        ).fetchall()
-        known = [(str(c).lower(), str(s).lower(), str(n).lower()) for c, s, n in rows]
-
-        def resolves(parts: tuple[str, ...]) -> bool:
-            *qualifiers, name = parts
-            owners = [(c, s) for c, s, n in known if n == name]
-            if not qualifiers:
-                return bool(owners)
-            if len(qualifiers) == 1:
-                return any(qualifiers[0] in owner for owner in owners)
-            return tuple(qualifiers[-2:]) in owners
-
-        return [".".join(parts) for parts in references if not resolves(parts)]
+        }
+        default_catalog, default_schema = (
+            str(value).lower()
+            for value in conn.execute(
+                text("SELECT current_database(), current_schema()")
+            ).one()
+        )
+        return [
+            ".".join(parts)
+            for parts in references
+            if not _resolves_in_catalog(
+                parts, known, schemas, databases, default_catalog, default_schema
+            )
+        ]
 
     def validate_sql_syntax(
         self, sql_query: str, validation_result: dict[str, Any]
