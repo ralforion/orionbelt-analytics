@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import string
 from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar
@@ -548,52 +549,105 @@ def explain_runs_statement(sql_query: str) -> bool:
     return _EXPLAIN_ANALYZE.search(options) is not None
 
 
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+_ASCII_UPPER = str.maketrans(string.ascii_lowercase, string.ascii_uppercase)
+
+
+def ascii_lower(name: str) -> str:
+    """*name* with ASCII letters lower-cased and every other character kept.
+
+    DuckDB compares identifiers this way: ``DÀTA`` and ``dÀta`` are one name,
+    ``dàta`` is another. Python's ``str.lower`` folds the ``À`` too, which
+    would call two different DuckDB names the same.
+    """
+    return name.translate(_ASCII_LOWER)
+
+
+def _snowflake_identifier(identifier: Any) -> str:
+    """An identifier as Snowflake resolves it: unquoted upper-cased, quoted as is."""
+    from sqlglot import expressions as exp
+
+    if isinstance(identifier, exp.Identifier):
+        text = str(identifier.this)
+        return text if identifier.quoted else text.translate(_ASCII_UPPER)
+    return str(identifier or "").translate(_ASCII_UPPER)
+
+
+def _binds_snowflake_column(column: Any, node: Any) -> bool:
+    """Whether the FROM/JOIN item *node* is what *column*'s qualifier names.
+
+    An aliased item answers only to its alias, and only for a one-part
+    qualifier. An unaliased table answers to its name alone, or to its name
+    with exactly the qualifiers it was written with. Anything less certain --
+    ``otherdb.sales.seq`` against ``FROM sales.seq`` -- is not a match.
+    """
+    from sqlglot import expressions as exp
+
+    qualifier = [
+        _snowflake_identifier(column.args[key])
+        for key in ("catalog", "db", "table")
+        if column.args.get(key)
+    ]
+    alias = node.args.get("alias")
+    if alias is not None and alias.args.get("this") is not None:
+        return qualifier == [_snowflake_identifier(alias.this)]
+    if not isinstance(node, exp.Table):
+        return False
+    written = [
+        _snowflake_identifier(node.args[key])
+        for key in ("catalog", "db", "this")
+        if node.args.get(key)
+    ]
+    return qualifier == written or qualifier == written[-1:]
+
+
 def _snowflake_sequence_references(stmt: Any) -> list[str]:
     """``seq.NEXTVAL`` references in a Snowflake statement, which advance seq.
 
-    Snowflake reads ``x.NEXTVAL`` as a column when ``x`` is a table, alias,
-    subquery or CTE visible where it is written, and as the sequence ``x``
-    otherwise. Visibility follows sqlglot's scopes: the reference's own scope
-    and the scopes enclosing it, so an alias declared in a sibling subquery
-    does not count. If the scopes cannot be built, every qualified NEXTVAL is
-    treated as a sequence.
+    Snowflake reads ``x.NEXTVAL`` as a column when ``x`` is bound in a FROM or
+    JOIN visible where it is written, and as the sequence ``x`` otherwise.
+    Only items actually selected count -- a CTE nobody selects from binds
+    nothing -- and a scope sees its enclosing scope's items only when it is a
+    subquery that can be correlated with it; a CTE or derived table cannot.
+    Identifiers compare as Snowflake resolves them (see
+    :func:`_snowflake_identifier`). If the scopes cannot be built, every
+    qualified NEXTVAL is treated as a sequence.
     """
     from sqlglot import expressions as exp
     from sqlglot.optimizer.scope import traverse_scope
 
     def is_nextval(column: Any) -> bool:
-        return bool(column.table) and column.name.lower() == "nextval"
+        return bool(column.table) and column.name.upper() == "NEXTVAL"
+
+    def label(column: Any) -> str:
+        return f"sequence {column.sql(dialect='snowflake')}"
 
     try:
         scopes = traverse_scope(stmt)
     except Exception as e:  # sqlglot.errors.OptimizeError and friends
         logger.debug(f"Scopes unavailable, treating NEXTVAL as a sequence: {e}")
-        return [
-            f"sequence {column.sql(dialect='snowflake')}"
-            for column in stmt.find_all(exp.Column)
-            if is_nextval(column)
-        ]
+        return [label(c) for c in stmt.find_all(exp.Column) if is_nextval(c)]
 
-    def visible(column: Any, scope: Any) -> bool:
-        qualifier = column.table.lower()
-        schema = (column.db or "").lower()
+    def bound(column: Any, scope: Any) -> bool:
         while scope is not None:
-            for alias, source in scope.sources.items():
-                if alias.lower() != qualifier:
-                    continue
-                if not schema or (
-                    isinstance(source, exp.Table) and source.db.lower() == schema
-                ):
-                    return True
+            if any(
+                _binds_snowflake_column(column, node)
+                for node, _ in scope.selected_sources.values()
+            ):
+                return True
+            if not scope.is_subquery:
+                return False
             scope = scope.parent
         return False
 
-    return [
-        f"sequence {column.sql(dialect='snowflake')}"
-        for scope in scopes
-        for column in scope.columns
-        if is_nextval(column) and not visible(column, scope)
-    ]
+    return list(
+        dict.fromkeys(
+            label(column)
+            for scope in scopes
+            for column in scope.columns
+            if is_nextval(column) and not bound(column, scope)
+        )
+    )
 
 
 def _unsafe_operations(stmt: Any, dialect: str) -> list[str]:
@@ -616,10 +670,11 @@ def _unsafe_operations(stmt: Any, dialect: str) -> list[str]:
 
 
 def table_references(sql_query: str, dialect: str) -> list[tuple[str, ...]] | None:
-    """The tables and views *sql_query* names, each as its lower-case name parts.
+    """The tables and views *sql_query* names, each as its name parts.
 
     A reference keeps the parts written -- ``sales.orders`` is
-    ``("sales", "orders")`` -- and leaves out CTE names and table functions.
+    ``("sales", "orders")`` -- folded with :func:`ascii_lower`, the way DuckDB
+    compares names, and leaves out CTE names and table functions.
 
     Args:
         sql_query: One SQL statement.
@@ -636,13 +691,13 @@ def table_references(sql_query: str, dialect: str) -> list[tuple[str, ...]] | No
     except Exception as e:  # sqlglot.errors.ParseError and friends
         logger.debug(f"table_references: statement does not parse: {e}")
         return None
-    ctes = {cte.alias_or_name.lower() for cte in statement.find_all(exp.CTE)}
+    ctes = {ascii_lower(cte.alias_or_name) for cte in statement.find_all(exp.CTE)}
     references = []
     for table in statement.find_all(exp.Table):
         if not table.name:
             continue  # a table function: read_csv(...), range(10)
         parts = tuple(
-            part.lower() for part in (table.catalog, table.db, table.name) if part
+            ascii_lower(part) for part in (table.catalog, table.db, table.name) if part
         )
         if len(parts) == 1 and parts[0] in ctes:
             continue

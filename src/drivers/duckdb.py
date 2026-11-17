@@ -19,6 +19,7 @@ from ..result_limits import fetch_bounded
 from ..security import (
     SecureCredentialManager,
     SecurityLevel,
+    ascii_lower,
     audit_log_security_event,
     identifier_validator,
     table_references,
@@ -52,8 +53,10 @@ def _resolves_in_catalog(
 
     Checked against DuckDB itself in tests/test_read_only_sql_gate.py.
 
+    Every name is folded with :func:`ascii_lower`, as DuckDB compares them.
+
     Args:
-        parts: The reference's lower-case name parts.
+        parts: The reference's name parts.
         known: Every (catalog, schema, name) of a table or view.
         schemas: Every (catalog, schema).
         databases: Every attached catalog.
@@ -399,7 +402,7 @@ class DuckDBDriver(DatabaseDriver):
             return []
 
         def lowered(rows: Any) -> set[tuple[str, ...]]:
-            return {tuple(str(value).lower() for value in row) for row in rows}
+            return {tuple(ascii_lower(str(value)) for value in row) for row in rows}
 
         known = lowered(
             conn.execute(
@@ -424,7 +427,7 @@ class DuckDBDriver(DatabaseDriver):
             )
         }
         default_catalog, default_schema = (
-            str(value).lower()
+            ascii_lower(str(value))
             for value in conn.execute(
                 text("SELECT current_database(), current_schema()")
             ).one()

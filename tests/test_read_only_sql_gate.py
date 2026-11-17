@@ -56,6 +56,16 @@ BLOCKED = [
     ("snowflake", "SELECT db.sch.seq.nextval AS id FROM sales.orders"),
     # An alias in a sibling subquery is not visible where seq.nextval stands.
     ("snowflake", "SELECT seq.nextval, (SELECT 1 FROM sales.orders seq) FROM dual"),
+    # A CTE binds nothing unless selected from; an outer alias does not reach
+    # into a CTE.
+    ("snowflake", "WITH seq AS (SELECT 1 AS dummy) SELECT seq.NEXTVAL FROM DUAL"),
+    (
+        "snowflake",
+        "WITH c AS (SELECT o.nextval FROM dual) SELECT 1 FROM sales.orders o",
+    ),
+    # Quoted "seq" is not unquoted SEQ, and a database qualifier must match.
+    ("snowflake", 'SELECT seq.NEXTVAL FROM DUAL AS "seq"'),
+    ("snowflake", "SELECT otherdb.sales.seq.NEXTVAL FROM currentdb.sales.seq"),
     # Inside a CTE or subquery is no different.
     ("postgres", "WITH x AS (SELECT pg_sleep(60)) SELECT * FROM x"),
     ("duckdb", "SELECT a FROM t WHERE a IN (SELECT a FROM read_csv('x.csv'))"),
@@ -172,6 +182,9 @@ def test_other_unparsed_commands_are_refused(dialect: str, sql: str) -> None:
         # NEXTVAL on a table, alias or CTE in view is a column, not a sequence.
         ("snowflake", "SELECT o.nextval FROM sales.orders o"),
         ("snowflake", "SELECT sales.orders.nextval FROM sales.orders"),
+        ("snowflake", "SELECT orders.nextval FROM sales.orders"),
+        ("snowflake", "SELECT O.nextval FROM sales.orders o"),
+        ("snowflake", 'SELECT "o".nextval FROM sales.orders AS "o"'),
         ("snowflake", "SELECT (SELECT o.nextval) AS n FROM sales.orders o"),
         ("snowflake", "WITH c AS (SELECT 1 AS nextval) SELECT c.nextval FROM c"),
         # Only Snowflake has seq.NEXTVAL; elsewhere it is always a column.
@@ -412,13 +425,15 @@ def test_duckdb_resolver_agrees_with_duckdb(
     name, since there is no file to fall back on.
     """
     from src.drivers.duckdb import _resolves_in_catalog
+    from src.security import ascii_lower
 
     con = duckdb.connect(str(tmp_path / "data.duckdb"))
     con.execute(
         "CREATE SCHEMA sales; CREATE TABLE sales.csv(a int); "
         "CREATE TABLE sales.orders(a int); CREATE TABLE main.items(a int); "
         "CREATE VIEW main.v AS SELECT 1 AS a; CREATE SCHEMA data; "
-        "CREATE TABLE data.data.only_here(a int); CREATE TEMP TABLE tmp1(a int)"
+        "CREATE TABLE data.data.only_here(a int); CREATE TEMP TABLE tmp1(a int); "
+        'CREATE SCHEMA "DÀTA"; CREATE TABLE "DÀTA".csv(a int)'
     )
     con.execute(
         f"ATTACH '{tmp_path / 'other.duckdb'}' AS other; "
@@ -428,7 +443,8 @@ def test_duckdb_resolver_agrees_with_duckdb(
 
     def lowered(sql: str) -> set[tuple[str, ...]]:
         return {
-            tuple(str(v).lower() for v in row) for row in con.execute(sql).fetchall()
+            tuple(ascii_lower(str(v)) for v in row)
+            for row in con.execute(sql).fetchall()
         }
 
     known = lowered(
@@ -440,7 +456,7 @@ def test_duckdb_resolver_agrees_with_duckdb(
         name for (name,) in lowered("SELECT database_name FROM duckdb_databases()")
     }
     catalog, schema = (
-        str(v).lower()
+        ascii_lower(str(v))
         for v in con.execute("SELECT current_database(), current_schema()").fetchone()
     )
 
@@ -466,6 +482,11 @@ def test_duckdb_resolver_agrees_with_duckdb(
         "information_schema",
         "pg_catalog",
         "memory",
+        # DuckDB folds ASCII case only: DÀTA and dÀta match, dàta does not.
+        "DÀTA",
+        "dÀta",
+        "dàta",
+        "DàTA",
     ]
     references = [(n,) for n in names] + [(f, n) for f in firsts for n in names]
     references += [
@@ -485,7 +506,8 @@ def test_duckdb_resolver_agrees_with_duckdb(
             duckdb_finds = True
         except duckdb.Error:
             duckdb_finds = False
-        ours = _resolves_in_catalog(parts, known, schemas, databases, catalog, schema)
+        folded = tuple(ascii_lower(p) for p in parts)
+        ours = _resolves_in_catalog(folded, known, schemas, databases, catalog, schema)
         if ours != duckdb_finds:
             disagreements.append((parts, ours, duckdb_finds))
     assert not disagreements
@@ -514,3 +536,24 @@ def test_duckdb_catalog_name_does_not_cover_a_file_read(
     assert result["error_type"] == "unknown_table", result
     assert "X7Q2" not in str(result)
     assert db.execute_sql_query("SELECT count(*) AS n FROM sales.csv")["success"]
+
+
+def test_duckdb_unicode_case_does_not_cover_a_file_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # DuckDB folds ASCII case only, so "dàta".csv is not the table "DÀTA".csv:
+    # it misses the catalog and is read as ./dàta.csv.
+    con = duckdb.connect(str(tmp_path / "u.duckdb"))
+    con.execute('CREATE SCHEMA "DÀTA"; CREATE TABLE "DÀTA".csv(a int)')
+    con.close()
+    (tmp_path / "dàta.csv").write_text("code\nX7Q2\n")
+    monkeypatch.chdir(tmp_path)
+    db = DatabaseManager()
+    assert db.connect_duckdb(str(tmp_path / "u.duckdb"))
+
+    result = db.execute_sql_query('SELECT * FROM "dàta".csv')
+
+    assert not result["success"]
+    assert result["error_type"] == "unknown_table", result
+    assert "X7Q2" not in str(result)
+    assert db.execute_sql_query('SELECT count(*) AS n FROM "dÀta".csv')["success"]
