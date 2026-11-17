@@ -33,6 +33,26 @@ from .reflection import column_fk_entries, reflect_tables
 logger = logging.getLogger(__name__)
 
 
+def normalize_allowed_directories(directories: list[str] | None) -> list[str]:
+    """Allowed directories as DuckDB is given them: absolute, ending in a
+    separator, without duplicates, sorted.
+
+    The trailing separator keeps ``/data`` from also allowing ``/database``;
+    the sorting makes two spellings of one policy compare equal.
+    """
+    return sorted(
+        {
+            os.path.join(os.path.abspath(os.path.expanduser(directory)), "")
+            for directory in directories or []
+            if directory and directory.strip()
+        }
+    )
+
+
+class FileAccessPolicyConflict(RuntimeError):
+    """This DuckDB database is already open with a different file-access policy."""
+
+
 def _restrict_file_access(engine: Engine, allowed_directories: list[str]) -> None:
     """Let DuckDB read files only inside *allowed_directories*.
 
@@ -41,18 +61,24 @@ def _restrict_file_access(engine: Engine, allowed_directories: list[str]) -> Non
     file named in FROM, COPY, ATTACH, an extension install -- however the
     query is written, so it holds where a check on the query's text could
     miss something. The database's own file and spill directory stay usable.
-    DuckDB will not switch it back on, so it is set on every new connection
-    that does not have it yet.
+
+    DuckDB will not switch it back on, and within one process connections to
+    the same file share one database instance and so its settings. A new
+    connection therefore sets the policy when the instance has none yet, and
+    otherwise checks that the policy it finds is the one it was given:
+    another, held open by a differently configured connection, is refused
+    rather than inherited.
 
     Args:
         engine: The DuckDB engine to restrict.
         allowed_directories: Directories DuckDB may still read, e.g. the
             files a view reads; none by default.
+
+    Raises:
+        FileAccessPolicyConflict: On connect, when the database is already
+            restricted with other allowed directories.
     """
-    directories = [
-        os.path.join(os.path.abspath(os.path.expanduser(directory)), "")
-        for directory in allowed_directories
-    ]
+    directories = normalize_allowed_directories(allowed_directories)
 
     def setting(name: str, value: exp.Expression) -> str:
         item = exp.SetItem(this=exp.EQ(this=exp.column(name), expression=value))
@@ -77,6 +103,26 @@ def _restrict_file_access(engine: Engine, allowed_directories: list[str]) -> Non
             if row is not None and row[0]:
                 for statement in statements:
                     cursor.execute(statement)
+                return
+            cursor.execute(
+                "SELECT current_setting('allowed_directories'), "
+                "current_setting('temp_directory')"
+            )
+            row = cursor.fetchone()
+            inherited = normalize_allowed_directories(
+                list(row[0]) if row is not None and row[0] else []
+            )
+            # DuckDB adds its own spill directory once external access is off.
+            spill = normalize_allowed_directories(
+                [row[1]] if row is not None and row[1] else []
+            )
+            expected = [d for d in directories if d not in spill]
+            if [d for d in inherited if d not in spill] != expected:
+                raise FileAccessPolicyConflict(
+                    "This DuckDB database is already open in this server with "
+                    "different allowed directories; it cannot be opened with "
+                    "another set until those connections close"
+                )
         finally:
             cursor.close()
 

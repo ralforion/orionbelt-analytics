@@ -119,3 +119,55 @@ def test_database_manager_passes_the_allowed_directories(files: Path) -> None:
         str(files / "shop.duckdb"), allowed_directories=[str(files / "data")]
     )
     assert db.execute_sql_query("SELECT a FROM v")["data"] == [{"a": 1}]
+
+
+# --- One database, one policy ------------------------------------------------
+
+
+def test_different_policies_do_not_share_a_connection(files: Path) -> None:
+    from src.server_state import _get_connection_fingerprint
+
+    def manager(allowed: list[str]) -> DatabaseManager:
+        db = DatabaseManager()
+        assert db.connect_duckdb(
+            str(files / "shop.duckdb"), allowed_directories=allowed
+        )
+        return db
+
+    data = str(files / "data")
+    plain, allowed = manager([]), manager([data])
+    # Sessions bind to a manager by fingerprint: another policy, another one.
+    assert _get_connection_fingerprint(plain) != _get_connection_fingerprint(allowed)
+    # The same policy spelled differently is the same connection.
+    other = manager([str(files / "database"), data + "/"])
+    same = manager([data, str(files / "database")])
+    assert _get_connection_fingerprint(other) == _get_connection_fingerprint(same)
+    # No policy, no new field: a workspace keeps the identity it had.
+    assert "allowed_directories" not in plain.connection_info
+
+
+def test_an_open_database_does_not_lend_its_policy(files: Path) -> None:
+    permissive = _driver(str(files / "shop.duckdb"), [str(files / "data")])
+    assert permissive.engine is not None
+    # While the permissive connection is open, the file's one database
+    # instance carries its allowlist; a stricter driver must not inherit it.
+    with permissive.engine.connect():
+        strict = DuckDBDriver()
+        assert not strict.connect(
+            database_path=str(files / "shop.duckdb"), allowed_directories=[]
+        )
+        alike = _driver(str(files / "shop.duckdb"), [str(files / "data")])
+        assert _run(alike, "SELECT a FROM v")["data"] == [{"a": 1}]
+    # Once it is closed, the strict driver gets the policy it asked for.
+    strict = _driver(str(files / "shop.duckdb"))
+    assert not _run(strict, "SELECT a FROM v")["success"]
+
+
+def test_reconnecting_keeps_the_allowed_directories(files: Path) -> None:
+    db = DatabaseManager()
+    assert db.connect_duckdb(
+        str(files / "shop.duckdb"), allowed_directories=[str(files / "data")]
+    )
+    db._reconnect()
+    assert db.execute_sql_query("SELECT a FROM v")["data"] == [{"a": 1}]
+    assert db.connection_info["allowed_directories"] == [str(files / "data") + "/"]

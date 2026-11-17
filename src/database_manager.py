@@ -559,6 +559,7 @@ class DatabaseManager:
                 params.get("database_path", ":memory:"),
                 params.get("motherduck_token"),
                 params.get("read_only", False),
+                params.get("allowed_directories"),
             )
         elif params["type"] == "databricks":
             success = self.connect_databricks(
@@ -974,7 +975,7 @@ class DatabaseManager:
         A local database may read files only inside *allowed_directories*;
         DuckDB refuses every other file and network access.
         """
-        from .drivers.duckdb import DuckDBDriver
+        from .drivers.duckdb import DuckDBDriver, normalize_allowed_directories
 
         driver = DuckDBDriver(
             pool_size=self._connection_pool_size,
@@ -998,6 +999,17 @@ class DatabaseManager:
                 "is_motherduck": is_motherduck,
                 "read_only": read_only,
             }
+            # Part of the connection's identity, so sessions configured with
+            # different file-access policies never share one manager. Only
+            # when set: a connection without one keeps the identity -- and the
+            # workspace -- it had before allowed directories existed.
+            policy = (
+                []
+                if is_motherduck
+                else normalize_allowed_directories(allowed_directories)
+            )
+            if policy:
+                self.connection_info["allowed_directories"] = policy
             self._connection_id = hashlib.sha256(
                 f"duckdb:{database_path}".encode()
             ).hexdigest()[:16]
@@ -1007,6 +1019,7 @@ class DatabaseManager:
                 "database_path": database_path,
                 "motherduck_token": motherduck_token,
                 "read_only": read_only,
+                "allowed_directories": list(allowed_directories or []),
             }
             self.auth_identity = (
                 self._credential_digest(motherduck_token)
