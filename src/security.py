@@ -577,7 +577,8 @@ def _binds_snowflake_column(column: Any, item: Any) -> bool:
     """Whether the FROM/JOIN item *item* is what *column*'s qualifier names.
 
     An aliased item -- table, derived table, LATERAL, table function --
-    answers only to its alias, and only for a one-part qualifier. An
+    answers only to its alias, and only for a one-part qualifier; a pivoted
+    table only to its PIVOT's alias. An
     unaliased table answers to its name alone, or to its name with exactly the
     qualifiers it was written with. Anything less certain --
     ``otherdb.sales.seq`` against ``FROM sales.seq`` -- is not a match.
@@ -589,6 +590,15 @@ def _binds_snowflake_column(column: Any, item: Any) -> bool:
         for key in ("catalog", "db", "table")
         if column.args.get(key)
     ]
+    pivots = item.args.get("pivots") or []
+    if pivots:
+        # A PIVOT or UNPIVOT makes a new row source: only its alias names it.
+        return any(
+            (alias := pivot.args.get("alias")) is not None
+            and alias.args.get("this") is not None
+            and qualifier == [_snowflake_identifier(alias.this)]
+            for pivot in pivots
+        )
     alias = item.args.get("alias")
     if alias is not None and alias.args.get("this") is not None:
         return qualifier == [_snowflake_identifier(alias.this)]
@@ -616,10 +626,13 @@ def _flatten_items(
 ) -> None:
     """Append *item*'s FROM items to *leaves* in written order.
 
-    A parenthesized join group -- ``(a JOIN b ON ...)``, which sqlglot keeps
-    as an unaliased Subquery around a table carrying the joins -- is opened
-    up, so its tables bind like any other. For each join, *join_ends* records
-    how many leaves its ON condition can see: all of them up to its own.
+    Parentheses that wrap no query of their own are transparent -- ``(a)``,
+    ``((a JOIN b ON ...))``, ``((a JOIN b) JOIN c)`` -- however deeply they
+    nest, and joins hanging off any level are followed, so the tables in a
+    join group bind like any other. Parentheses with an alias, or around a
+    SELECT or UNION, are a derived table: one item, bound by its alias. For
+    each join, *join_ends* records how many leaves its ON condition can see:
+    all of them up to its own.
     """
     from sqlglot import expressions as exp
 
@@ -627,12 +640,11 @@ def _flatten_items(
         isinstance(item, exp.Subquery)
         and not item.alias
         and item.this is not None
-        and item.this.args.get("joins")
+        and not isinstance(item.this, (exp.Select, exp.SetOperation))
     ):
-        item = item.this
-    leaves.append(item)
-    if isinstance(item, exp.Select):
-        return  # a derived table's own joins are its business
+        _flatten_items(item.this, leaves, join_ends)
+    else:
+        leaves.append(item)
     for join in item.args.get("joins") or []:
         _flatten_items(join.this, leaves, join_ends)
         join_ends.append((join, len(leaves)))

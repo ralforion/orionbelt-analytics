@@ -105,6 +105,16 @@ BLOCKED = [
         "SELECT 1 FROM sales.items i JOIN sales.orders o "
         "ON i.id = (SELECT seq.nextval) JOIN sales.x seq ON TRUE",
     ),
+    (
+        "snowflake",
+        "SELECT 1 FROM ((sales.a a JOIN sales.b b ON seq.nextval = 1) "
+        "JOIN sales.orders seq ON TRUE)",
+    ),
+    # A PIVOT is a new row source: the table's own alias no longer binds.
+    (
+        "snowflake",
+        "SELECT o.nextval FROM sales.orders o PIVOT(SUM(a) FOR b IN (1, 2)) AS p",
+    ),
     # Inside a CTE or subquery is no different.
     ("postgres", "WITH x AS (SELECT pg_sleep(60)) SELECT * FROM x"),
     ("duckdb", "SELECT a FROM t WHERE a IN (SELECT a FROM read_csv('x.csv'))"),
@@ -252,6 +262,30 @@ def test_other_unparsed_commands_are_refused(dialect: str, sql: str) -> None:
         (
             "snowflake",
             "SELECT o.nextval FROM (sales.orders o JOIN sales.items i ON o.id = i.id)",
+        ),
+        # Parentheses nest any number of levels deep.
+        (
+            "snowflake",
+            "SELECT o.nextval FROM ((sales.orders o JOIN sales.items i "
+            "ON o.id = i.id))",
+        ),
+        (
+            "snowflake",
+            "SELECT o.nextval FROM (((sales.orders o JOIN sales.items i "
+            "ON o.id = i.id)))",
+        ),
+        (
+            "snowflake",
+            "SELECT c.nextval FROM ((sales.a a JOIN sales.b b ON a.x = b.x) "
+            "JOIN sales.c c ON c.y = a.y)",
+        ),
+        ("snowflake", "SELECT o.nextval FROM ((sales.orders o))"),
+        ("snowflake", "SELECT x.nextval FROM ((SELECT 1 AS nextval)) x"),
+        ("snowflake", "SELECT o.nextval FROM sales.t t, ((SELECT 1 AS nextval) o)"),
+        ("snowflake", "SELECT 1 FROM sales.orders o WHERE 1 IN (((SELECT o.nextval)))"),
+        (
+            "snowflake",
+            "SELECT p.nextval FROM sales.orders o PIVOT(SUM(a) FOR b IN (1, 2)) AS p",
         ),
         (
             "snowflake",
