@@ -19,6 +19,7 @@ from ..constants import (
 from ..database_manager import ColumnInfo, TableInfo
 from ..result_limits import fetch_bounded
 from ..serialization import serialize_rows
+from ..sql_build import names_except, plain, sample_rows, table_path
 from .base import DatabaseDriver
 from .reflection import column_fk_entries
 
@@ -118,13 +119,14 @@ class ClickHouseDriver(DatabaseDriver):
     # ------------------------------------------------------------------
 
     def get_schemas(self) -> list[str]:
-        excluded_schemas = "', '".join(CLICKHOUSE_SYSTEM_SCHEMAS)
-        query = text(f"""
-            SELECT name
-            FROM system.databases
-            WHERE name NOT IN ('{excluded_schemas}')
-            ORDER BY name
-        """)
+        query = text(
+            names_except(
+                "clickhouse",
+                "name",
+                table_path(plain("system"), plain("databases")),
+                CLICKHOUSE_SYSTEM_SCHEMAS,
+            )
+        )
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
@@ -458,17 +460,9 @@ class ClickHouseDriver(DatabaseDriver):
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
-                if schema_name:
-                    full_table_name = f'"{schema_name}"."{table_name}"'
-                else:
-                    full_table_name = f'"{table_name}"'
-
-                query_str = f"SELECT * FROM {full_table_name} LIMIT :limit"
-                params = {"limit": limit}
-                logger.info(
-                    f"\U0001f50d CLICKHOUSE SQL QUERY: {query_str} | PARAMS: {params}"
-                )
-                result = conn.execute(text(query_str), params)
+                query_str = sample_rows("clickhouse", limit, schema_name, table_name)
+                logger.info(f"\U0001f50d CLICKHOUSE SQL QUERY: {query_str} ")
+                result = conn.execute(text(query_str))
                 columns = list(result.keys())
                 return serialize_rows(result.fetchall(), columns)
 

@@ -333,10 +333,9 @@ class TestDatabaseManager(unittest.TestCase):
         result = self.db_manager.sample_table_data("test_table", limit=2000)
         # Should be capped at MAX_SAMPLE_LIMIT (1000)
         mock_conn2.execute.assert_called()
-        # Check the SQL query contains LIMIT 1000
+        # The limit is written into the generated SQL
         call_args = mock_conn2.execute.call_args
-        # The second argument should be the params dict
-        self.assertEqual(call_args[0][1]["limit"], 1000)
+        self.assertTrue(str(call_args[0][0]).endswith("LIMIT 1000"))
 
     def test_disconnect(self):
         """Test database disconnection."""
@@ -372,15 +371,6 @@ class TestDatabaseManager(unittest.TestCase):
         sql = "-- leading comment\nSELECT 1;\nSELECT 1;"
         result = self.db_manager._strip_leading_sql_comments(sql)
         self.assertEqual(result, "SELECT 1;\nSELECT 1;")
-
-    def test_escape_sql_literal(self):
-        """Test SQL literal escaping for Dremio helpers."""
-        self.assertEqual(self.db_manager._escape_sql_literal("a'b"), "a''b")
-
-    def test_quote_dremio_identifier(self):
-        """Test Dremio identifier quoting and escaping."""
-        quoted = self.db_manager._quote_dremio_identifier('My.Schema."Table"')
-        self.assertEqual(quoted, '"My"."Schema"."""Table"""')
 
     @patch("src.dremio_client.create_dremio_client")
     def test_dremio_health_check_pat(self, mock_create_client):

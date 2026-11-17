@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Driver SQL is built with sqlglot, not string templates**: every driver's
+  own metadata and sample queries (schema lists, BigQuery and Dremio
+  `INFORMATION_SCHEMA` lookups, Snowflake and Databricks `SHOW` statements,
+  `sample_table_data`) are built in `src/sql_build.py`, with names as quoted
+  identifiers and values as escaped literals in each dialect's own syntax. A
+  schema or table name containing a quote now stays a name. The user's own
+  query, which drivers wrap for their syntax check, is still text, guarded by
+  the read-only check.
+
 ### Security
 - **Tighter read-only SQL check**: `execute_sql_query` now also refuses
   SELECTs that call functions which change state, wait, or reach files, other

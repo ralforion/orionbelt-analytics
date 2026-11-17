@@ -473,7 +473,9 @@ def test_bigquery_refuses_a_schema_name_that_is_not_a_dataset_name(
 def test_bigquery_queries_a_valid_dataset(method: str) -> None:
     driver, conn = _bigquery_driver()
     getattr(driver, method)("Sales_2026")
-    assert "`proj.Sales_2026`.INFORMATION_SCHEMA" in str(conn.execute.call_args.args[0])
+    assert "`proj`.`Sales_2026`.INFORMATION_SCHEMA" in str(
+        conn.execute.call_args.args[0]
+    )
 
 
 def test_databricks_show_tables_fallback_quotes_the_schema() -> None:

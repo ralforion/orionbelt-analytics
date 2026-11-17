@@ -29,6 +29,7 @@ from ..security import (
     identifier_validator,
 )
 from ..serialization import serialize_rows
+from ..sql_build import names_except, plain, sample_rows, table_path
 from .base import DatabaseDriver
 from .reflection import column_fk_entries, reflect_tables
 
@@ -136,13 +137,14 @@ class MySQLDriver(DatabaseDriver):
     # ------------------------------------------------------------------
 
     def get_schemas(self) -> list[str]:
-        excluded_schemas = "', '".join(MYSQL_SYSTEM_SCHEMAS)
-        query = text(f"""
-            SELECT SCHEMA_NAME
-            FROM information_schema.SCHEMATA
-            WHERE SCHEMA_NAME NOT IN ('{excluded_schemas}')
-            ORDER BY SCHEMA_NAME
-        """)
+        query = text(
+            names_except(
+                "mysql",
+                "SCHEMA_NAME",
+                table_path(plain("information_schema"), plain("SCHEMATA")),
+                MYSQL_SYSTEM_SCHEMAS,
+            )
+        )
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
@@ -461,18 +463,9 @@ class MySQLDriver(DatabaseDriver):
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
-                if schema_name:
-                    # MySQL uses backticks for identifier quoting
-                    full_table_name = f"`{schema_name}`.`{table_name}`"
-                else:
-                    full_table_name = f"`{table_name}`"
-
-                query_str = f"SELECT * FROM {full_table_name} LIMIT :limit"
-                params = {"limit": limit}
-                logger.info(
-                    f"🐬 {self.db_type.upper()} SQL QUERY: {query_str} | PARAMS: {params}"
-                )
-                result = conn.execute(text(query_str), params)
+                query_str = sample_rows("mysql", limit, schema_name, table_name)
+                logger.info(f"🐬 {self.db_type.upper()} SQL QUERY: {query_str} ")
+                result = conn.execute(text(query_str))
                 columns = list(result.keys())
                 return serialize_rows(result.fetchall(), columns)
 

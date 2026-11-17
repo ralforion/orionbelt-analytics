@@ -19,6 +19,7 @@ from ..constants import (
 from ..database_manager import ColumnInfo, TableInfo
 from ..result_limits import fetch_bounded
 from ..serialization import serialize_rows
+from ..sql_build import names_except, plain, qualified_name, sample_rows, table_path
 from .base import DatabaseDriver
 from .reflection import column_fk_entries
 
@@ -128,13 +129,14 @@ class SnowflakeDriver(DatabaseDriver):
     # ------------------------------------------------------------------
 
     def get_schemas(self) -> list[str]:
-        excluded_schemas = "', '".join(SNOWFLAKE_SYSTEM_SCHEMAS)
-        query = text(f"""
-            SELECT schema_name
-            FROM information_schema.schemata
-            WHERE schema_name NOT IN ('{excluded_schemas}')
-            ORDER BY schema_name
-        """)
+        query = text(
+            names_except(
+                "snowflake",
+                "schema_name",
+                table_path(plain("information_schema"), plain("schemata")),
+                SNOWFLAKE_SYSTEM_SCHEMAS,
+            )
+        )
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
@@ -203,10 +205,7 @@ class SnowflakeDriver(DatabaseDriver):
             return
 
         database_name = connection_info.get("database", "")
-        if database_name:
-            full_schema_path = f'"{database_name}"."{schema_name}"'
-        else:
-            full_schema_path = f'"{schema_name}"'
+        full_schema_path = qualified_name("snowflake", database_name, schema_name)
 
         logger.info(f"Prefetching PKs and FKs for schema {full_schema_path}")
 
@@ -713,17 +712,9 @@ class SnowflakeDriver(DatabaseDriver):
         try:
             assert self.engine is not None
             with self.engine.connect() as conn:
-                if schema_name:
-                    full_table_name = f'"{schema_name}"."{table_name}"'
-                else:
-                    full_table_name = f'"{table_name}"'
-
-                query_str = f"SELECT * FROM {full_table_name} LIMIT :limit"
-                params = {"limit": limit}
-                logger.info(
-                    f"\U0001f50d SNOWFLAKE SQL QUERY: {query_str} | PARAMS: {params}"
-                )
-                result = conn.execute(text(query_str), params)
+                query_str = sample_rows("snowflake", limit, schema_name, table_name)
+                logger.info(f"\U0001f50d SNOWFLAKE SQL QUERY: {query_str} ")
+                result = conn.execute(text(query_str))
                 columns = list(result.keys())
                 return serialize_rows(result.fetchall(), columns)
 
