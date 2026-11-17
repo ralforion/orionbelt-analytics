@@ -170,6 +170,19 @@ Columns qualified by a table alias are resolved to their table first, so aliased
 
 Comparisons within the same category are allowed (e.g. integer vs. decimal). Comparisons across categories produce a warning.
 
+### Date formats (WARNING)
+
+A date kept as text or as a number has a form of its own, and a query has to compare against that form. `discover_schema` samples text and integer columns with date-like names and records the format every sampled value is written in as `oba:dateFormat` (a `strftime` pattern such as `%Y%m%d`). It records one only when all values read in it and no other format reads them as different dates, so `01/02/2015` -- day-first or month-first? -- gets none. OBQC then reports a date literal written another way, in `=`, `<`, `>=`, `BETWEEN` and `IN`:
+
+```sql
+-- order_day is VARCHAR holding '20150601'
+-- WARNING: orders.order_day stores dates written like '20150601' (%Y%m%d), so '2015-06-01'
+--          never matches it as a date ... -- Write the value as '20150601'
+SELECT COUNT(*) FROM orders WHERE order_day >= '2015-06-01';
+```
+
+The comparison runs either way: as text, `'2015-06-01'` sorts before every `'2015…'` value, so `>=` returns rows from the wrong range and `=` returns none. It is a warning rather than an error because the format was inferred from a sample. A literal already in the column's form, a native `DATE` column, and a literal that is no date at all are not reported. Set `OBA_INFER_DATE_FORMATS=false` to skip the sampling.
+
 ### Aggregation correctness (ERROR)
 
 When aggregate functions (`SUM`, `COUNT`, `AVG`, `MIN`, `MAX`) are used, OBQC checks that all non-aggregated columns in `SELECT` appear in `GROUP BY`. Grouping by an alias satisfies the check on the column it stands for.

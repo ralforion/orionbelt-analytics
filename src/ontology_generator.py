@@ -889,6 +889,12 @@ class OntologyGenerator:
         self.graph.add((prop_uri, self.oba_ns.tableName, Literal(table_name)))
         self.graph.add((prop_uri, self.oba_ns.sqlDataType, Literal(column.data_type)))
         self.graph.add((prop_uri, self.oba_ns.isNullable, Literal(column.is_nullable)))
+        # How dates stored as text or numbers are written, when sampling
+        # found one format: queries must compare against that form.
+        if getattr(column, "date_format", None):
+            self.graph.add(
+                (prop_uri, self.oba_ns.dateFormat, Literal(column.date_format))
+            )
 
         # Measure semantics: what SUM() may meaningfully touch. Per column,
         # because a denormalized table holds additive measures next to

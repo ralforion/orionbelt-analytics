@@ -145,6 +145,13 @@ oba:ColumnShape a sh:NodeShape ;
         sh:name "SQL data type" ;
         sh:message "Every column property must have exactly one oba:sqlDataType (xsd:string)."
     ] ;
+    sh:property [
+        sh:path oba:dateFormat ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "date format" ;
+        sh:message "oba:dateFormat, when present, is one strftime format string (xsd:string)."
+    ] ;
     # Measure semantics.  oba:measureBasis says how the classification was
     # reached, because a structural fact (a key, a text column) can justify
     # blocking a query while a name-pattern guess can only warn.

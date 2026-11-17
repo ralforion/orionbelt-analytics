@@ -197,6 +197,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 - Automatically generates R2RML mappings in full mode
 - Auto-initializes GraphRAG in the background (configurable via `AUTO_GRAPHRAG` env var)
 - Detects fan-trap risks: tables connecting to multiple other tables via foreign keys
+- Samples text and integer columns with date-like names (one small query per table that has one) and records how they write dates, as `date_format` -- see [Date formats](obqc.md#date-formats-warning). Set `OBA_INFER_DATE_FORMATS=false` to skip it
 
 ---
 
@@ -212,7 +213,7 @@ Get detailed metadata for a single table, including all columns, data types, key
 | `schema_name` | string | No | Schema containing the table |
 
 **Returns:** Dictionary containing:
-- `columns` -- array of column details (name, data type, nullability, key status, comments)
+- `columns` -- array of column details (name, data type, nullability, key status, comments, and `date_format` where a text or integer column stores dates, e.g. `%Y%m%d` for `'20150601'`)
 - `primary_keys` -- list of primary key columns
 - `foreign_keys` -- list of foreign key relationships
 - `row_count` -- approximate row count

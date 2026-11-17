@@ -148,6 +148,11 @@ def _table_info_to_dict(table_info: Any) -> dict[str, Any]:
                 "foreign_key_table": getattr(col, "foreign_key_table", None),
                 "foreign_key_column": getattr(col, "foreign_key_column", None),
                 "comment": col.comment,
+                **(
+                    {"date_format": col.date_format}
+                    if getattr(col, "date_format", None)
+                    else {}
+                ),
             }
             for col in table_info.columns
         ],

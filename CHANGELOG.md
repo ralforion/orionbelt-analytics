@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Date formats of text and integer columns**: `discover_schema` samples
+  date-like text and integer columns and records how they write dates (e.g.
+  `%Y%m%d` for `'20150601'`) as `date_format` in table details and
+  `oba:dateFormat` in the ontology, and GraphRAG shows it with the column.
+  A format is recorded only when every sampled value reads in it
+  unambiguously. OBQC warns when a query compares such a column with a date
+  written another way -- `order_day >= '2015-06-01'` runs, compares text and
+  silently returns the wrong rows -- and suggests the value in the column's
+  form. `OBA_INFER_DATE_FORMATS=false` skips the sampling.
 - **`AUTO_VALIDATE_RELATIONSHIPS`** (opt-in): `generate_ontology` checks
   every relationship inferred from column names against the data, as
   `validate_relationship` does for one, records the verdicts and reports them.

@@ -34,6 +34,9 @@ from .security import (
 
 logger = logging.getLogger(__name__)
 
+#: Rows read per table to infer how its date-like columns write dates.
+DATE_FORMAT_SAMPLE_ROWS = 200
+
 
 # ---------------------------------------------------------------------------
 # Data classes (imported by many modules - must stay here)
@@ -52,6 +55,10 @@ class ColumnInfo:
     foreign_key_table: str | None = None
     foreign_key_column: str | None = None
     comment: str | None = None
+    # How a text or integer column writes the dates it holds, as a strftime
+    # format ("%Y%m%d"), when sampling showed one; None when it holds no
+    # dates, or they could not be read unambiguously. See date_formats.py.
+    date_format: str | None = None
 
 
 @dataclass
@@ -1345,6 +1352,75 @@ class DatabaseManager:
     # ------------------------------------------------------------------
     # Sample & query (delegated to driver with validation layer)
     # ------------------------------------------------------------------
+
+    def infer_date_formats(
+        self, tables: list["TableInfo"], schema_name: str | None = None
+    ) -> int:
+        """Sample date-like columns and record the format their dates are in.
+
+        Only text and integer columns with a date-like name are sampled, one
+        query per table that has any, reading at most
+        :data:`DATE_FORMAT_SAMPLE_ROWS` rows of just those columns. A format is
+        recorded on the column only when every distinct sampled value reads
+        in it, and reads the same way in every other format that also fits
+        (see :func:`src.date_formats.infer_date_format`). A table that cannot
+        be sampled is skipped; discovery goes on.
+
+        Args:
+            tables: Analyzed tables; their columns are updated in place.
+            schema_name: The tables' schema.
+
+        Returns:
+            How many columns got a format.
+        """
+        from .date_formats import infer_date_format, is_candidate
+        from .sql_build import select_columns
+
+        db_type = (self.connection_info or {}).get("type", "")
+        dialect = DB_SQLGLOT_DIALECTS.get(db_type, "postgres")
+        found = 0
+        for table in tables:
+            candidates = [
+                column
+                for column in table.columns
+                if is_candidate(column.name, column.data_type)
+            ]
+            if not candidates:
+                continue
+            sql = select_columns(
+                dialect,
+                DATE_FORMAT_SAMPLE_ROWS,
+                [column.name for column in candidates],
+                (
+                    table.schema
+                    if table.schema and table.schema != "default"
+                    else schema_name
+                ),
+                table.name,
+            )
+            try:
+                result = self.execute_sql_query(sql, DATE_FORMAT_SAMPLE_ROWS)
+            except Exception as e:
+                logger.debug(f"Date-format sample of {table.name} failed: {e}")
+                continue
+            if not result.get("success"):
+                logger.debug(
+                    f"Date-format sample of {table.name} failed: {result.get('error')}"
+                )
+                continue
+            rows = result.get("data") or []
+            for position, column in enumerate(candidates):
+                values = [
+                    (list(row.values()) if isinstance(row, dict) else list(row))[
+                        position
+                    ]
+                    for row in rows
+                ]
+                fmt = infer_date_format(values)
+                if fmt:
+                    column.date_format = fmt
+                    found += 1
+        return found
 
     def sample_table_data(
         self,

@@ -882,6 +882,11 @@ class GraphRAGManager:
                     "column": col_result["element"]["name"],
                     "data_type": col_result["element"]["metadata"]["data_type"],
                     "relevance_score": col_result["similarity_score"],
+                    **(
+                        {"date_format": fmt}
+                        if (fmt := col_result["element"]["metadata"].get("date_format"))
+                        else {}
+                    ),
                 }
             )
         context["relevant_columns"] = _merge_column_hits(

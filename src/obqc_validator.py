@@ -44,6 +44,7 @@ class OBQCIssueType(Enum):
     AMBIGUOUS_COLUMN = "ambiguous_column"
     VIEW_NOT_JOINABLE = "view_not_joinable"
     INVALID_AGGREGATION = "invalid_aggregation"
+    DATE_FORMAT_MISMATCH = "date_format_mismatch"
 
 
 class OBQCSeverity(Enum):
@@ -362,6 +363,9 @@ class ColumnSchema:
     measure_type: str | None = None
     measure_basis: str | None = None
     measure_reason: str | None = None
+    # How a text or integer column writes its dates (strftime), from
+    # oba:dateFormat; None when the ontology does not say.
+    date_format: str | None = None
 
 
 @dataclass
@@ -792,6 +796,7 @@ class OBQCValidator:
                         measure_reason=self._get_literal(
                             subject, self._oba_ns.measureReason
                         ),
+                        date_format=self._get_literal(subject, self._oba_ns.dateFormat),
                     )
 
                     # Get XSD type from rdfs:range
@@ -1056,6 +1061,7 @@ class OBQCValidator:
         self._validate_columns(result)
         self._validate_joins(parsed, result, cte_refs)
         self._validate_type_compatibility(parsed, result)
+        self._validate_date_formats(parsed, result, cte_refs)
         self._validate_aggregation_context(parsed, result)
         self._validate_measure_aggregation(parsed, result, cte_refs)
         self._detect_fan_trap(result, blocking=not allow_fan_out)
@@ -2711,6 +2717,73 @@ class OBQCValidator:
                         message=f"Type mismatch: {self._type_name(left_type)} vs {self._type_name(right_type)}",
                         location="WHERE/ON clause",
                         suggestion="Ensure compared values have compatible types",
+                    )
+                )
+
+    def _validate_date_formats(
+        self, parsed: exp.Expr, result: OBQCResult, cte_refs: set[int]
+    ) -> None:
+        """Rule: a date compared with a column that writes dates another way.
+
+        A text column holding ``20150601`` compared with ``'2015-06-01'``
+        compares text: ``=`` never matches and ``>=`` silently picks the wrong
+        rows. The query runs and looks right, so this is reported -- as a
+        warning, since the column's format was inferred from a sample -- with
+        the literal rewritten in the column's form when it reads as one date.
+        """
+        from .date_formats import example, matches, rewrite
+
+        def pairs(node: exp.Expr) -> list[tuple[exp.Expr, exp.Expr]]:
+            if isinstance(node, exp.Between):
+                low, high = node.args.get("low"), node.args.get("high")
+                return [(node.this, bound) for bound in (low, high) if bound]
+            if isinstance(node, exp.In):
+                return [(node.this, item) for item in node.expressions]
+            left, right = node.args.get("this"), node.args.get("expression")
+            return [(left, right), (right, left)] if left and right else []
+
+        seen: set[str] = set()
+        for node in parsed.find_all(*COMPARISON_TYPES, exp.Between, exp.In):
+            for column, literal in pairs(node):
+                if not isinstance(column, exp.Column) or not isinstance(
+                    literal, exp.Literal
+                ):
+                    continue
+                select = column.find_ancestor(exp.Select)
+                if select is None:
+                    continue
+                schema = self._resolve_column_schema(column, select, cte_refs)
+                fmt = schema.date_format if schema else None
+                if not schema or not fmt or matches(fmt, literal.this):
+                    continue
+                rewritten = rewrite(fmt, literal.this)
+                if rewritten is None and not TEMPORAL_LITERAL.match(literal.this):
+                    continue  # not a date at all: not this rule's business
+                numeric = bool(
+                    re.search(r"int|number|numeric|decimal", schema.sql_data_type, re.I)
+                )
+                written = rewritten if numeric else f"'{rewritten}'"
+                message = (
+                    f"{schema.table_name}.{schema.name} stores dates written like "
+                    f"'{example(fmt)}' ({fmt}), so {literal.sql()} never matches "
+                    "it as a date: the comparison runs but compares "
+                    + ("numbers" if numeric else "text")
+                    + " and can silently return the wrong rows."
+                )
+                if message in seen:
+                    continue
+                seen.add(message)
+                result.issues.append(
+                    OBQCIssue(
+                        issue_type=OBQCIssueType.DATE_FORMAT_MISMATCH,
+                        severity=OBQCSeverity.WARNING,
+                        message=message,
+                        location="WHERE/ON clause",
+                        suggestion=(
+                            f"Write the value as {written}"
+                            if rewritten
+                            else f"Write dates in that form, like '{example(fmt)}'"
+                        ),
                     )
                 )
 
