@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- **DuckDB reads files only where allowed**: a local DuckDB connection now
+  has DuckDB's own external access switched off, so files and network
+  locations outside `DUCKDB_ALLOWED_DIRECTORIES` are refused by the database,
+  whatever the query looks like. Views that read CSV or Parquet files need
+  their directories listed there; MotherDuck connections are not affected.
 - **Tighter read-only SQL check**: `execute_sql_query` now also refuses
   SELECTs that call functions which change state, wait, or reach files, other
   databases or the network; row locks (`FOR UPDATE`/`FOR SHARE`);

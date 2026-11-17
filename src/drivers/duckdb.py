@@ -1,12 +1,14 @@
 """DuckDB/MotherDuck database driver."""
 
 import logging
+import os
 from typing import Any
 
-from sqlalchemy import MetaData, create_engine, inspect, text
+from sqlalchemy import MetaData, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import NullPool, Pool, StaticPool
+from sqlglot import expressions as exp
 
 from ..constants import (
     DEFAULT_SAMPLE_LIMIT,
@@ -29,6 +31,54 @@ from .base import DatabaseDriver
 from .reflection import column_fk_entries, reflect_tables
 
 logger = logging.getLogger(__name__)
+
+
+def _restrict_file_access(engine: Engine, allowed_directories: list[str]) -> None:
+    """Let DuckDB read files only inside *allowed_directories*.
+
+    With ``enable_external_access`` off, DuckDB itself refuses every file and
+    network access outside the allowed directories -- a table function, a
+    file named in FROM, COPY, ATTACH, an extension install -- however the
+    query is written, so it holds where a check on the query's text could
+    miss something. The database's own file and spill directory stay usable.
+    DuckDB will not switch it back on, so it is set on every new connection
+    that does not have it yet.
+
+    Args:
+        engine: The DuckDB engine to restrict.
+        allowed_directories: Directories DuckDB may still read, e.g. the
+            files a view reads; none by default.
+    """
+    directories = [
+        os.path.join(os.path.abspath(os.path.expanduser(directory)), "")
+        for directory in allowed_directories
+    ]
+
+    def setting(name: str, value: exp.Expression) -> str:
+        item = exp.SetItem(this=exp.EQ(this=exp.column(name), expression=value))
+        return exp.Set(expressions=[item]).sql(dialect="duckdb")
+
+    statements = []
+    if directories:
+        statements.append(
+            setting(
+                "allowed_directories",
+                exp.Array(expressions=[exp.Literal.string(d) for d in directories]),
+            )
+        )
+    statements.append(setting("enable_external_access", exp.false()))
+
+    @event.listens_for(engine, "connect")
+    def _restrict(dbapi_connection: Any, _record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("SELECT current_setting('enable_external_access')")
+            row = cursor.fetchone()
+            if row is not None and row[0]:
+                for statement in statements:
+                    cursor.execute(statement)
+        finally:
+            cursor.close()
 
 
 def _resolves_in_catalog(
@@ -122,10 +172,15 @@ class DuckDBDriver(DatabaseDriver):
         - database_path: Path to DuckDB file, ":memory:", or "md:database_name"
         - motherduck_token: API token for MotherDuck (optional, for MotherDuck connections)
         - read_only: Whether to open in read-only mode (default: False)
+        - allowed_directories: Directories a local database may read files
+          from, e.g. for views over CSV or Parquet files (default: none).
+          Every other file and network access is refused by DuckDB itself;
+          MotherDuck connections, which need the network, are left as they are.
         """
         database_path = params.get("database_path", ":memory:")
         motherduck_token = params.get("motherduck_token")
         read_only = params.get("read_only", False)
+        allowed_directories = list(params.get("allowed_directories") or [])
 
         try:
             self._database_path = database_path
@@ -178,6 +233,8 @@ class DuckDBDriver(DatabaseDriver):
                 echo=False,
             )
             self.metadata = MetaData()
+            if not self._is_motherduck:
+                _restrict_file_access(self.engine, allowed_directories)
 
             # Initialize encryption
             try:

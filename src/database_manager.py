@@ -967,8 +967,13 @@ class DatabaseManager:
         database_path: str = ":memory:",
         motherduck_token: str | None = None,
         read_only: bool = False,
+        allowed_directories: list[str] | None = None,
     ) -> bool:
-        """Connect to DuckDB or MotherDuck."""
+        """Connect to DuckDB or MotherDuck.
+
+        A local database may read files only inside *allowed_directories*;
+        DuckDB refuses every other file and network access.
+        """
         from .drivers.duckdb import DuckDBDriver
 
         driver = DuckDBDriver(
@@ -979,6 +984,7 @@ class DatabaseManager:
             database_path=database_path,
             motherduck_token=motherduck_token,
             read_only=read_only,
+            allowed_directories=allowed_directories or [],
         )
         if success:
             self._activate_driver(driver)

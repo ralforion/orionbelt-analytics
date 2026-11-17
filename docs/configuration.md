@@ -261,6 +261,7 @@ DUCKDB_DATABASE_PATH=:memory:  # or /path/to/file.db
 # For MotherDuck cloud:
 # DUCKDB_DATABASE_PATH=md:your_database
 # MOTHERDUCK_TOKEN=your_motherduck_token
+# DUCKDB_ALLOWED_DIRECTORIES=/data/lake,/data/exports  # files views may read
 
 # -----------------------------------------------------------------
 # Databricks SQL Configuration
@@ -604,6 +605,7 @@ The server validates `MCP_TRANSPORT` on startup. `sse` stops it with an error, s
 - **Token**: Obtain your MotherDuck access token from the MotherDuck web UI under Settings > Access Tokens.
 - **File locking**: DuckDB uses file-level locking. Only one process can write to a database file at a time. If you see lock errors, close other connections first.
 - **Read-only mode**: Pass `read_only=true` when connecting if you only need to query data and want to avoid lock contention.
+- **File access**: A local DuckDB connection reads only its own database. DuckDB itself refuses every other file and network access (`read_csv`, a file named in `FROM`, `COPY`, `ATTACH`, installing extensions), whatever the query says. If your views read CSV or Parquet files, list their directories in `DUCKDB_ALLOWED_DIRECTORIES`, comma-separated (e.g. `/data/lake,/data/exports`); a directory allows everything below it. Don't list the directory holding the server's `.env`. Views over remote files (S3, HTTP) and extensions loaded on demand don't work this way. MotherDuck connections need the network and are not restricted.
 
 ### Databricks SQL
 
