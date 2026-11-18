@@ -9,6 +9,8 @@ from typing import Any
 from fastmcp import Context
 
 from ..async_utils import run_db
+from ..graphrag.identity import qualified
+from ..graphrag.near_copies import NEAR_COPIES_NOTE, CopyIndex, listed
 from ..handler_context import HandlerContext
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import (
@@ -179,6 +181,106 @@ async def _infer_date_formats(
         return
     if found:
         logger.info(f"Inferred the date format of {found} column(s)")
+
+
+#: Near-copy pairs a discover_schema response lists at most.
+MAX_NEAR_COPY_PAIRS = 25
+
+
+def _catalog(session: Any, tables: list[Any]) -> dict[str, Any]:
+    """Every table discovered on the connection, by identity, with *tables*.
+
+    *tables* win over a cached table of the same identity: they are what the
+    call at hand just read.
+    """
+    catalog = {qualified(t.schema, t.name): t for t in session.get_all_cached_tables()}
+    catalog.update({qualified(t.schema, t.name): t for t in tables})
+    return catalog
+
+
+def _copy_index(catalog: dict[str, Any]) -> CopyIndex:
+    return CopyIndex({k: [c.name for c in t.columns] for k, t in catalog.items()})
+
+
+def _near_copy_pairs(catalog: dict[str, Any], tables: list[Any]) -> dict[str, Any]:
+    """The near-copy pairs with a table in *tables*, for discover_schema.
+
+    Compared with every table discovered on the connection, so a copy in
+    another schema (staging beside production) is found too. Empty when
+    there are none.
+    """
+    pairs = _copy_index(catalog).pairs(
+        (qualified(t.schema, t.name) for t in tables), limit=MAX_NEAR_COPY_PAIRS
+    )
+    if not pairs.total:
+        return {}
+    entries = []
+    for identity, copy in pairs.closest:
+        entry: dict[str, Any] = {
+            "tables": [identity, copy.table],
+            "shared_columns": copy.shared,
+            "own_columns": {
+                identity: listed(copy.only_here),
+                copy.table: listed(copy.only_there),
+            },
+        }
+        counts = {
+            name: catalog[name].row_count
+            for name in (identity, copy.table)
+            if catalog[name].row_count is not None
+        }
+        if counts:
+            entry["row_counts"] = counts
+        entries.append(entry)
+    section: dict[str, Any] = {
+        "near_copies": entries,
+        "near_copies_note": NEAR_COPIES_NOTE,
+    }
+    if pairs.total > len(pairs.closest):
+        section["near_copies_omitted"] = pairs.total - len(pairs.closest)
+    return section
+
+
+async def _near_copies(session: Any, tables: list[Any]) -> dict[str, Any]:
+    """:func:`_near_copy_pairs` in a worker; never fails discovery."""
+    try:
+        return await asyncio.to_thread(
+            _near_copy_pairs, _catalog(session, tables), tables
+        )
+    except Exception as e:
+        logger.warning(f"Near-copy detection skipped: {e}")
+        return {}
+
+
+def _near_copies_of(catalog: dict[str, Any], table: Any) -> list[dict[str, Any]]:
+    """*table*'s near-copies among the tables of *catalog*."""
+    found = []
+    for copy in _copy_index(catalog).of(qualified(table.schema, table.name)):
+        entry: dict[str, Any] = {
+            "table": copy.table,
+            "shared_columns": copy.shared,
+            "only_here": listed(copy.only_here),
+            "only_there": listed(copy.only_there),
+        }
+        if catalog[copy.table].row_count is not None:
+            entry["row_count"] = catalog[copy.table].row_count
+        found.append(entry)
+    return found
+
+
+async def _with_near_copies(entry: dict[str, Any], session: Any, table: Any) -> None:
+    """Add *table*'s near-copies, and what they are, to a table's details."""
+    try:
+        # The catalog is read here, the matching done in a worker: the cache is
+        # shared with other sessions' discoveries.
+        catalog = _catalog(session, [table])
+        near = await asyncio.to_thread(_near_copies_of, catalog, table)
+    except Exception as e:
+        logger.warning(f"Near-copy lookup for {table.name} skipped: {e}")
+        return
+    if near:
+        entry["near_copies"] = near
+        entry["near_copies_note"] = NEAR_COPIES_NOTE
 
 
 async def discover_schema(
@@ -423,6 +525,7 @@ async def discover_schema(
 
         if fan_trap_warnings:
             lightweight_result["fan_trap_warnings"] = fan_trap_warnings
+        lightweight_result.update(await _near_copies(session, table_info_objects))
 
         # Auto-initialize GraphRAG in background
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
@@ -575,6 +678,7 @@ async def discover_schema(
             schema_result["schema_file"] = schema_filename
         if fan_trap_warnings:
             schema_result["fan_trap_warnings"] = fan_trap_warnings
+        schema_result.update(await _near_copies(session, table_info_objects))
 
         # Generate R2RML mapping
         if table_info_objects:
@@ -765,7 +869,7 @@ async def get_table_details(
                     ctx,
                     f"Table '{table_name}' found in cache — no database call needed",
                 )
-                return {
+                details: dict[str, Any] = {
                     "success": True,
                     "name": t.name,
                     "schema": t.schema,
@@ -776,6 +880,8 @@ async def get_table_details(
                     "row_count": t.row_count,
                     "cache_hit": True,
                 }
+                await _with_near_copies(details, session, t)
+                return details
 
     db_manager = services.get_session_db_manager(ctx)
 
@@ -807,6 +913,7 @@ async def get_table_details(
             "comment": table_info.comment,
             "row_count": table_info.row_count,
         }
+        await _with_near_copies(table_dict, session, table_info)
 
         await notify_client(
             ctx,

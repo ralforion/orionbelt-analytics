@@ -84,6 +84,16 @@ class SchemaCache:
             logger.debug(f"Using cached schema for '{cache_key}': {len(cached)} tables")
         return cached
 
+    def get_all_cached_tables(self) -> list[Any]:
+        """Every discovered table across all schemas on this connection.
+
+        A table's near-copy may sit in another schema -- staging beside
+        production -- so finding near-copies needs the union.
+        """
+        if self._cached_schema is None:
+            return []
+        return [table for tables in self._cached_schema.values() for table in tables]
+
     def cache_views(self, schema_name: str, views_info: list[Any]) -> None:
         """Cache discovered views for reuse by GraphRAG indexing."""
         if self._cached_views is None:
@@ -688,6 +698,10 @@ class SessionData:
     def get_all_cached_views(self) -> list[Any]:
         """Every discovered view across all schemas on this connection."""
         return self.schema_cache.get_all_cached_views()
+
+    def get_all_cached_tables(self) -> list[Any]:
+        """Every discovered table across all schemas on this connection."""
+        return self.schema_cache.get_all_cached_tables()
 
     def clear_schema_cache(self, schema_name: str | None = None) -> None:
         """Clear cached schema analysis.

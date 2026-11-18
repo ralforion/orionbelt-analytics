@@ -797,6 +797,18 @@ class GraphRetriever:
 
         return warnings
 
+    def tables_snapshot(self) -> dict[str, dict[str, Any]]:
+        """The indexed tables as they are now, safe to read from a worker.
+
+        Only the mapping is copied: a table's metadata is replaced, never
+        edited, when the table is indexed again, so the copy keeps describing
+        the tables as they were when it was taken.
+
+        Returns:
+            Identity to table metadata.
+        """
+        return dict(self._tables_info)
+
     def get_table_metadata(self, table_name: str) -> dict[str, Any] | None:
         """
         Get full metadata for a table.

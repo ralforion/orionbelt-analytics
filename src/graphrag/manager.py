@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from .community_detector import CommunityDetector
 from .embedder import MODEL_TFIDF, SchemaEmbedder
 from .identity import display_name, qualified
+from .near_copies import NEAR_COPIES_NOTE, CopyIndex, column_names, listed
 from .retriever import GraphRetriever
 
 if TYPE_CHECKING:
@@ -164,11 +165,67 @@ class GraphRAGManager:
 
         self.graph_retriever = GraphRetriever()
         self.community_detector: CommunityDetector | None = None
+        # The near-copy index of the indexed tables, with the retriever and
+        # the generation it was built from.
+        self._copies: tuple[GraphRetriever, int, CopyIndex] | None = None
 
         self._initialized = False
         self._schema_name: str | None = schema_name
         self._schema_names: list[str] = []
         self._connection_id: str = connection_id or "default"
+
+    def _copy_source(
+        self,
+    ) -> CopyIndex | tuple[GraphRetriever, int, dict[str, dict[str, Any]]]:
+        """What near-copies are found from, read where the graph is read whole.
+
+        The cached index while it is current; otherwise a snapshot of the
+        indexed tables to build it from, which costs one entry per table.
+        """
+        retriever = self.graph_retriever
+        generation = retriever.generation
+        cached = self._copies
+        if cached is not None and cached[0] is retriever and cached[1] == generation:
+            return cached[2]
+        return retriever, generation, retriever.tables_snapshot()
+
+    def _add_near_copies(
+        self,
+        context: dict[str, Any],
+        shown: list[tuple[dict[str, Any], str]],
+        source: CopyIndex | tuple[GraphRetriever, int, dict[str, dict[str, Any]]],
+    ) -> None:
+        """Name the near-copies of each table *context* shows.
+
+        Reads only *source* and the entries, never the live graph, so it can
+        run in a worker: building the index and matching are the expensive
+        part at thousands of tables.
+
+        Args:
+            context: The query context being built.
+            shown: Each relevant table's entry and its identity.
+            source: What :meth:`_copy_source` returned.
+        """
+        if isinstance(source, CopyIndex):
+            index = source
+        else:
+            retriever, generation, snapshot = source
+            index = CopyIndex({k: column_names(t) for k, t in snapshot.items()})
+            self._copies = (retriever, generation, index)
+        for entry, identity in shown:
+            # A table found by search may be one of several copies; the model
+            # has to pick the one the question means.
+            if near := index.of(identity):
+                entry["near_copies"] = [
+                    {
+                        "table": copy.table,
+                        "shared_columns": copy.shared,
+                        "only_here": listed(copy.only_here),
+                        "only_there": listed(copy.only_there),
+                    }
+                    for copy in near
+                ]
+                context["near_copies_note"] = NEAR_COPIES_NOTE
 
     def initialize_from_schema(
         self,
@@ -264,7 +321,8 @@ class GraphRAGManager:
         embedder, so it moves to a worker. The searches stay here: they read
         the graph and the index, which indexing rewrites on the loop in one
         block, and on the loop they see it before that block or after it --
-        from a thread they could see it half-way.
+        from a thread they could see it half-way. Near-copies are matched in a
+        worker too, from a snapshot of the tables taken here.
 
         Args:
             query: Natural language query or SQL requirement.
@@ -276,13 +334,16 @@ class GraphRAGManager:
             What :meth:`get_query_context` returns.
         """
         embedding = await asyncio.to_thread(self._try_embed, query)
-        return self.get_query_context(
+        context, shown = self._query_context(
             query,
             max_tables,
             max_columns,
             query_embedding=embedding,
             retriever=retriever,
         )
+        source = self._copy_source()
+        await asyncio.to_thread(self._add_near_copies, context, shown, source)
+        return context
 
     async def asearch_schema(
         self, query: str, top_k: int = 5, element_type: str | None = None
@@ -813,6 +874,25 @@ class GraphRAGManager:
         Returns:
             Optimized context dictionary
         """
+        context, shown = self._query_context(
+            query, max_tables, max_columns, query_embedding, retriever
+        )
+        self._add_near_copies(context, shown, self._copy_source())
+        return context
+
+    def _query_context(
+        self,
+        query: str,
+        max_tables: int,
+        max_columns: int,
+        query_embedding: Any | None = None,
+        retriever: GraphRetriever | None = None,
+    ) -> tuple[dict[str, Any], list[tuple[dict[str, Any], str]]]:
+        """The query context without near-copies, and the tables it shows.
+
+        Returns:
+            The context, and each relevant table's entry with its identity.
+        """
         if not self._initialized:
             raise RuntimeError("GraphRAG not initialized")
 
@@ -855,6 +935,7 @@ class GraphRAGManager:
         }
 
         # Add primary tables with their metadata
+        shown: list[tuple[dict[str, Any], str]] = []
         for table_result in table_info["primary_tables"]:
             identity = table_result["element"]["id"]
             table_name = table_result["element"]["name"]
@@ -873,6 +954,7 @@ class GraphRAGManager:
                         "matched_business_name"
                     ]
                 context["relevant_tables"].append(entry)
+                shown.append((entry, identity))
 
         # Add relevant columns
         for col_result in column_results:
@@ -904,7 +986,7 @@ class GraphRAGManager:
             * 100  # ~100 tokens per join
         )
 
-        return context
+        return context, shown
 
     def get_schema_overview(self) -> dict[str, Any]:
         """
