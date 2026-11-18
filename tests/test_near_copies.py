@@ -10,6 +10,7 @@ import json
 import random
 import re
 import threading
+import tracemalloc
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -163,7 +164,8 @@ def test_closest_first_and_at_most_three() -> None:
 def test_pairs_are_listed_once() -> None:
     tables = {"orders": ORDER, "orders_2019": [*ORDER, "archived_at"]}
     pairs = CopyIndex(tables).pairs(["orders", "orders_2019"])
-    assert [(a, c.table) for a, c in pairs] == [("orders", "orders_2019")]
+    assert [(a, c.table) for a, c in pairs.closest] == [("orders", "orders_2019")]
+    assert pairs.total == 1
 
 
 def test_discovery_counts_every_pair_it_leaves_out() -> None:
@@ -179,10 +181,43 @@ def test_discovery_counts_every_pair_it_leaves_out() -> None:
         for i in range(10)
     ]
     catalog = {f"main.{t.name}": t for t in tables}
-    assert len(CopyIndex(dict.fromkeys(catalog, ORDER)).pairs(catalog)) == 45
+    assert CopyIndex(dict.fromkeys(catalog, ORDER)).pairs(catalog).total == 45
     section = _near_copy_pairs(catalog, tables)
     assert len(section["near_copies"]) == MAX_NEAR_COPY_PAIRS
     assert section["near_copies_omitted"] == 45 - MAX_NEAR_COPY_PAIRS
+
+
+def test_thousands_of_one_shape_are_counted_not_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A date-sharded export: 2,000 tables of one shape are 1,999,000 pairs.
+    # Discovery lists 25 of them and counts the rest; keeping them all took
+    # over a gigabyte.
+    tables = {f"events_{i:05d}": ORDER for i in range(2000)}
+    built = 0
+    near_copy = CopyIndex._near_copy
+
+    def counting(self: CopyIndex, identity: str, other: str, jaccard: float) -> Any:
+        nonlocal built
+        built += 1
+        return near_copy(self, identity, other, jaccard)
+
+    monkeypatch.setattr(CopyIndex, "_near_copy", counting)
+    tracemalloc.start()
+    try:
+        index = CopyIndex(tables)
+        before = tracemalloc.get_traced_memory()[0]
+        tracemalloc.reset_peak()
+        pairs = index.pairs(tables, limit=MAX_NEAR_COPY_PAIRS)
+        peak = tracemalloc.get_traced_memory()[1] - before
+    finally:
+        tracemalloc.stop()
+    assert pairs.total == 2000 * 1999 // 2
+    assert [(a, c.table) for a, c in pairs.closest] == [
+        ("events_00000", f"events_{i:05d}") for i in range(1, 26)
+    ]
+    assert built == MAX_NEAR_COPY_PAIRS
+    assert peak < 1024 * 1024, f"pairs() held {peak / 2**20:.1f} MiB"
 
 
 def test_long_column_lists_are_cut() -> None:
@@ -223,6 +258,76 @@ def test_the_index_finds_what_comparing_every_pair_finds(seed: int) -> None:
     }
     assert expected, "the catalog should have some near-copies"
     assert found == expected
+
+
+def _random_catalog(seed: int) -> dict[str, list[str]]:
+    """Tables with shared audit columns, families of copies, and twins."""
+    rng = random.Random(seed)
+    vocabulary = [f"c{i}" for i in range(40)]
+    common = ["id", "created_at", "updated_at"]
+    tables: dict[str, list[str]] = {}
+    for t in range(60):
+        base = rng.sample(vocabulary, rng.randint(2, 10))
+        tables[f"t{t:02d}"] = rng.sample(common, rng.randint(0, 3)) + base
+        if rng.random() < 0.3:  # a near-copy of it, with a few changes
+            copy = [c for c in tables[f"t{t:02d}"] if rng.random() > 0.2]
+            tables[f"t{t:02d}_copy"] = copy + rng.sample(vocabulary, rng.randint(0, 2))
+        for twin in range(rng.choice([0, 0, 1, 3])):  # the same content columns
+            columns = [c.upper() for c in base] + rng.sample(common, rng.randint(0, 3))
+            tables[f"t{t:02d}_twin{twin}"] = columns
+    return tables
+
+
+def _closest(tables: dict[str, list[str]], asked: set[str]) -> list[tuple[Any, ...]]:
+    """Every pair with a table in *asked*, closest first, by comparing all pairs."""
+    content = {
+        k: {c.lower() for c in cols if not is_bookkeeping(c)}
+        for k, cols in tables.items()
+    }
+    found = []
+    for a, b in combinations(sorted(tables), 2):
+        shared = len(content[a] & content[b])
+        if a not in asked and b not in asked:
+            continue
+        if not _similar(shared, len(content[a]), len(content[b])):
+            continue
+        if a not in asked:  # listed from the table asked about
+            a, b = b, a
+        jaccard = shared / len(content[a] | content[b])
+        found.append((-jaccard, -shared, a, b))
+    return sorted(found)
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_pairs_are_the_closest_of_every_pair(seed: int) -> None:
+    # Groups of twins are compared once: the pairs, their order and their
+    # count must still be what comparing every pair gives, for any tables
+    # asked about and any cut.
+    tables = _random_catalog(seed)
+    index = CopyIndex(tables)
+    rng = random.Random(seed)
+    for asked in (set(tables), set(rng.sample(sorted(tables), len(tables) // 3))):
+        expected = _closest(tables, asked)
+        assert len(expected) > MAX_NEAR_COPY_PAIRS, "too few pairs to cut"
+        for limit in (None, MAX_NEAR_COPY_PAIRS, 1):
+            pairs = index.pairs(asked, limit=limit)
+            assert pairs.total == len(expected)
+            assert [(a, c.table) for a, c in pairs.closest] == [
+                key[2:] for key in expected[:limit]
+            ]
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_each_tables_closest_copies_are_the_closest_of_every_pair(seed: int) -> None:
+    tables = _random_catalog(seed)
+    index = CopyIndex(tables)
+    for identity in tables:
+        expected = [
+            key[3] if key[2] == identity else key[2]
+            for key in _closest(tables, {identity})
+        ]
+        assert [c.table for c in index.of(identity)] == expected[:3]
+        assert [c.table for c in index.of(identity, limit=None)] == expected
 
 
 # --- GraphRAG -----------------------------------------------------------------

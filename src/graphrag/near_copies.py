@@ -31,12 +31,21 @@ side, *n* being that side's count. With columns ordered rarest first, two sets
 sharing at least *o* columns must share one among the first ``n - o + 1`` of
 each, so only tables meeting on one of their rarer columns are compared, and
 none that qualify are missed.
+
+Tables with the same content columns are compared once, as a group: a
+date-sharded export (``events_20240101``, ``events_20240102``, ...) is
+thousands of tables of one shape, with no rarer column to tell them apart and
+millions of pairs. The rule is decided per pair of groups, pairs are counted
+from the group sizes, and only the closest are built.
 """
 
+import heapq
 import re
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Container, Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from itertools import islice
+from operator import itemgetter
 from typing import Any
 
 #: Shared content columns below this never make two tables copies.
@@ -140,11 +149,39 @@ def _similar(shared: int, width: int, other_width: int) -> bool:
     return jaccard or contained
 
 
+@dataclass(frozen=True)
+class NearCopyPairs:
+    """The closest near-copy pairs of some tables, and how many there are."""
+
+    #: ``(table, near_copy)``, closest first.
+    closest: list[tuple[str, NearCopy]]
+    #: Every pair, the ones not in :attr:`closest` included.
+    total: int
+
+
+def _pair_count(size: int, asked: int, other_size: int | None, other_asked: int) -> int:
+    """Pairs between two groups, or within one, with a table asked about.
+
+    Args:
+        size: Tables in the first group.
+        asked: How many of them were asked about.
+        other_size: Tables in the second group; None for pairs within the first.
+        other_asked: How many of those were asked about.
+    """
+    if other_size is None:
+        return (size * (size - 1) - (size - asked) * (size - asked - 1)) // 2
+    return size * other_size - (size - asked) * (other_size - other_asked)
+
+
 class CopyIndex:
     """The tables of a catalog, indexed to find each one's near-copies.
 
     Built once per catalog; :meth:`of` then compares a table only with the
-    tables that share one of its rarer content columns.
+    tables that share one of its rarer content columns, and with those that
+    have the same content columns without comparing them again.
+
+    Closest first means: the higher Jaccard similarity of the content
+    columns, then more content columns shared, then by name.
 
     Args:
         tables: Each table's identity and its column names.
@@ -158,26 +195,69 @@ class CopyIndex:
             for name in names:
                 columns.setdefault(str(name).lower(), str(name))
             self._columns[identity] = columns
-        # What the rule compares: the content columns.
-        self._content = {
-            identity: frozenset(c for c in columns if not is_bookkeeping(c))
-            for identity, columns in self._columns.items()
+        # What the rule compares, the content columns, once per group of tables
+        # that have the same ones.
+        groups: dict[frozenset[str], list[str]] = defaultdict(list)
+        for identity, columns in self._columns.items():
+            content = frozenset(c for c in columns if not is_bookkeeping(c))
+            groups[content].append(identity)
+        self._content: list[frozenset[str]] = list(groups)
+        self._members: list[list[str]] = [sorted(m) for m in groups.values()]
+        self._group = {
+            identity: g
+            for g, members in enumerate(self._members)
+            for identity in members
         }
-        frequency = Counter(c for cols in self._content.values() for c in cols)
-        self._prefix: dict[str, list[str]] = {}
-        self._postings: dict[str, list[str]] = defaultdict(list)
-        for identity, content in self._content.items():
+        frequency = Counter(c for content in self._content for c in content)
+        self._prefix: dict[int, list[str]] = {}
+        self._postings: dict[str, list[int]] = defaultdict(list)
+        for g, content in enumerate(self._content):
             width = len(content)
             needed = _min_shared(width)
             if needed > width:
                 continue  # too few content columns to be anyone's near-copy
             rarest_first = sorted(content, key=lambda c: (frequency[c], c))
-            self._prefix[identity] = rarest_first[: width - needed + 1]
-            for column in self._prefix[identity]:
-                self._postings[column].append(identity)
+            self._prefix[g] = rarest_first[: width - needed + 1]
+            for column in self._prefix[g]:
+                self._postings[column].append(g)
 
     def __contains__(self, identity: object) -> bool:
         return identity in self._columns
+
+    def _matching(
+        self, g: int, skip: Container[int] = ()
+    ) -> Iterator[tuple[int, int, float]]:
+        """The groups whose tables are near-copies of group *g*'s.
+
+        Group *g* itself first, when its tables could be anyone's near-copy:
+        its tables are one another's.
+
+        Args:
+            g: A group.
+            skip: Groups not to compare with *g*.
+
+        Yields:
+            ``(group, shared content columns, Jaccard similarity)``.
+        """
+        prefix = self._prefix.get(g)
+        if prefix is None:
+            return
+        mine = self._content[g]
+        width = len(mine)
+        yield g, width, 1.0
+        candidates = {h for column in prefix for h in self._postings[column]}
+        candidates.discard(g)
+        for h in candidates:
+            if h in skip:
+                continue
+            theirs = self._content[h]
+            other_width = len(theirs)
+            # Both rules need the wider at most twice the narrower.
+            if width > 2 * other_width or other_width > 2 * width:
+                continue
+            shared = len(mine & theirs)
+            if _similar(shared, width, other_width):
+                yield h, shared, shared / (width + other_width - shared)
 
     def of(self, identity: str, limit: int | None = PER_TABLE) -> list[NearCopy]:
         """The near-copies of *identity*, closest first.
@@ -189,27 +269,22 @@ class CopyIndex:
         Returns:
             The near-copies; none for a table not in the index.
         """
-        prefix = self._prefix.get(identity)
-        if not prefix:
+        g = self._group.get(identity)
+        if g is None:
             return []
-        content = self._content
-        mine = content[identity]
-        width = len(mine)
-        candidates = {other for column in prefix for other in self._postings[column]}
-        candidates.discard(identity)
-        found = []
-        for other in candidates:
-            theirs = content[other]
-            other_width = len(theirs)
-            # Both rules need the wider at most twice the narrower.
-            if width > 2 * other_width or other_width > 2 * width:
-                continue
-            shared = len(mine & theirs)
-            if shared < MIN_SHARED or not _similar(shared, width, other_width):
-                continue
-            found.append(self._near_copy(identity, other, shared / len(mine | theirs)))
-        found.sort(key=lambda c: (-c.jaccard, -c.shared, c.table))
-        return found if limit is None else found[:limit]
+        found: list[tuple[tuple[float, int, str], float]] = []
+        for h, shared, jaccard in self._matching(g):
+            others = (t for t in self._members[h] if t != identity)
+            # A group's tables tie but for their names, sorted already.
+            found.extend(
+                ((-jaccard, -shared, other), jaccard) for other in islice(others, limit)
+            )
+            if limit is not None and len(found) > 2 * limit:
+                found = heapq.nsmallest(limit, found, key=itemgetter(0))
+        found.sort(key=itemgetter(0))
+        return [
+            self._near_copy(identity, key[2], jaccard) for key, jaccard in found[:limit]
+        ]
 
     def _near_copy(self, identity: str, other: str, jaccard: float) -> NearCopy:
         mine, theirs = self._columns[identity], self._columns[other]
@@ -221,28 +296,75 @@ class CopyIndex:
             jaccard=jaccard,
         )
 
-    def pairs(self, identities: Iterable[str]) -> list[tuple[str, NearCopy]]:
-        """Every near-copy pair with a table in *identities*, once, closest first.
+    def pairs(
+        self, identities: Iterable[str], limit: int | None = None
+    ) -> NearCopyPairs:
+        """The near-copy pairs with a table in *identities*: the closest, and a count.
 
-        All of them: a caller that lists only some can say how many it left
-        out.
+        Every pair is counted, but at most *limit* are kept: thousands of
+        tables of one shape are millions of pairs.
+
+        A pair is ``(table, near_copy)``, listed once: *table* is the one in
+        *identities*, or the first by name when both are.
 
         Args:
             identities: The tables whose near-copies are wanted.
+            limit: How many pairs to keep at most; None for all of them.
 
         Returns:
-            ``(table, near_copy)`` pairs; a pair found from both sides once.
+            The closest pairs and how many there are.
         """
-        seen: set[frozenset[str]] = set()
-        found: list[tuple[str, NearCopy]] = []
-        for identity in identities:
-            for copy in self.of(identity, limit=None):
-                pair = frozenset((identity, copy.table))
-                if pair not in seen:
-                    seen.add(pair)
-                    found.append((identity, copy))
-        found.sort(key=lambda p: (-p[1].jaccard, -p[1].shared, p[0], p[1].table))
-        return found
+        wanted = {i for i in identities if i in self._group}
+        asked: dict[int, list[str]] = defaultdict(list)
+        for identity in sorted(wanted):
+            asked[self._group[identity]].append(identity)
+        total = 0
+        kept: list[tuple[tuple[float, int, str, str], float]] = []
+        # A pair of groups both asked about is taken from the first one.
+        done: set[int] = set()
+        for g in sorted(asked):
+            for h, shared, jaccard in self._matching(g, skip=done):
+                total += _pair_count(
+                    len(self._members[g]),
+                    len(asked[g]),
+                    None if h == g else len(self._members[h]),
+                    len(asked.get(h, ())),
+                )
+                found = self._member_pairs(g, h, asked, wanted)
+                kept.extend(
+                    ((-jaccard, -shared, a, b), jaccard)
+                    for a, b in islice(found, limit)
+                )
+                if limit is not None and len(kept) > 2 * limit:
+                    kept = heapq.nsmallest(limit, kept, key=itemgetter(0))
+            done.add(g)
+        kept.sort(key=itemgetter(0))
+        closest = [
+            (key[2], self._near_copy(key[2], key[3], jaccard))
+            for key, jaccard in kept[:limit]
+        ]
+        return NearCopyPairs(closest=closest, total=total)
+
+    def _member_pairs(
+        self, g: int, h: int, asked: Mapping[int, list[str]], wanted: set[str]
+    ) -> Iterator[tuple[str, str]]:
+        """The pairs of tables between groups *g* and *h*, or within *g*, by name.
+
+        Lazily, so taking the first few costs no more than those: every table
+        of the other group pairs with the first table asked about.
+        """
+        if g == h:
+            members = self._members[g]
+            for a in asked[g]:
+                for b in members:
+                    if b != a and (b not in wanted or b > a):
+                        yield a, b
+            return
+        for a in heapq.merge(asked[g], asked.get(h, [])):
+            partners = self._members[h] if self._group[a] == g else self._members[g]
+            for b in partners:
+                if b not in wanted or b > a:
+                    yield a, b
 
 
 def listed(columns: tuple[str, ...]) -> list[str]:

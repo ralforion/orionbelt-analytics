@@ -209,11 +209,13 @@ def _near_copy_pairs(catalog: dict[str, Any], tables: list[Any]) -> dict[str, An
     another schema (staging beside production) is found too. Empty when
     there are none.
     """
-    pairs = _copy_index(catalog).pairs(qualified(t.schema, t.name) for t in tables)
-    if not pairs:
+    pairs = _copy_index(catalog).pairs(
+        (qualified(t.schema, t.name) for t in tables), limit=MAX_NEAR_COPY_PAIRS
+    )
+    if not pairs.total:
         return {}
     entries = []
-    for identity, copy in pairs[:MAX_NEAR_COPY_PAIRS]:
+    for identity, copy in pairs.closest:
         entry: dict[str, Any] = {
             "tables": [identity, copy.table],
             "shared_columns": copy.shared,
@@ -234,8 +236,8 @@ def _near_copy_pairs(catalog: dict[str, Any], tables: list[Any]) -> dict[str, An
         "near_copies": entries,
         "near_copies_note": NEAR_COPIES_NOTE,
     }
-    if len(pairs) > MAX_NEAR_COPY_PAIRS:
-        section["near_copies_omitted"] = len(pairs) - MAX_NEAR_COPY_PAIRS
+    if pairs.total > len(pairs.closest):
+        section["near_copies_omitted"] = pairs.total - len(pairs.closest)
     return section
 
 

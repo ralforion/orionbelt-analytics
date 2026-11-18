@@ -207,6 +207,8 @@ Warehouses keep several tables of one shape: a current table and its archive, ye
 
 Two tables are near-copies when, comparing column names without case and leaving out bookkeeping columns -- generic ids (`id`, `uuid`), audit and load stamps (`created_at`, `updated_by`, `last_modified`, `_loaded_at`, `etl_*`), versions and tenancy (`tenant_id`) -- they share at least 3 columns, and either half of all their columns or four fifths of the narrower table's while the wider has at most twice as many. Unrelated tables share bookkeeping columns as much as copies do, so they are no evidence; a table with fewer than 3 other columns is nobody's near-copy. Neither is a lookup table whose few columns were copied into a wide fact table. `shared_columns` counts every column both have. Names only: no query runs.
 
+Closest first means the larger share of the compared columns, then more of them, then by name. A date-sharded export (`events_20240101`, `events_20240102`, ...) is thousands of tables of one shape and millions of pairs: `discover_schema` counts them all in `near_copies_omitted` but builds only the 25 it lists.
+
 ---
 
 ### 6. get_table_details
