@@ -9,6 +9,7 @@ the model can check which one the question means.
 import json
 import random
 import re
+import threading
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -19,9 +20,17 @@ from fastmcp import Client
 import src.graphrag.manager as manager_module
 import src.main as main_module
 import src.server_state as state_module
+from src.database_manager import ColumnInfo, TableInfo
 from src.graphrag.manager import GraphRAGManager
-from src.graphrag.near_copies import MAX_LISTED_COLUMNS, CopyIndex, _similar, listed
+from src.graphrag.near_copies import (
+    MAX_LISTED_COLUMNS,
+    CopyIndex,
+    _similar,
+    is_bookkeeping,
+    listed,
+)
 from src.handlers import connection as connection_handler
+from src.handlers.schema import MAX_NEAR_COPY_PAIRS, _near_copy_pairs
 from src.main import mcp
 from src.server_state import ServerState
 
@@ -50,6 +59,72 @@ def test_ids_and_audit_columns_alone_make_no_copy() -> None:
         "customers": ["id", "created_at", "name", "email"],
     }
     assert _copies(tables, "orders") == []
+
+
+def test_bookkeeping_columns_are_no_evidence() -> None:
+    # Three shared columns and Jaccard 0.6 -- all of them bookkeeping.
+    tables = {
+        "categories": ["id", "created_at", "updated_at", "name"],
+        "payments": ["id", "created_at", "updated_at", "amount"],
+    }
+    assert _copies(tables, "categories") == []
+    # A copy is still one with its bookkeeping columns around it.
+    audited = [*ORDER, "created_at", "updated_at", "tenant_id"]
+    tables = {"orders": audited, "orders_2019": [*audited, "archived_at"]}
+    (copy,) = CopyIndex(tables).of("orders")
+    assert copy.shared == len(audited)  # reported: every column both have
+    assert copy.only_there == ("archived_at",)
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "id",
+        "ID",
+        "uuid",
+        "created_at",
+        "CREATED_AT",
+        "updated_by",
+        "modified_on",
+        "last_modified",
+        "last_updated_by",
+        "date_created",
+        "creation_date",
+        "update_time",
+        "deleted_at",
+        "is_deleted",
+        "version",
+        "tenant_id",
+        "_loaded_at",
+        "_fivetran_synced",
+        "etl_batch_id",
+        "dw_insert_ts",
+        "record_source",
+        "load_date",
+    ],
+)
+def test_bookkeeping_names(column: str) -> None:
+    assert is_bookkeeping(column)
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "customer_id",
+        "order_date",
+        "amount",
+        "name",
+        "status",
+        "archived_at",
+        "loaded_quantity",
+        "load_weight",
+        "batch_number",
+        "version_name",
+        "created_by_name",
+    ],
+)
+def test_content_names(column: str) -> None:
+    assert not is_bookkeeping(column)
 
 
 def test_a_lookup_copied_into_a_wide_table_is_no_copy() -> None:
@@ -91,6 +166,25 @@ def test_pairs_are_listed_once() -> None:
     assert [(a, c.table) for a, c in pairs] == [("orders", "orders_2019")]
 
 
+def test_discovery_counts_every_pair_it_leaves_out() -> None:
+    # Ten identical tables are 45 pairs, not three per table.
+    tables = [
+        TableInfo(
+            f"copy_{i}",
+            "main",
+            [ColumnInfo(c, "VARCHAR", True, False, False) for c in ORDER],
+            [],
+            [],
+        )
+        for i in range(10)
+    ]
+    catalog = {f"main.{t.name}": t for t in tables}
+    assert len(CopyIndex(dict.fromkeys(catalog, ORDER)).pairs(catalog)) == 45
+    section = _near_copy_pairs(catalog, tables)
+    assert len(section["near_copies"]) == MAX_NEAR_COPY_PAIRS
+    assert section["near_copies_omitted"] == 45 - MAX_NEAR_COPY_PAIRS
+
+
 def test_long_column_lists_are_cut() -> None:
     columns = tuple(f"c{i}" for i in range(MAX_LISTED_COLUMNS + 3))
     assert listed(columns)[-1] == "... and 3 more"
@@ -112,14 +206,14 @@ def test_the_index_finds_what_comparing_every_pair_finds(seed: int) -> None:
         if rng.random() < 0.3:  # a near-copy of it, with a few changes
             copy = [c for c in tables[f"t{t}"] if rng.random() > 0.2]
             tables[f"t{t}_copy"] = copy + rng.sample(vocabulary, rng.randint(0, 3))
+    content = {
+        k: {c.lower() for c in cols if not is_bookkeeping(c)}
+        for k, cols in tables.items()
+    }
     expected = {
         frozenset((a, b))
         for a, b in combinations(tables, 2)
-        if _similar(
-            len({c.lower() for c in tables[a]} & {c.lower() for c in tables[b]}),
-            len({c.lower() for c in tables[a]}),
-            len({c.lower() for c in tables[b]}),
-        )
+        if _similar(len(content[a] & content[b]), len(content[a]), len(content[b]))
     }
     index = CopyIndex(tables)
     found = {
@@ -181,6 +275,43 @@ def test_query_context_names_the_near_copies(monkeypatch: pytest.MonkeyPatch) ->
         for c in t.get("near_copies", [])
     }
     assert "staging.orders" in near
+
+
+async def test_query_context_matches_copies_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GRAPHRAG_EMBEDDING_MODEL", "tfidf")
+    monkeypatch.setattr(manager_module, "CHROMADB_AVAILABLE", False)
+    mgr = GraphRAGManager(connection_id="test-copies-loop", schema_name="main")
+    mgr.initialize_from_schema(
+        tables_info=[
+            _table("main", "orders", ORDER),
+            _table("main", "orders_2019", [*ORDER, "archived_at"]),
+        ],
+        schema_name="main",
+    )
+    built_on: list[int] = []
+    original = CopyIndex.__init__
+
+    def recording(self: CopyIndex, tables: Any) -> None:
+        built_on.append(threading.get_ident())
+        original(self, tables)
+
+    matched_on: list[int] = []
+    of = CopyIndex.of
+
+    def recording_of(self: CopyIndex, identity: str, limit: Any = 3) -> Any:
+        matched_on.append(threading.get_ident())
+        return of(self, identity, limit)
+
+    monkeypatch.setattr(CopyIndex, "__init__", recording)
+    monkeypatch.setattr(CopyIndex, "of", recording_of)
+    loop_thread = threading.get_ident()
+    context = await mgr.aget_query_context("orders amount", 3, 3)
+    tables = {t["name"]: t for t in context["relevant_tables"]}
+    assert tables["orders"]["near_copies"][0]["table"] == "main.orders_2019"
+    assert built_on and matched_on
+    assert loop_thread not in built_on + matched_on
 
 
 # --- Through the tools ----------------------------------------------------------

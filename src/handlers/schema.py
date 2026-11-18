@@ -250,9 +250,8 @@ async def _near_copies(session: Any, tables: list[Any]) -> dict[str, Any]:
         return {}
 
 
-def _near_copies_of(session: Any, table: Any) -> list[dict[str, Any]]:
-    """*table*'s near-copies among the tables discovered on the connection."""
-    catalog = _catalog(session, [table])
+def _near_copies_of(catalog: dict[str, Any], table: Any) -> list[dict[str, Any]]:
+    """*table*'s near-copies among the tables of *catalog*."""
     found = []
     for copy in _copy_index(catalog).of(qualified(table.schema, table.name)):
         entry: dict[str, Any] = {
@@ -270,7 +269,10 @@ def _near_copies_of(session: Any, table: Any) -> list[dict[str, Any]]:
 async def _with_near_copies(entry: dict[str, Any], session: Any, table: Any) -> None:
     """Add *table*'s near-copies, and what they are, to a table's details."""
     try:
-        near = await asyncio.to_thread(_near_copies_of, session, table)
+        # The catalog is read here, the matching done in a worker: the cache is
+        # shared with other sessions' discoveries.
+        catalog = _catalog(session, [table])
+        near = await asyncio.to_thread(_near_copies_of, catalog, table)
     except Exception as e:
         logger.warning(f"Near-copy lookup for {table.name} skipped: {e}")
         return

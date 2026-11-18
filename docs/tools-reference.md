@@ -185,7 +185,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 - `tables` -- table summaries (lightweight) or full details
 - `relationships` -- foreign key relationships between tables
 - `fan_trap_warnings` -- tables with multiple FK relationships (potential data multiplication risk)
-- `near_copies` -- pairs of tables with nearly the same columns, such as a current table and its archive, with the columns only one side has and the row counts when known (see [Near-copies](#near-copies)); at most 25, with `near_copies_omitted` counting the rest
+- `near_copies` -- pairs of tables with nearly the same columns, such as a current table and its archive, with the columns only one side has and the row counts when known (see [Near-copies](#near-copies)); closest first, at most 25, with `near_copies_omitted` counting the rest
 - `schema_file` -- path to saved schema JSON (full mode)
 - `r2rml_file` -- path to generated R2RML mapping (full mode)
 - `next_step` -- recommended next tool to call
@@ -205,7 +205,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 
 Warehouses keep several tables of one shape: a current table and its archive, yearly or backup copies, the same feed loaded into staging and production. A search returns whichever scores highest, and a query on the wrong copy runs and returns plausible rows that are not the answer. So `discover_schema`, `get_table_details` and `graphrag_query_context` name each table's near-copies, with the columns only one side has, for the model to check which one the question means.
 
-Two tables are near-copies when, comparing column names without case, they share at least 3 columns, and either half of all their columns or four fifths of the narrower table's columns while the wider has at most twice as many. Ids and audit columns alone make no copy, and neither does a lookup table whose few columns were copied into a wide fact table. Names only: no query runs.
+Two tables are near-copies when, comparing column names without case and leaving out bookkeeping columns -- generic ids (`id`, `uuid`), audit and load stamps (`created_at`, `updated_by`, `last_modified`, `_loaded_at`, `etl_*`), versions and tenancy (`tenant_id`) -- they share at least 3 columns, and either half of all their columns or four fifths of the narrower table's while the wider has at most twice as many. Unrelated tables share bookkeeping columns as much as copies do, so they are no evidence; a table with fewer than 3 other columns is nobody's near-copy. Neither is a lookup table whose few columns were copied into a wide fact table. `shared_columns` counts every column both have. Names only: no query runs.
 
 ---
 

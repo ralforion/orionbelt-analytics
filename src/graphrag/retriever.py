@@ -797,19 +797,17 @@ class GraphRetriever:
 
         return warnings
 
-    def table_columns(self) -> dict[str, list[str]]:
-        """Each indexed table's identity and its column names.
+    def tables_snapshot(self) -> dict[str, dict[str, Any]]:
+        """The indexed tables as they are now, safe to read from a worker.
+
+        Only the mapping is copied: a table's metadata is replaced, never
+        edited, when the table is indexed again, so the copy keeps describing
+        the tables as they were when it was taken.
 
         Returns:
-            Identity to column names, in column order.
+            Identity to table metadata.
         """
-        return {
-            identity: [
-                str(c.get("name") if isinstance(c, dict) else c)
-                for c in table.get("columns") or []
-            ]
-            for identity, table in self._tables_info.items()
-        }
+        return dict(self._tables_info)
 
     def get_table_metadata(self, table_name: str) -> dict[str, Any] | None:
         """
