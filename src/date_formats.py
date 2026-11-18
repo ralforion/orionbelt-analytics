@@ -25,7 +25,7 @@ samples the values.
 import re
 from collections.abc import Iterable
 from datetime import UTC, date, datetime, time
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 #: Formats tried, most specific and most common first. The first one that
@@ -80,6 +80,15 @@ _NATIVE_TEMPORAL = re.compile(r"date|time", re.IGNORECASE)
 # order, from the year down, writes dates that sort as dates.
 _SORT_ORDER = ("%Y", "%m", "%d", "%H", "%M", "%S", "%f")
 
+# A number as a query or a numeric column writes it: digits, perhaps a
+# fraction or an exponent. No sign, no NaN, no infinity: no date is one.
+_NUMBER = re.compile(r"\d+(?:\.\d*)?(?:[eE][+-]?\d+)?")
+
+# More digits than any date format writes (14, for %Y%m%d%H%M%S). A longer
+# number is no date, and is rejected before it is expanded: 1e5000 has more
+# digits than Python turns into text.
+_MAX_DIGITS = 20
+
 
 def is_candidate(column_name: str, data_type: str) -> bool:
     """Whether a column may hold dates that its type does not say are dates.
@@ -118,21 +127,45 @@ def _parse(value: str, fmt: str) -> datetime | None:
     return parsed if parsed.strftime(fmt) == value else None
 
 
+def whole_number(value: Any) -> str | None:
+    """*value* as the digits of a whole number, or None if it is none.
+
+    ``10101.00`` and ``1.0101e4`` are ``10101``. None for a fraction, a
+    sign, NaN or infinity, and for a number longer than any date
+    (``1e5000``).
+
+    Args:
+        value: A number, or its text.
+
+    Returns:
+        The digits, or None.
+    """
+    text = str(value).strip()
+    if not _NUMBER.fullmatch(text):
+        return None
+    number = Decimal(text)
+    if number.adjusted() >= _MAX_DIGITS or number != number.to_integral_value():
+        return None
+    return str(int(number))
+
+
 def _texts(values: Iterable[Any]) -> list[str] | None:
     """The distinct non-empty values as text; None if any cannot be a date.
 
     A number with a fraction is no date in any format, and a DECIMAL column
     holding one is not a column of dates, so it rules the column out rather
-    than being skipped.
+    than being skipped. So does a negative one, NaN or infinity (a
+    PostgreSQL NUMERIC holds both).
     """
     seen: dict[str, None] = {}
     for value in values:
         if value is None or isinstance(value, (bool, date, datetime)):
             continue
         if isinstance(value, (float, Decimal)):
-            if value != int(value):
+            whole = whole_number(value)
+            if whole is None:
                 return None
-            value = int(value)
+            value = whole
         # As stored: " 20150601 " is not written in %Y%m%d, and a value
         # suggested in that format would not match it. Blank is missing.
         text = str(value)
@@ -200,15 +233,10 @@ def padded(value: Any, fmt: str) -> Any:
         The digits as the format writes them, or *value* unchanged.
     """
     written = example(fmt)
-    if not written.isdigit():
+    whole = whole_number(value)
+    if whole is None or not written.isdigit():
         return value
-    try:
-        number = Decimal(str(value))
-    except InvalidOperation:
-        return value
-    if not number.is_finite() or number < 0 or number != number.to_integral_value():
-        return value
-    return str(int(number)).zfill(len(written))
+    return whole.zfill(len(written))
 
 
 def as_datetime(value: Any) -> datetime | None:

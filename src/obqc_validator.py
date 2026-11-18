@@ -2755,6 +2755,7 @@ class OBQCValidator:
             sorts_chronologically,
             sql_moment,
             to_date_sql,
+            whole_number,
         )
 
         ranges = (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Between)
@@ -2786,16 +2787,21 @@ class OBQCValidator:
                     re.search(r"int|number|numeric|decimal", schema.sql_data_type, re.I)
                 )
                 value = literal.this
-                if numeric or literal.is_number:
-                    # A number keeps no leading zeros: 10101 against %y%m%d is
-                    # 010101, 2001-01-01 -- as the column's conversion reads it.
-                    value = padded(value, fmt)
-                # The column's own reading first: '01/02/2015' is ambiguous in
-                # general, but not in a column written %d/%m/%Y.
-                moment = read(fmt, value)
+                # A number keeps no leading zeros and may carry a zero
+                # fraction: 10101.00 against %y%m%d is 010101, 2001-01-01, as
+                # the column's conversion reads it.
+                number = whole_number(value) if numeric or literal.is_number else None
+                # The column's own reading first, padded and then as written:
+                # '01/02/2015' is ambiguous in general, but not in a column
+                # written %d/%m/%Y.
+                moment = read(fmt, padded(number, fmt)) if number else None
+                if moment is None:
+                    moment = read(fmt, value)
                 in_form = moment is not None
                 if moment is None:
-                    moment = as_datetime(value)
+                    # Any other reading: 20240101 against %Y%m%d%H%M%S is no
+                    # timestamp padded with zeros, but the day 2024-01-01.
+                    moment = as_datetime(number or value)
                 if not (in_form or moment or TEMPORAL_LITERAL.match(value)):
                     continue  # not a date at all: not this rule's business
                 kind = "numbers" if numeric else "text"
@@ -2818,7 +2824,7 @@ class OBQCValidator:
                         f"its format ({fmt}) and compare it with {bound}"
                     )
                 elif not in_form:
-                    rewritten = rewrite(fmt, value)
+                    rewritten = rewrite(fmt, number or value)
                     message = (
                         f"{name} stores dates written like {written_like}, so "
                         f"{literal.sql()} never matches it as a date: the "

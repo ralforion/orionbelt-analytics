@@ -9,6 +9,7 @@ a date another way.
 
 import json
 import re
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from src.date_formats import (
     is_candidate,
     matches,
     rewrite,
+    whole_number,
 )
 from src.handlers import connection as connection_handler
 from src.main import mcp
@@ -155,6 +157,9 @@ def _validator() -> OBQCValidator:
         ColumnInfo("shipped", "DATE", True, False, False),
         ColumnInfo("booked_on", "VARCHAR", True, False, False, date_format="%d.%m.%Y"),
         ColumnInfo("issued_ymd", "INTEGER", True, False, False, date_format="%y%m%d"),
+        ColumnInfo(
+            "created_at", "BIGINT", True, False, False, date_format="%Y%m%d%H%M%S"
+        ),
     ]
     table = TableInfo("orders", "main", columns, ["id"], [])
     generator = OntologyGenerator(base_uri="http://example.com/ontology/")
@@ -477,6 +482,79 @@ def test_a_number_bound_on_a_two_digit_year_column_is_warned_live() -> None:
     fixed = f"SELECT count(*) FROM orders WHERE {converted} < DATE '2001-01-01'"
     assert converted is not None and converted in warning.suggestion
     assert con.execute(fixed).fetchone() == (5,)
+
+
+@pytest.mark.parametrize("bound", ["20240101", "20240101.00"])
+def test_a_number_in_another_form_is_read_as_written(bound: str) -> None:
+    # Padded to the column's width it reads as nothing (00000020240101); as
+    # written it is the day 2024-01-01.
+    (warning,) = _date_warnings(f"SELECT id FROM orders WHERE created_at >= {bound}")
+    assert warning.suggestion == "Write the value as 20240101000000"
+
+
+def test_a_day_bound_on_a_timestamp_number_column_is_warned_live() -> None:
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute(
+        "CREATE TABLE orders AS SELECT id, created_at FROM (VALUES "
+        "(1, 20231215103000), (2, 20231231235959), (3, 20240102080000), "
+        "(4, 20240215120000), (5, 20240301000000)) v(id, created_at)"
+    )
+    sampled = [r[0] for r in con.execute("SELECT created_at FROM orders").fetchall()]
+    assert infer_date_format(sampled) == "%Y%m%d%H%M%S"
+
+    # As numbers, 20240101 is below every one of them: December comes in.
+    query = "SELECT count(*) FROM orders WHERE created_at >= 20240101"
+    assert con.execute(query).fetchone() == (5,)
+    (warning,) = _date_warnings(query)
+    assert warning.suggestion == "Write the value as 20240101000000"
+    fixed = query.replace("20240101", "20240101000000")
+    assert con.execute(fixed).fetchone() == (3,)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT id FROM orders WHERE issued_ymd < 1e5000",
+        "SELECT id FROM orders WHERE created_at >= 1e5000",
+        "SELECT id FROM orders WHERE issued_ymd < '1e5000'",
+        "SELECT id FROM orders WHERE order_day = 1e5000",
+    ],
+)
+def test_a_huge_number_is_no_date_and_no_error(sql: str) -> None:
+    assert _date_warnings(sql) == []
+
+
+def test_whole_number() -> None:
+    assert whole_number("10101") == "10101"
+    assert whole_number("10101.00") == "10101"
+    assert whole_number("1.0101e4") == "10101"
+    assert whole_number(Decimal("950324.00")) == "950324"
+    assert whole_number(950324.0) == "950324"
+    for odd in (
+        "1e5000",  # rejected before expanding: no ValueError
+        "1.5",
+        "-10101",
+        "NaN",
+        "Infinity",
+        "0x10",
+        "1_000",
+        "",
+        Decimal("NaN"),
+        Decimal("-Infinity"),
+        float("inf"),
+        1e20,
+    ):
+        assert whole_number(odd) is None, odd
+
+
+def test_nan_or_infinity_rules_a_numeric_column_out() -> None:
+    # A PostgreSQL NUMERIC holds both; they used to raise during discovery.
+    sample = [Decimal(d) for d in ("950324", "950325", "960101", "991231", "980615")]
+    assert infer_date_format(sample) == "%y%m%d"
+    for odd in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
+        assert infer_date_format([*sample, odd]) is None
 
 
 def test_a_decimal_column_converts_the_way_it_was_read() -> None:
