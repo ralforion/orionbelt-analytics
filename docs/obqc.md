@@ -172,7 +172,7 @@ Comparisons within the same category are allowed (e.g. integer vs. decimal). Com
 
 ### Date formats (WARNING)
 
-A date kept as text or as a number has a form of its own, and a query has to compare against that form. `discover_schema` samples text and integer columns with date-like names and records the format every sampled value is written in as `oba:dateFormat` (a `strftime` pattern such as `%Y%m%d`). It records one only when all values read in it and no other format reads them as different dates, so `01/02/2015` -- day-first or month-first? -- gets none. OBQC then reports a date literal written another way, in `=`, `<`, `>=`, `BETWEEN` and `IN`:
+A date kept as text or as a number has a form of its own, and a query has to compare against that form. `discover_schema` samples text and integer columns with date-like names and records the format every sampled value is written in as `oba:dateFormat` (a `strftime` pattern such as `%Y%m%d`). It records one only when every value reads in it *and is written exactly as the format writes it* -- so a suggested value matches stored ones, and `2015-6-1` is not `%Y-%m-%d` -- and no other format reads the values as different dates, so `01/02/2015` (day-first or month-first?) gets none. A numeric value with a fraction rules the column out. OBQC then reports two things, in `=`, `<`, `>=`, `BETWEEN` and `IN`:
 
 ```sql
 -- order_day is VARCHAR holding '20150601'
@@ -181,7 +181,11 @@ A date kept as text or as a number has a form of its own, and a query has to com
 SELECT COUNT(*) FROM orders WHERE order_day >= '2015-06-01';
 ```
 
-The comparison runs either way: as text, `'2015-06-01'` sorts before every `'2015…'` value, so `>=` returns rows from the wrong range and `=` returns none. It is a warning rather than an error because the format was inferred from a sample. A literal already in the column's form, a native `DATE` column, and a literal that is no date at all are not reported. Set `OBA_INFER_DATE_FORMATS=false` to skip the sampling.
+The comparison runs either way: as text, `'2015-06-01'` sorts before every `'2015…'` value, so `>=` returns rows from the wrong range and `=` returns none.
+
+The second is a range on a column whose form does not sort as dates, such as `%d.%m.%Y`: `'01.06.2015'` sorts after `'31.05.2016'`, so `booked_on >= '01.06.2015'` is wrong even with the value in the column's own form. Rewriting the value cannot fix that, so the suggestion converts the column, in the query's dialect: `CAST(STRPTIME(booked_on, '%d.%m.%Y') AS DATE) >= DATE '2015-06-01'` for DuckDB, `TO_DATE(booked_on, 'DD.MM.YYYY')` for PostgreSQL, and so on. Forms that run from the four-digit year down (`%Y%m%d`, `%Y-%m-%d %H:%M:%S`) sort as dates, and a range on them only needs the value in their form.
+
+Both are warnings rather than errors because the format was inferred from a sample. A literal already in the column's form, a native `DATE` column, and a literal that is no date at all are not reported. Set `OBA_INFER_DATE_FORMATS=false` to skip the sampling.
 
 ### Aggregation correctness (ERROR)
 

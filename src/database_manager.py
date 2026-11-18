@@ -1387,16 +1387,21 @@ class DatabaseManager:
             ]
             if not candidates:
                 continue
+            schema = (
+                table.schema
+                if table.schema and table.schema != "default"
+                else schema_name
+            )
+            path = [schema, table.name]
+            if db_type == "dremio":
+                # A Dremio path is dotted: space.folder.table, each part
+                # quoted on its own, as the Dremio driver samples it.
+                path = [p for part in path for p in str(part or "").split(".")]
             sql = select_columns(
                 dialect,
                 DATE_FORMAT_SAMPLE_ROWS,
                 [column.name for column in candidates],
-                (
-                    table.schema
-                    if table.schema and table.schema != "default"
-                    else schema_name
-                ),
-                table.name,
+                *path,
             )
             try:
                 result = self.execute_sql_query(sql, DATE_FORMAT_SAMPLE_ROWS)

@@ -62,13 +62,13 @@ DAYS = ["20150601", "20150602", "20151231", "20160101", "20140715"]
         ),
         (
             [
-                "2015-06-01T10:00:00Z",
-                "2015-06-02T11:00:00+02:00",
-                "2015-12-31T00:00:00Z",
-                "2016-01-01T00:00:00Z",
-                "2014-07-15T09:30:00Z",
+                "2015-06-01 10:00:00.500000",
+                "2015-06-02 11:00:00.000000",
+                "2015-12-31 00:00:00.250000",
+                "2016-01-01 00:00:00.000001",
+                "2014-07-15 09:30:00.999999",
             ],
-            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S.%f",
         ),
     ],
 )
@@ -88,6 +88,27 @@ def test_a_format_every_value_reads_in_is_found(
         ["2015061", "20150602", "20151231", "20160101", "20140715"],  # short value
         ["A100", "B200", "C300", "D400", "E500"],  # not dates
         [None, "", None, "", None],
+        # Read by %Y-%m-%d, but not written that way: '2015-06-01' would
+        # match none of them.
+        ["2015-6-1", "2015-6-2", "2015-6-3", "2015-6-4", "2015-6-5"],
+        # Fractions of a second written short, and zones written as Z: the
+        # format would write them differently.
+        [
+            "2015-06-01 10:00:00.5",
+            "2015-06-02 10:00:00.5",
+            "2015-06-03 10:00:00.5",
+            "2015-06-04 10:00:00.5",
+            "2015-06-05 10:00:00.5",
+        ],
+        [
+            "2015-06-01T10:00:00Z",
+            "2015-06-02T10:00:00Z",
+            "2015-06-03T10:00:00Z",
+            "2015-06-04T10:00:00Z",
+            "2015-06-05T10:00:00Z",
+        ],
+        # A number with a fraction is no date: it rules the column out.
+        [20150601, 20150602, 20151231, 20160101, 20140715, 1.5],
     ],
 )
 def test_no_format_is_claimed_without_a_clear_one(values: list[Any]) -> None:
@@ -130,6 +151,7 @@ def _validator() -> OBQCValidator:
         ColumnInfo("order_day", "VARCHAR(8)", True, False, False, date_format="%Y%m%d"),
         ColumnInfo("invoice_ymd", "INTEGER", True, False, False, date_format="%Y%m%d"),
         ColumnInfo("shipped", "DATE", True, False, False),
+        ColumnInfo("booked_on", "VARCHAR", True, False, False, date_format="%d.%m.%Y"),
     ]
     table = TableInfo("orders", "main", columns, ["id"], [])
     generator = OntologyGenerator(base_uri="http://example.com/ontology/")
@@ -188,6 +210,50 @@ def test_a_date_in_another_form_is_reported(sql: str, suggestion: str) -> None:
 )
 def test_a_date_in_the_columns_form_is_not_reported(sql: str) -> None:
     assert _date_warnings(sql) == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT id FROM orders WHERE booked_on >= '2015-06-01'",
+        # In the column's own form and still wrong: '01.06.2015' sorts after
+        # '31.05.2016' as text.
+        "SELECT id FROM orders WHERE booked_on >= '01.06.2015'",
+        "SELECT id FROM orders o WHERE o.booked_on BETWEEN '01.06.2015' AND '30.06.2015'",
+    ],
+)
+def test_a_range_on_a_form_that_does_not_sort_converts_the_column(sql: str) -> None:
+    (warning,) = _date_warnings(sql)
+    assert "do not sort in date order" in warning.message
+    # The conversion in the query's dialect, and the value as a date.
+    assert "STRPTIME(" in warning.suggestion and "'%d.%m.%Y'" in warning.suggestion
+    assert "DATE '2015-06-01'" in warning.suggestion
+
+
+def test_equality_on_a_form_that_does_not_sort_rewrites_the_value() -> None:
+    (warning,) = _date_warnings("SELECT id FROM orders WHERE booked_on = '2015-06-01'")
+    assert warning.suggestion == "Write the value as '01.06.2015'"
+    assert _date_warnings("SELECT id FROM orders WHERE booked_on = '01.06.2015'") == []
+
+
+def test_dremio_paths_are_sampled_part_by_part() -> None:
+    from unittest.mock import MagicMock
+
+    from src.database_manager import DatabaseManager
+
+    db = DatabaseManager()
+    db.connection_info = {"type": "dremio"}
+    db.execute_sql_query = MagicMock(return_value={"success": True, "data": []})
+    table = TableInfo(
+        "orders",
+        "space.folder",
+        [ColumnInfo("order_day", "VARCHAR", True, False, False)],
+        [],
+        [],
+    )
+    db.infer_date_formats([table], "space.folder")
+    sql = db.execute_sql_query.call_args.args[0]
+    assert 'FROM "space"."folder"."orders"' in sql
 
 
 # --- End to end, against a DuckDB file ---------------------------------------

@@ -1061,7 +1061,7 @@ class OBQCValidator:
         self._validate_columns(result)
         self._validate_joins(parsed, result, cte_refs)
         self._validate_type_compatibility(parsed, result)
-        self._validate_date_formats(parsed, result, cte_refs)
+        self._validate_date_formats(parsed, result, cte_refs, sqlglot_dialect)
         self._validate_aggregation_context(parsed, result)
         self._validate_measure_aggregation(parsed, result, cte_refs)
         self._detect_fan_trap(result, blocking=not allow_fan_out)
@@ -2721,17 +2721,38 @@ class OBQCValidator:
                 )
 
     def _validate_date_formats(
-        self, parsed: exp.Expr, result: OBQCResult, cte_refs: set[int]
+        self,
+        parsed: exp.Expr,
+        result: OBQCResult,
+        cte_refs: set[int],
+        dialect: str = "postgres",
     ) -> None:
-        """Rule: a date compared with a column that writes dates another way.
+        """Rule: dates compared with a column that stores them as text or numbers.
 
-        A text column holding ``20150601`` compared with ``'2015-06-01'``
-        compares text: ``=`` never matches and ``>=`` silently picks the wrong
-        rows. The query runs and looks right, so this is reported -- as a
-        warning, since the column's format was inferred from a sample -- with
-        the literal rewritten in the column's form when it reads as one date.
+        Two ways such a comparison runs and silently returns the wrong rows:
+
+        - The date is written another way than the column writes it:
+          ``order_day = '2015-06-01'`` against ``'20150601'`` matches nothing.
+          The suggestion is the value in the column's form, which matches
+          stored values exactly (a claimed format reproduces them).
+        - A range (``<``, ``>=``, ``BETWEEN``) on a column whose form does not
+          sort as dates, ``%d.%m.%Y`` say: ``'01.06.2015'`` sorts after
+          ``'31.05.2016'``. Rewriting the value cannot fix that, whatever form
+          it is in, so the suggestion converts the column to a date.
+
+        Reported as warnings, since the column's format was inferred from a
+        sample.
         """
-        from .date_formats import example, matches, rewrite
+        from .date_formats import (
+            as_date,
+            example,
+            matches,
+            rewrite,
+            sorts_chronologically,
+            to_date_sql,
+        )
+
+        ranges = (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Between)
 
         def pairs(node: exp.Expr) -> list[tuple[exp.Expr, exp.Expr]]:
             if isinstance(node, exp.Between):
@@ -2754,22 +2775,46 @@ class OBQCValidator:
                     continue
                 schema = self._resolve_column_schema(column, select, cte_refs)
                 fmt = schema.date_format if schema else None
-                if not schema or not fmt or matches(fmt, literal.this):
+                if schema is None or not fmt:
                     continue
-                rewritten = rewrite(fmt, literal.this)
-                if rewritten is None and not TEMPORAL_LITERAL.match(literal.this):
+                value = literal.this
+                in_form = matches(fmt, value)
+                day = as_date(value)
+                if not (in_form or day or TEMPORAL_LITERAL.match(value)):
                     continue  # not a date at all: not this rule's business
                 numeric = bool(
                     re.search(r"int|number|numeric|decimal", schema.sql_data_type, re.I)
                 )
-                written = rewritten if numeric else f"'{rewritten}'"
-                message = (
-                    f"{schema.table_name}.{schema.name} stores dates written like "
-                    f"'{example(fmt)}' ({fmt}), so {literal.sql()} never matches "
-                    "it as a date: the comparison runs but compares "
-                    + ("numbers" if numeric else "text")
-                    + " and can silently return the wrong rows."
-                )
+                kind = "numbers" if numeric else "text"
+                name = f"{schema.table_name}.{schema.name}"
+                written_like = f"'{example(fmt)}' ({fmt})"
+                if isinstance(node, ranges) and not sorts_chronologically(fmt):
+                    converted = to_date_sql(column, fmt, dialect, numeric)
+                    message = (
+                        f"{name} stores dates written like {written_like}, which "
+                        f"do not sort in date order as {kind}, so a range "
+                        "comparison on it silently returns the wrong rows."
+                    )
+                    suggestion = (
+                        f"Compare dates: convert the column, {converted}, and "
+                        "compare it with "
+                        + (f"DATE '{day.isoformat()}'" if day else "a DATE value")
+                    )
+                elif not in_form:
+                    rewritten = rewrite(fmt, value)
+                    message = (
+                        f"{name} stores dates written like {written_like}, so "
+                        f"{literal.sql()} never matches it as a date: the "
+                        f"comparison runs but compares {kind} and can silently "
+                        "return the wrong rows."
+                    )
+                    if rewritten is None:
+                        suggestion = f"Write dates in that form, like '{example(fmt)}'"
+                    else:
+                        written = rewritten if numeric else f"'{rewritten}'"
+                        suggestion = f"Write the value as {written}"
+                else:
+                    continue
                 if message in seen:
                     continue
                 seen.add(message)
@@ -2779,11 +2824,7 @@ class OBQCValidator:
                         severity=OBQCSeverity.WARNING,
                         message=message,
                         location="WHERE/ON clause",
-                        suggestion=(
-                            f"Write the value as {written}"
-                            if rewritten
-                            else f"Write dates in that form, like '{example(fmt)}'"
-                        ),
+                        suggestion=suggestion,
                     )
                 )
 
