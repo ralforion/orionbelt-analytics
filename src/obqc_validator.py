@@ -1061,7 +1061,9 @@ class OBQCValidator:
         self._validate_columns(result)
         self._validate_joins(parsed, result, cte_refs)
         self._validate_type_compatibility(parsed, result)
-        self._validate_date_formats(parsed, result, cte_refs, sqlglot_dialect)
+        self._validate_date_formats(
+            parsed, result, cte_refs, sqlglot_dialect, dialect.lower()
+        )
         self._validate_aggregation_context(parsed, result)
         self._validate_measure_aggregation(parsed, result, cte_refs)
         self._detect_fan_trap(result, blocking=not allow_fan_out)
@@ -2726,6 +2728,7 @@ class OBQCValidator:
         result: OBQCResult,
         cte_refs: set[int],
         dialect: str = "postgres",
+        database: str | None = None,
     ) -> None:
         """Rule: dates compared with a column that stores them as text or numbers.
 
@@ -2744,11 +2747,12 @@ class OBQCValidator:
         sample.
         """
         from .date_formats import (
-            as_date,
+            as_datetime,
             example,
             matches,
             rewrite,
             sorts_chronologically,
+            sql_moment,
             to_date_sql,
         )
 
@@ -2779,8 +2783,8 @@ class OBQCValidator:
                     continue
                 value = literal.this
                 in_form = matches(fmt, value)
-                day = as_date(value)
-                if not (in_form or day or TEMPORAL_LITERAL.match(value)):
+                moment = as_datetime(value)
+                if not (in_form or moment or TEMPORAL_LITERAL.match(value)):
                     continue  # not a date at all: not this rule's business
                 numeric = bool(
                     re.search(r"int|number|numeric|decimal", schema.sql_data_type, re.I)
@@ -2789,16 +2793,20 @@ class OBQCValidator:
                 name = f"{schema.table_name}.{schema.name}"
                 written_like = f"'{example(fmt)}' ({fmt})"
                 if isinstance(node, ranges) and not sorts_chronologically(fmt):
-                    converted = to_date_sql(column, fmt, dialect, numeric)
+                    converted = to_date_sql(column, fmt, dialect, numeric, database)
                     message = (
                         f"{name} stores dates written like {written_like}, which "
                         f"do not sort in date order as {kind}, so a range "
                         "comparison on it silently returns the wrong rows."
                     )
+                    # The bound keeps its time of day: noon is not midnight.
+                    bound = sql_moment(moment) if moment else "a DATE value"
                     suggestion = (
                         f"Compare dates: convert the column, {converted}, and "
-                        "compare it with "
-                        + (f"DATE '{day.isoformat()}'" if day else "a DATE value")
+                        f"compare it with {bound}"
+                        if converted
+                        else f"Compare dates: convert the column to a date with "
+                        f"its format ({fmt}) and compare it with {bound}"
                     )
                 elif not in_form:
                     rewritten = rewrite(fmt, value)

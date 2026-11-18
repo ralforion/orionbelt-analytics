@@ -109,6 +109,8 @@ def test_a_format_every_value_reads_in_is_found(
         ],
         # A number with a fraction is no date: it rules the column out.
         [20150601, 20150602, 20151231, 20160101, 20140715, 1.5],
+        # Stored with spaces: '20150601' would match none of them.
+        [" 20150601 ", " 20150602 ", " 20151231 ", " 20160101 ", " 20140715 "],
     ],
 )
 def test_no_format_is_claimed_without_a_clear_one(values: list[Any]) -> None:
@@ -388,3 +390,81 @@ def test_graphrag_carries_the_format_with_the_column() -> None:
         table_name="orders", column_name="note", data_type="VARCHAR", schema="main"
     )
     assert "date_format" not in plain.metadata  # vector stores take no None
+
+
+def test_a_range_bound_keeps_its_time_of_day() -> None:
+    (warning,) = _date_warnings(
+        "SELECT id FROM orders WHERE booked_on >= '2015-06-01 12:00:00'"
+    )
+    # Midnight on June 1 is before noon: a DATE bound would let it in.
+    assert "TIMESTAMP '2015-06-01 12:00:00'" in warning.suggestion
+    assert "DATE '2015-06-01'" not in warning.suggestion
+
+
+def test_an_equality_rewrite_that_would_drop_the_time_is_declined() -> None:
+    (warning,) = _date_warnings(
+        "SELECT id FROM orders WHERE booked_on = '2015-06-01 12:00:00'"
+    )
+    assert warning.suggestion == "Write dates in that form, like '01.06.2015'"
+    assert rewrite("%y%m%d", "2075-01-01") is None  # would read back as 1975
+
+
+def test_a_decimal_column_converts_the_way_it_was_read() -> None:
+    import duckdb
+    from sqlglot import exp
+
+    from src.date_formats import to_date_sql
+
+    con = duckdb.connect()
+    con.execute(
+        "CREATE TABLE t AS SELECT * FROM (VALUES (950324.00), (950325.00), "
+        "(960101.00), (991231.00), (980615.00), (10101.00)) v(d)"
+    )
+    sampled = [row[0] for row in con.execute("SELECT d FROM t LIMIT 5").fetchall()]
+    assert infer_date_format(sampled) == "%y%m%d"
+    converted = to_date_sql(exp.column("d"), "%y%m%d", "duckdb", numeric=True)
+    days = sorted(
+        str(row[0]) for row in con.execute(f"SELECT {converted} FROM t").fetchall()
+    )
+    # .00 dropped, 10101 padded to 010101, and 95 read as 1995, 01 as 2001.
+    assert days == [
+        "1995-03-24",
+        "1995-03-25",
+        "1996-01-01",
+        "1998-06-15",
+        "1999-12-31",
+        "2001-01-01",
+    ]
+
+
+def test_two_digit_years_get_their_century_written_out() -> None:
+    from sqlglot import exp
+
+    from src.date_formats import to_date_sql
+
+    # Databricks reads yy as 20yy: 95 would be 2095. The century is written
+    # into the value instead, as inference read it, and parsed as yyyy.
+    sql = to_date_sql(exp.column("d"), "%y%m%d", "databricks", database="databricks")
+    assert sql is not None
+    assert "'yyyyMMdd'" in sql and "'yyMMdd'" not in sql
+    assert "THEN '20' ELSE '19'" in sql
+
+
+def test_dremio_gets_its_own_conversion() -> None:
+    from sqlglot import exp
+
+    from src.date_formats import to_date_sql
+
+    result = _validator().validate(
+        "SELECT id FROM orders WHERE booked_on >= '2015-06-01'", dialect="dremio"
+    )
+    (warning,) = [
+        i for i in result.issues if i.issue_type == OBQCIssueType.DATE_FORMAT_MISMATCH
+    ]
+    assert "TO_DATE(booked_on, 'DD.MM.YYYY')" in warning.suggestion
+    assert "DATE_PARSE" not in warning.suggestion
+    # No Dremio token for microseconds: no conversion rather than a wrong one.
+    assert (
+        to_date_sql(exp.column("t"), "%d.%m.%Y %H:%M:%S.%f", "trino", database="dremio")
+        is None
+    )

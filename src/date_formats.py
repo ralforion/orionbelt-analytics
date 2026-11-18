@@ -24,7 +24,7 @@ samples the values.
 
 import re
 from collections.abc import Iterable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any
 
@@ -133,8 +133,10 @@ def _texts(values: Iterable[Any]) -> list[str] | None:
             if value != int(value):
                 return None
             value = int(value)
-        text = str(value).strip()
-        if text:
+        # As stored: " 20150601 " is not written in %Y%m%d, and a value
+        # suggested in that format would not match it. Blank is missing.
+        text = str(value)
+        if text.strip():
             seen.setdefault(text, None)
     return list(seen)
 
@@ -176,8 +178,11 @@ def matches(fmt: str, value: Any) -> bool:
     return texts is not None and bool(texts) and _parse(texts[0], fmt) is not None
 
 
-def as_date(value: Any) -> date | None:
-    """The date *value* stands for, if it reads as one date in a candidate format."""
+def as_datetime(value: Any) -> datetime | None:
+    """The moment *value* stands for, if it reads as one in a candidate format.
+
+    The time of day is kept: ``'2015-06-01 12:00:00'`` is noon, not the day.
+    """
     texts = _texts([value])
     if not texts:
         return None
@@ -186,7 +191,14 @@ def as_date(value: Any) -> date | None:
         for candidate in CANDIDATE_FORMATS
         if (parsed := _parse(texts[0], candidate)) is not None
     }
-    return readings.pop().date() if len(readings) == 1 else None
+    return readings.pop() if len(readings) == 1 else None
+
+
+def sql_moment(moment: datetime) -> str:
+    """*moment* as a SQL literal: a DATE at midnight, a TIMESTAMP otherwise."""
+    if moment.time() == time(0):
+        return f"DATE '{moment.date().isoformat()}'"
+    return f"TIMESTAMP '{moment.isoformat(sep=' ')}'"
 
 
 def sorts_chronologically(fmt: str) -> bool:
@@ -202,10 +214,12 @@ def sorts_chronologically(fmt: str) -> bool:
 
 
 def rewrite(fmt: str, value: Any) -> str | None:
-    """*value* rewritten in *fmt*, if it is a date in any candidate format.
+    """*value* rewritten in *fmt*, if that keeps all of it.
 
     ``rewrite("%Y%m%d", "2015-06-01")`` is ``"20150601"``. None when the value
-    reads as no date, or ambiguously (as two different dates).
+    reads as no date or ambiguously (as two different dates), or when *fmt*
+    cannot hold all of it: ``"2015-06-01 12:00:00"`` in ``%d.%m.%Y`` would
+    lose the time of day, and 2075 in ``%y%m%d`` would read back as 1975.
 
     Args:
         fmt: The column's format.
@@ -214,41 +228,124 @@ def rewrite(fmt: str, value: Any) -> str | None:
     Returns:
         The value in the column's format, or None.
     """
-    texts = _texts([value])
-    if not texts:
+    moment = as_datetime(value)
+    if moment is None:
         return None
-    readings = {
-        parsed
-        for candidate in CANDIDATE_FORMATS
-        if (parsed := _parse(texts[0], candidate)) is not None
+    written = moment.strftime(fmt)
+    try:
+        # A stored value has no time zone unless its format writes one.
+        back = datetime.strptime(written, fmt)  # noqa: DTZ007
+    except ValueError:
+        return None
+    return written if back == moment.replace(tzinfo=None) else None
+
+
+def _has_time(fmt: str) -> bool:
+    return any(field in fmt for field in ("%H", "%M", "%S", "%f"))
+
+
+def _dremio_format(fmt: str) -> str | None:
+    """*fmt* in Dremio's format tokens, or None when it has no equivalent."""
+    tokens = {
+        "%Y": "YYYY",
+        "%m": "MM",
+        "%d": "DD",
+        "%H": "HH24",
+        "%M": "MI",
+        "%S": "SS",
+        "%b": "MON",
     }
-    if len(readings) != 1:
+    if any(field not in tokens for field in re.findall(r"%[A-Za-z]", fmt)):
         return None
-    return readings.pop().strftime(fmt)
+    if re.search(r"[A-Za-z]", re.sub(r"%[A-Za-z]", "", fmt)):
+        return None  # literal letters would need quoting
+    return re.sub(r"%[A-Za-z]", lambda m: tokens[m.group(0)], fmt)
 
 
-def to_date_sql(column: Any, fmt: str, dialect: str, numeric: bool = False) -> str:
-    """*column* converted to a date in *dialect*'s own syntax.
+def to_date_sql(
+    column: Any,
+    fmt: str,
+    dialect: str,
+    numeric: bool = False,
+    database: str | None = None,
+) -> str | None:
+    """*column* converted to a date (or a timestamp) in the database's own syntax.
 
-    ``STRPTIME(c, '%d.%m.%Y')`` for DuckDB, ``TO_DATE(c, 'DD.MM.YYYY')`` for
-    PostgreSQL, ``STR_TO_DATE`` for MySQL and so on: sqlglot writes the
-    function and translates the format. A numeric column is cast to text
-    first.
+    sqlglot writes the function and translates the format --
+    ``STRPTIME`` for DuckDB, ``TO_DATE(c, 'DD.MM.YYYY')`` for PostgreSQL,
+    ``STR_TO_DATE`` for MySQL -- and Dremio, which sqlglot does not cover
+    here, gets its own ``TO_DATE``/``TO_TIMESTAMP`` with Dremio's tokens. The
+    reading matches the one inference made:
+
+    - A numeric column is read as an integer, then as text padded to the
+      format's width, so ``950324.00`` and the ``000229`` stored as 229
+      read as inference read them.
+    - A two-digit year gets its century written out, the way inference
+      read it (69-99 as 19xx, 00-68 as 20xx), since databases differ:
+      Databricks reads ``yy`` as 20xx, PostgreSQL as the year nearest 2020.
 
     Args:
         column: The column as a sqlglot expression.
         fmt: The column's strftime format.
         dialect: sqlglot dialect.
         numeric: Whether the column is numeric.
+        database: The database type (``dremio``, ``postgresql`` ...).
 
     Returns:
-        The expression as SQL.
+        The expression as SQL, or None when the format has no equivalent.
     """
     from sqlglot import exp
 
-    value = column.copy()
+    text = column.copy()
     if numeric:
-        value = exp.cast(value, "VARCHAR")
-    return exp.StrToDate(this=value, format=exp.Literal.string(fmt)).sql(
-        dialect=dialect
-    )
+        text = exp.Pad(
+            this=exp.cast(exp.cast(text, "BIGINT"), "VARCHAR"),
+            expression=exp.Literal.number(len(example(fmt))),
+            fill_pattern=exp.Literal.string("0"),
+            is_left=True,
+        )
+    if "%y" in fmt:
+        # Where the two year digits stand: 77 occurs in no day or month.
+        offset = datetime(2077, 1, 2, tzinfo=UTC).strftime(fmt).index("77")
+        two_digits = exp.Substring(
+            this=text.copy(),
+            start=exp.Literal.number(offset + 1),
+            length=exp.Literal.number(2),
+        )
+        century = exp.Case(
+            ifs=[
+                exp.If(
+                    this=exp.LT(
+                        this=exp.cast(two_digits, "INT"),
+                        expression=exp.Literal.number(69),
+                    ),
+                    true=exp.Literal.string("20"),
+                )
+            ],
+            default=exp.Literal.string("19"),
+        )
+        pieces: list[exp.Expression] = []
+        if offset:
+            pieces.append(
+                exp.Substring(
+                    this=text.copy(),
+                    start=exp.Literal.number(1),
+                    length=exp.Literal.number(offset),
+                )
+            )
+        pieces += [
+            century,
+            exp.Substring(this=text.copy(), start=exp.Literal.number(offset + 1)),
+        ]
+        text = exp.Concat(expressions=pieces)
+        fmt = fmt.replace("%y", "%Y")
+    if database == "dremio":
+        tokens = _dremio_format(fmt)
+        if tokens is None:
+            return None
+        function = "TO_TIMESTAMP" if _has_time(fmt) else "TO_DATE"
+        return exp.Anonymous(
+            this=function, expressions=[text, exp.Literal.string(tokens)]
+        ).sql(dialect="dremio")
+    convert = exp.StrToTime if _has_time(fmt) else exp.StrToDate
+    return convert(this=text, format=exp.Literal.string(fmt)).sql(dialect=dialect)
