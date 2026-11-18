@@ -154,6 +154,7 @@ def _validator() -> OBQCValidator:
         ColumnInfo("invoice_ymd", "INTEGER", True, False, False, date_format="%Y%m%d"),
         ColumnInfo("shipped", "DATE", True, False, False),
         ColumnInfo("booked_on", "VARCHAR", True, False, False, date_format="%d.%m.%Y"),
+        ColumnInfo("issued_ymd", "INTEGER", True, False, False, date_format="%y%m%d"),
     ]
     table = TableInfo("orders", "main", columns, ["id"], [])
     generator = OntologyGenerator(base_uri="http://example.com/ontology/")
@@ -407,6 +408,75 @@ def test_an_equality_rewrite_that_would_drop_the_time_is_declined() -> None:
     )
     assert warning.suggestion == "Write dates in that form, like '01.06.2015'"
     assert rewrite("%y%m%d", "2075-01-01") is None  # would read back as 1975
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT id FROM orders WHERE issued_ymd < 10101",
+        "SELECT id FROM orders WHERE issued_ymd < 10101.00",
+        "SELECT id FROM orders WHERE 10101 > issued_ymd",
+        "SELECT id FROM orders WHERE issued_ymd < '10101'",
+    ],
+)
+def test_a_number_that_lost_its_leading_zero_is_still_a_date(sql: str) -> None:
+    # 10101 is 010101 in %y%m%d, 2001-01-01, yet as a number it is below
+    # every date of the 1990s.
+    (warning,) = _date_warnings(sql)
+    assert "do not sort in date order as numbers" in warning.message
+    assert "LPAD(" in warning.suggestion
+    assert "DATE '2001-01-01'" in warning.suggestion
+
+
+def test_numbers_in_the_columns_form_match_without_their_zeros() -> None:
+    for sql in (
+        "SELECT id FROM orders WHERE issued_ymd = 10101",
+        "SELECT id FROM orders WHERE issued_ymd = 950324.00",
+        "SELECT id FROM orders WHERE issued_ymd IN (10101, 950324)",
+    ):
+        assert _date_warnings(sql) == [], sql
+    (warning,) = _date_warnings("SELECT id FROM orders WHERE issued_ymd = '2001-01-01'")
+    assert warning.suggestion == "Write the value as 10101"
+    # Not a whole number: no date, and no business of this rule.
+    assert _date_warnings("SELECT id FROM orders WHERE issued_ymd = 10101.5") == []
+
+
+def test_padded_reads_a_number_as_the_conversion_does() -> None:
+    from src.date_formats import padded
+
+    assert padded("10101", "%y%m%d") == "010101"
+    assert padded("10101.00", "%y%m%d") == "010101"
+    assert padded(10101, "%Y%m%d") == "00010101"
+    assert padded("10101.5", "%y%m%d") == "10101.5"  # no whole number
+    assert padded("-10101", "%y%m%d") == "-10101"
+    assert padded("2015-06-01", "%y%m%d") == "2015-06-01"
+    assert padded("10101", "%d.%m.%y") == "10101"  # writes more than digits
+
+
+def test_a_number_bound_on_a_two_digit_year_column_is_warned_live() -> None:
+    import duckdb
+    from sqlglot import exp
+
+    from src.date_formats import to_date_sql
+
+    con = duckdb.connect()
+    con.execute(
+        "CREATE TABLE orders AS SELECT id, issued_ymd FROM (VALUES "
+        "(1, 950324), (2, 960101), (3, 971105), (4, 980615), (5, 991231)"
+        ") v(id, issued_ymd)"
+    )
+    sampled = [r[0] for r in con.execute("SELECT issued_ymd FROM orders").fetchall()]
+    assert infer_date_format(sampled) == "%y%m%d"
+
+    # As numbers, every one of them is >= 10101: the query finds none.
+    query = "SELECT count(*) FROM orders WHERE issued_ymd < 10101"
+    assert con.execute(query).fetchone() == (0,)
+    (warning,) = _date_warnings(query)
+    # Compared as dates, all five are before 2001-01-01.
+    converted = to_date_sql(exp.column("issued_ymd"), "%y%m%d", "duckdb", True)
+    fixed = f"SELECT count(*) FROM orders WHERE {converted} < DATE '2001-01-01'"
+    assert converted is not None and converted in warning.suggestion
+    assert con.execute(fixed).fetchone() == (5,)
 
 
 def test_a_decimal_column_converts_the_way_it_was_read() -> None:

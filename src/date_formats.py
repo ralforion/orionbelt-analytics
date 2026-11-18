@@ -25,7 +25,7 @@ samples the values.
 import re
 from collections.abc import Iterable
 from datetime import UTC, date, datetime, time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 #: Formats tried, most specific and most common first. The first one that
@@ -172,10 +172,43 @@ def example(fmt: str) -> str:
     return datetime(2015, 6, 1, 14, 30, 0, tzinfo=UTC).strftime(fmt)
 
 
+def read(fmt: str, value: Any) -> datetime | None:
+    """*value* read in *fmt*, if it is written in *fmt*; None otherwise."""
+    texts = _texts([value])
+    return _parse(texts[0], fmt) if texts else None
+
+
 def matches(fmt: str, value: Any) -> bool:
     """Whether *value*, as compared in a query, is written in *fmt*."""
-    texts = _texts([value])
-    return texts is not None and bool(texts) and _parse(texts[0], fmt) is not None
+    return read(fmt, value) is not None
+
+
+def padded(value: Any, fmt: str) -> Any:
+    """*value* as a number holding a date in *fmt*: whole, zero-padded to width.
+
+    A number keeps no leading zeros and may carry a zero fraction, so
+    2001-01-01 in ``%y%m%d`` -- ``010101`` -- is ``10101`` or ``10101.00`` in
+    a numeric column or literal. This reads it as :func:`to_date_sql` reads
+    a numeric column. A value that is no whole number, or a format that
+    writes more than digits, is returned as it was.
+
+    Args:
+        value: A number, or its text.
+        fmt: The column's format.
+
+    Returns:
+        The digits as the format writes them, or *value* unchanged.
+    """
+    written = example(fmt)
+    if not written.isdigit():
+        return value
+    try:
+        number = Decimal(str(value))
+    except InvalidOperation:
+        return value
+    if not number.is_finite() or number < 0 or number != number.to_integral_value():
+        return value
+    return str(int(number)).zfill(len(written))
 
 
 def as_datetime(value: Any) -> datetime | None:
@@ -278,8 +311,9 @@ def to_date_sql(
     reading matches the one inference made:
 
     - A numeric column is read as an integer, then as text padded to the
-      format's width, so ``950324.00`` and the ``000229`` stored as 229
-      read as inference read them.
+      format's width, as :func:`padded` reads a number: ``950324.00`` as
+      ``950324``, and ``10101``, an ``010101`` that lost its leading zero,
+      as 2001-01-01.
     - A two-digit year gets its century written out, the way inference
       read it (69-99 as 19xx, 00-68 as 20xx), since databases differ:
       Databricks reads ``yy`` as 20xx, PostgreSQL as the year nearest 2020.

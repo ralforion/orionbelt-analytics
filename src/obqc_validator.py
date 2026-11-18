@@ -2749,7 +2749,8 @@ class OBQCValidator:
         from .date_formats import (
             as_datetime,
             example,
-            matches,
+            padded,
+            read,
             rewrite,
             sorts_chronologically,
             sql_moment,
@@ -2781,14 +2782,22 @@ class OBQCValidator:
                 fmt = schema.date_format if schema else None
                 if schema is None or not fmt:
                     continue
-                value = literal.this
-                in_form = matches(fmt, value)
-                moment = as_datetime(value)
-                if not (in_form or moment or TEMPORAL_LITERAL.match(value)):
-                    continue  # not a date at all: not this rule's business
                 numeric = bool(
                     re.search(r"int|number|numeric|decimal", schema.sql_data_type, re.I)
                 )
+                value = literal.this
+                if numeric or literal.is_number:
+                    # A number keeps no leading zeros: 10101 against %y%m%d is
+                    # 010101, 2001-01-01 -- as the column's conversion reads it.
+                    value = padded(value, fmt)
+                # The column's own reading first: '01/02/2015' is ambiguous in
+                # general, but not in a column written %d/%m/%Y.
+                moment = read(fmt, value)
+                in_form = moment is not None
+                if moment is None:
+                    moment = as_datetime(value)
+                if not (in_form or moment or TEMPORAL_LITERAL.match(value)):
+                    continue  # not a date at all: not this rule's business
                 kind = "numbers" if numeric else "text"
                 name = f"{schema.table_name}.{schema.name}"
                 written_like = f"'{example(fmt)}' ({fmt})"
@@ -2819,7 +2828,12 @@ class OBQCValidator:
                     if rewritten is None:
                         suggestion = f"Write dates in that form, like '{example(fmt)}'"
                     else:
-                        written = rewritten if numeric else f"'{rewritten}'"
+                        # A number is written without the leading zeros.
+                        written = (
+                            str(int(rewritten))
+                            if numeric and rewritten.isdigit()
+                            else f"'{rewritten}'"
+                        )
                         suggestion = f"Write the value as {written}"
                 else:
                     continue
