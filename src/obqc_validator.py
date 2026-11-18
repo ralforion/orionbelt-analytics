@@ -44,6 +44,7 @@ class OBQCIssueType(Enum):
     AMBIGUOUS_COLUMN = "ambiguous_column"
     VIEW_NOT_JOINABLE = "view_not_joinable"
     INVALID_AGGREGATION = "invalid_aggregation"
+    DATE_FORMAT_MISMATCH = "date_format_mismatch"
 
 
 class OBQCSeverity(Enum):
@@ -362,6 +363,9 @@ class ColumnSchema:
     measure_type: str | None = None
     measure_basis: str | None = None
     measure_reason: str | None = None
+    # How a text or integer column writes its dates (strftime), from
+    # oba:dateFormat; None when the ontology does not say.
+    date_format: str | None = None
 
 
 @dataclass
@@ -792,6 +796,7 @@ class OBQCValidator:
                         measure_reason=self._get_literal(
                             subject, self._oba_ns.measureReason
                         ),
+                        date_format=self._get_literal(subject, self._oba_ns.dateFormat),
                     )
 
                     # Get XSD type from rdfs:range
@@ -1056,6 +1061,9 @@ class OBQCValidator:
         self._validate_columns(result)
         self._validate_joins(parsed, result, cte_refs)
         self._validate_type_compatibility(parsed, result)
+        self._validate_date_formats(
+            parsed, result, cte_refs, sqlglot_dialect, dialect.lower()
+        )
         self._validate_aggregation_context(parsed, result)
         self._validate_measure_aggregation(parsed, result, cte_refs)
         self._detect_fan_trap(result, blocking=not allow_fan_out)
@@ -2711,6 +2719,140 @@ class OBQCValidator:
                         message=f"Type mismatch: {self._type_name(left_type)} vs {self._type_name(right_type)}",
                         location="WHERE/ON clause",
                         suggestion="Ensure compared values have compatible types",
+                    )
+                )
+
+    def _validate_date_formats(
+        self,
+        parsed: exp.Expr,
+        result: OBQCResult,
+        cte_refs: set[int],
+        dialect: str = "postgres",
+        database: str | None = None,
+    ) -> None:
+        """Rule: dates compared with a column that stores them as text or numbers.
+
+        Two ways such a comparison runs and silently returns the wrong rows:
+
+        - The date is written another way than the column writes it:
+          ``order_day = '2015-06-01'`` against ``'20150601'`` matches nothing.
+          The suggestion is the value in the column's form, which matches
+          stored values exactly (a claimed format reproduces them).
+        - A range (``<``, ``>=``, ``BETWEEN``) on a column whose form does not
+          sort as dates, ``%d.%m.%Y`` say: ``'01.06.2015'`` sorts after
+          ``'31.05.2016'``. Rewriting the value cannot fix that, whatever form
+          it is in, so the suggestion converts the column to a date.
+
+        Reported as warnings, since the column's format was inferred from a
+        sample.
+        """
+        from .date_formats import (
+            as_datetime,
+            example,
+            padded,
+            read,
+            rewrite,
+            sorts_chronologically,
+            sql_moment,
+            to_date_sql,
+            whole_number,
+        )
+
+        ranges = (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Between)
+
+        def pairs(node: exp.Expr) -> list[tuple[exp.Expr, exp.Expr]]:
+            if isinstance(node, exp.Between):
+                low, high = node.args.get("low"), node.args.get("high")
+                return [(node.this, bound) for bound in (low, high) if bound]
+            if isinstance(node, exp.In):
+                return [(node.this, item) for item in node.expressions]
+            left, right = node.args.get("this"), node.args.get("expression")
+            return [(left, right), (right, left)] if left and right else []
+
+        seen: set[str] = set()
+        for node in parsed.find_all(*COMPARISON_TYPES, exp.Between, exp.In):
+            for column, literal in pairs(node):
+                if not isinstance(column, exp.Column) or not isinstance(
+                    literal, exp.Literal
+                ):
+                    continue
+                select = column.find_ancestor(exp.Select)
+                if select is None:
+                    continue
+                schema = self._resolve_column_schema(column, select, cte_refs)
+                fmt = schema.date_format if schema else None
+                if schema is None or not fmt:
+                    continue
+                numeric = bool(
+                    re.search(r"int|number|numeric|decimal", schema.sql_data_type, re.I)
+                )
+                value = literal.this
+                # A number keeps no leading zeros and may carry a zero
+                # fraction: 10101.00 against %y%m%d is 010101, 2001-01-01, as
+                # the column's conversion reads it.
+                number = whole_number(value) if numeric or literal.is_number else None
+                # The column's own reading first, padded and then as written:
+                # '01/02/2015' is ambiguous in general, but not in a column
+                # written %d/%m/%Y.
+                moment = read(fmt, padded(number, fmt)) if number else None
+                if moment is None:
+                    moment = read(fmt, value)
+                in_form = moment is not None
+                if moment is None:
+                    # Any other reading: 20240101 against %Y%m%d%H%M%S is no
+                    # timestamp padded with zeros, but the day 2024-01-01.
+                    moment = as_datetime(number or value)
+                if not (in_form or moment or TEMPORAL_LITERAL.match(value)):
+                    continue  # not a date at all: not this rule's business
+                kind = "numbers" if numeric else "text"
+                name = f"{schema.table_name}.{schema.name}"
+                written_like = f"'{example(fmt)}' ({fmt})"
+                if isinstance(node, ranges) and not sorts_chronologically(fmt):
+                    converted = to_date_sql(column, fmt, dialect, numeric, database)
+                    message = (
+                        f"{name} stores dates written like {written_like}, which "
+                        f"do not sort in date order as {kind}, so a range "
+                        "comparison on it silently returns the wrong rows."
+                    )
+                    # The bound keeps its time of day: noon is not midnight.
+                    bound = sql_moment(moment) if moment else "a DATE value"
+                    suggestion = (
+                        f"Compare dates: convert the column, {converted}, and "
+                        f"compare it with {bound}"
+                        if converted
+                        else f"Compare dates: convert the column to a date with "
+                        f"its format ({fmt}) and compare it with {bound}"
+                    )
+                elif not in_form:
+                    rewritten = rewrite(fmt, number or value)
+                    message = (
+                        f"{name} stores dates written like {written_like}, so "
+                        f"{literal.sql()} never matches it as a date: the "
+                        f"comparison runs but compares {kind} and can silently "
+                        "return the wrong rows."
+                    )
+                    if rewritten is None:
+                        suggestion = f"Write dates in that form, like '{example(fmt)}'"
+                    else:
+                        # A number is written without the leading zeros.
+                        written = (
+                            str(int(rewritten))
+                            if numeric and rewritten.isdigit()
+                            else f"'{rewritten}'"
+                        )
+                        suggestion = f"Write the value as {written}"
+                else:
+                    continue
+                if message in seen:
+                    continue
+                seen.add(message)
+                result.issues.append(
+                    OBQCIssue(
+                        issue_type=OBQCIssueType.DATE_FORMAT_MISMATCH,
+                        severity=OBQCSeverity.WARNING,
+                        message=message,
+                        location="WHERE/ON clause",
+                        suggestion=suggestion,
                     )
                 )
 

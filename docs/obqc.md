@@ -170,6 +170,23 @@ Columns qualified by a table alias are resolved to their table first, so aliased
 
 Comparisons within the same category are allowed (e.g. integer vs. decimal). Comparisons across categories produce a warning.
 
+### Date formats (WARNING)
+
+A date kept as text or as a number has a form of its own, and a query has to compare against that form. `discover_schema` samples text and integer columns with date-like names and records the format every sampled value is written in as `oba:dateFormat` (a `strftime` pattern such as `%Y%m%d`). It records one only when every value reads in it *and is written exactly as the format writes it* -- so a suggested value matches stored ones, and `2015-6-1` is not `%Y-%m-%d` -- and no other format reads the values as different dates, so `01/02/2015` (day-first or month-first?) gets none. A numeric value with a fraction rules the column out. OBQC then reports two things, in `=`, `<`, `>=`, `BETWEEN` and `IN`:
+
+```sql
+-- order_day is VARCHAR holding '20150601'
+-- WARNING: orders.order_day stores dates written like '20150601' (%Y%m%d), so '2015-06-01'
+--          never matches it as a date ... -- Write the value as '20150601'
+SELECT COUNT(*) FROM orders WHERE order_day >= '2015-06-01';
+```
+
+The comparison runs either way: as text, `'2015-06-01'` sorts before every `'2015…'` value, so `>=` returns rows from the wrong range and `=` returns none.
+
+The second is a range on a column whose form does not sort as dates, such as `%d.%m.%Y`: `'01.06.2015'` sorts after `'31.05.2016'`, so `booked_on >= '01.06.2015'` is wrong even with the value in the column's own form. Rewriting the value cannot fix that, so the suggestion converts the column, in the query's dialect: `CAST(STRPTIME(booked_on, '%d.%m.%Y') AS DATE) >= DATE '2015-06-01'` for DuckDB, `TO_DATE(booked_on, 'DD.MM.YYYY')` for PostgreSQL, and so on. Forms that run from the four-digit year down (`%Y%m%d`, `%Y-%m-%d %H:%M:%S`) sort as dates, and a range on them only needs the value in their form. The conversion reads values the way inference did: a numeric column as a zero-padded integer (`950324.00` and `10101` both work, and a number in the query is read the same way: `issued_ymd < 10101` on a `%y%m%d` column means before 2001-01-01 and is warned, since as numbers every 1990s date is above 10101), a two-digit year with its century written out (69–99 as 19xx, 00–68 as 20xx, since databases disagree: Databricks reads `yy` as 20xx), and on Dremio with its own `TO_DATE` and format codes. A bound with a time of day stays a `TIMESTAMP`, and a value is not rewritten into a form that would lose part of it, such as the time in `%d.%m.%Y`.
+
+Both are warnings rather than errors because the format was inferred from a sample. A literal already in the column's form, a native `DATE` column, and a literal that is no date at all are not reported. Set `OBA_INFER_DATE_FORMATS=false` to skip the sampling.
+
 ### Aggregation correctness (ERROR)
 
 When aggregate functions (`SUM`, `COUNT`, `AVG`, `MIN`, `MAX`) are used, OBQC checks that all non-aggregated columns in `SELECT` appear in `GROUP BY`. Grouping by an alias satisfies the check on the column it stands for.

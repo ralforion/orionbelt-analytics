@@ -139,6 +139,48 @@ async def reset_cache(
     }
 
 
+def _column_entry(col: Any) -> dict[str, Any]:
+    """A column as discover_schema and get_table_details report it."""
+    entry: dict[str, Any] = {
+        "name": col.name,
+        "data_type": col.data_type,
+        "is_nullable": col.is_nullable,
+        "is_primary_key": col.is_primary_key,
+        "is_foreign_key": col.is_foreign_key,
+        "foreign_key_table": col.foreign_key_table,
+        "foreign_key_column": col.foreign_key_column,
+        "comment": col.comment,
+    }
+    # How the column writes dates it stores as text or numbers, when sampling
+    # found one: a query must compare against that form ("20150601").
+    if getattr(col, "date_format", None):
+        entry["date_format"] = col.date_format
+    return entry
+
+
+#: Set to false to skip sampling date-like columns during discovery.
+INFER_DATE_FORMATS_VARIABLE = "OBA_INFER_DATE_FORMATS"
+
+
+async def _infer_date_formats(
+    db_manager: Any, tables: list[Any], schema_name: str | None
+) -> None:
+    """Record how date-like text and integer columns write their dates.
+
+    One small sample per table that has such a column (see
+    DatabaseManager.infer_date_formats). Never fails discovery.
+    """
+    if os.getenv(INFER_DATE_FORMATS_VARIABLE, "true").strip().lower() != "true":
+        return
+    try:
+        found = await run_db(db_manager.infer_date_formats, tables, schema_name)
+    except Exception as e:
+        logger.warning(f"Date-format inference skipped: {e}")
+        return
+    if found:
+        logger.info(f"Inferred the date format of {found} column(s)")
+
+
 async def discover_schema(
     ctx: Context,
     schema_name: str | None,
@@ -351,6 +393,7 @@ async def discover_schema(
                         }
                     )
 
+        await _infer_date_formats(db_manager, table_info_objects, schema_name)
         if not still_connected(session, pinned):
             return connection_changed_response(
                 services,
@@ -423,6 +466,9 @@ async def discover_schema(
     all_table_info = []
     table_info_objects = []
     analyzed = await run_db(db_manager.analyze_tables, tables, schema_name)
+    await _infer_date_formats(
+        db_manager, [t for t in analyzed.values() if t], schema_name
+    )
     for table_name in tables:
         table_info = analyzed.get(table_name)
         if table_info:
@@ -430,19 +476,7 @@ async def discover_schema(
             table_dict = {
                 "name": table_info.name,
                 "schema": table_info.schema,
-                "columns": [
-                    {
-                        "name": col.name,
-                        "data_type": col.data_type,
-                        "is_nullable": col.is_nullable,
-                        "is_primary_key": col.is_primary_key,
-                        "is_foreign_key": col.is_foreign_key,
-                        "foreign_key_table": col.foreign_key_table,
-                        "foreign_key_column": col.foreign_key_column,
-                        "comment": col.comment,
-                    }
-                    for col in table_info.columns
-                ],
+                "columns": [_column_entry(col) for col in table_info.columns],
                 "primary_keys": table_info.primary_keys,
                 "foreign_keys": table_info.foreign_keys,
                 "comment": table_info.comment,
@@ -735,19 +769,7 @@ async def get_table_details(
                     "success": True,
                     "name": t.name,
                     "schema": t.schema,
-                    "columns": [
-                        {
-                            "name": col.name,
-                            "data_type": col.data_type,
-                            "is_nullable": col.is_nullable,
-                            "is_primary_key": col.is_primary_key,
-                            "is_foreign_key": col.is_foreign_key,
-                            "foreign_key_table": col.foreign_key_table,
-                            "foreign_key_column": col.foreign_key_column,
-                            "comment": col.comment,
-                        }
-                        for col in t.columns
-                    ],
+                    "columns": [_column_entry(col) for col in t.columns],
                     "primary_keys": t.primary_keys,
                     "foreign_keys": t.foreign_keys,
                     "comment": t.comment,
@@ -759,6 +781,8 @@ async def get_table_details(
 
     try:
         table_info = await run_db(db_manager.analyze_table, table_name, schema_name)
+        if table_info:
+            await _infer_date_formats(db_manager, [table_info], schema_name)
 
         if not table_info:
             await notify_client(
@@ -777,19 +801,7 @@ async def get_table_details(
             "success": True,
             "name": table_info.name,
             "schema": table_info.schema,
-            "columns": [
-                {
-                    "name": col.name,
-                    "data_type": col.data_type,
-                    "is_nullable": col.is_nullable,
-                    "is_primary_key": col.is_primary_key,
-                    "is_foreign_key": col.is_foreign_key,
-                    "foreign_key_table": col.foreign_key_table,
-                    "foreign_key_column": col.foreign_key_column,
-                    "comment": col.comment,
-                }
-                for col in table_info.columns
-            ],
+            "columns": [_column_entry(col) for col in table_info.columns],
             "primary_keys": table_info.primary_keys,
             "foreign_keys": table_info.foreign_keys,
             "comment": table_info.comment,

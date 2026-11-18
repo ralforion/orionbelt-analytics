@@ -279,6 +279,7 @@ async def generate_ontology(
                             foreign_key_table=col_data.get("foreign_key_table"),
                             foreign_key_column=col_data.get("foreign_key_column"),
                             comment=col_data.get("comment"),
+                            date_format=col_data.get("date_format"),
                         )
                         columns.append(column)
 

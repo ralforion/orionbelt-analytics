@@ -349,6 +349,7 @@ class SchemaEmbedder:
         foreign_key_table: str | None = None,
         comment: str | None = None,
         schema: str | None = None,
+        date_format: str | None = None,
     ) -> SchemaElement:
         """Build a column's element and its text, without embedding it.
 
@@ -360,6 +361,9 @@ class SchemaEmbedder:
             is_foreign_key: Whether the column is a foreign key.
             foreign_key_table: Referenced table if a foreign key.
             comment: Optional column comment.
+            schema: The table's schema.
+            date_format: How the column writes dates it stores as text or
+                numbers (strftime), when discovery found one.
 
         Returns:
             SchemaElement whose ``embedding`` is still None.
@@ -380,6 +384,11 @@ class SchemaEmbedder:
         if is_foreign_key and foreign_key_table:
             text_parts.append(f"references {foreign_key_table}")
 
+        if date_format:
+            from ..date_formats import example
+
+            text_parts.append(f"date stored as {example(date_format)}")
+
         description = " ".join(text_parts)
 
         return SchemaElement(
@@ -397,6 +406,8 @@ class SchemaEmbedder:
                 "is_primary_key": is_primary_key,
                 "is_foreign_key": is_foreign_key,
                 "foreign_key_table": foreign_key_table,
+                # Only when found: vector store metadata takes no None.
+                **({"date_format": date_format} if date_format else {}),
             },
         )
 
@@ -825,6 +836,7 @@ class SchemaEmbedder:
                     foreign_key_table=col.get("foreign_key_table"),
                     comment=col.get("comment"),
                     schema=table.get("schema"),
+                    date_format=col.get("date_format"),
                 )
                 result["columns"].append(col_element)
 

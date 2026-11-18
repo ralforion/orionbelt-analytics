@@ -62,6 +62,18 @@ def _negated(condition: exp.Expression) -> exp.Expression:
     return exp.not_(exp.Paren(this=condition))
 
 
+def select_columns(
+    dialect: str, limit: int, columns: Sequence[str], *path: str | None
+) -> str:
+    """``SELECT <columns> FROM <path> LIMIT <limit>``, every name quoted."""
+    return (
+        exp.select(*(exp.column(quoted(c)) for c in columns), dialect=dialect)
+        .from_(quoted_path(*path), dialect=dialect)
+        .limit(int(limit), dialect=dialect)
+        .sql(dialect=dialect)
+    )
+
+
 def names_except(
     dialect: str,
     column: str,
