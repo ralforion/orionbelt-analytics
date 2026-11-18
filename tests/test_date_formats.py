@@ -520,6 +520,9 @@ def test_a_day_bound_on_a_timestamp_number_column_is_warned_live() -> None:
         "SELECT id FROM orders WHERE created_at >= 1e5000",
         "SELECT id FROM orders WHERE issued_ymd < '1e5000'",
         "SELECT id FROM orders WHERE order_day = 1e5000",
+        # Too long an exponent even to construct as a Decimal.
+        "SELECT id FROM orders WHERE issued_ymd < 1e9999999999999999999",
+        "SELECT id FROM orders WHERE issued_ymd > 1e-9999999999999999999",
     ],
 )
 def test_a_huge_number_is_no_date_and_no_error(sql: str) -> None:
@@ -534,6 +537,9 @@ def test_whole_number() -> None:
     assert whole_number(950324.0) == "950324"
     for odd in (
         "1e5000",  # rejected before expanding: no ValueError
+        "1e9999999999999999999",  # no InvalidOperation either
+        "1e-9999999999999999999",
+        "1e" + "9" * 5000,
         "1.5",
         "-10101",
         "NaN",

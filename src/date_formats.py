@@ -132,7 +132,8 @@ def whole_number(value: Any) -> str | None:
 
     ``10101.00`` and ``1.0101e4`` are ``10101``. None for a fraction, a
     sign, NaN or infinity, and for a number longer than any date
-    (``1e5000``).
+    (``1e5000``, or an exponent too long for :class:`~decimal.Decimal` to
+    hold, ``1e9999999999999999999``).
 
     Args:
         value: A number, or its text.
@@ -143,8 +144,11 @@ def whole_number(value: Any) -> str | None:
     text = str(value).strip()
     if not _NUMBER.fullmatch(text):
         return None
-    number = Decimal(text)
-    if number.adjusted() >= _MAX_DIGITS or number != number.to_integral_value():
+    try:
+        number = Decimal(text)
+        if number.adjusted() >= _MAX_DIGITS or number != number.to_integral_value():
+            return None
+    except ArithmeticError:  # decimal's InvalidOperation, Overflow ...
         return None
     return str(int(number))
 
