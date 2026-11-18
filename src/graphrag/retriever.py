@@ -797,6 +797,20 @@ class GraphRetriever:
 
         return warnings
 
+    def table_columns(self) -> dict[str, list[str]]:
+        """Each indexed table's identity and its column names.
+
+        Returns:
+            Identity to column names, in column order.
+        """
+        return {
+            identity: [
+                str(c.get("name") if isinstance(c, dict) else c)
+                for c in table.get("columns") or []
+            ]
+            for identity, table in self._tables_info.items()
+        }
+
     def get_table_metadata(self, table_name: str) -> dict[str, Any] | None:
         """
         Get full metadata for a table.

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from .community_detector import CommunityDetector
 from .embedder import MODEL_TFIDF, SchemaEmbedder
 from .identity import display_name, qualified
+from .near_copies import NEAR_COPIES_NOTE, CopyIndex, listed
 from .retriever import GraphRetriever
 
 if TYPE_CHECKING:
@@ -164,11 +165,27 @@ class GraphRAGManager:
 
         self.graph_retriever = GraphRetriever()
         self.community_detector: CommunityDetector | None = None
+        # The near-copy index of the indexed tables, with the retriever and
+        # the generation it was built from.
+        self._copies: tuple[GraphRetriever, int, CopyIndex] | None = None
 
         self._initialized = False
         self._schema_name: str | None = schema_name
         self._schema_names: list[str] = []
         self._connection_id: str = connection_id or "default"
+
+    def _copy_index(self) -> CopyIndex:
+        """The near-copy index of the indexed tables, rebuilt when they change."""
+        retriever = self.graph_retriever
+        # Read first: a change during the build leaves this generation stale,
+        # and the next call rebuilds.
+        generation = retriever.generation
+        cached = self._copies
+        if cached is not None and cached[0] is retriever and cached[1] == generation:
+            return cached[2]
+        index = CopyIndex(retriever.table_columns())
+        self._copies = (retriever, generation, index)
+        return index
 
     def initialize_from_schema(
         self,
@@ -855,6 +872,7 @@ class GraphRAGManager:
         }
 
         # Add primary tables with their metadata
+        copies = self._copy_index()
         for table_result in table_info["primary_tables"]:
             identity = table_result["element"]["id"]
             table_name = table_result["element"]["name"]
@@ -872,6 +890,19 @@ class GraphRAGManager:
                     entry["matched_business_name"] = table_result[
                         "matched_business_name"
                     ]
+                # A table found by search may be one of several copies; the
+                # model has to pick the one the question means.
+                if near := copies.of(identity):
+                    entry["near_copies"] = [
+                        {
+                            "table": copy.table,
+                            "shared_columns": copy.shared,
+                            "only_here": listed(copy.only_here),
+                            "only_there": listed(copy.only_there),
+                        }
+                        for copy in near
+                    ]
+                    context["near_copies_note"] = NEAR_COPIES_NOTE
                 context["relevant_tables"].append(entry)
 
         # Add relevant columns

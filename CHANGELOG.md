@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Near-copies of tables**: `discover_schema`, `get_table_details` and
+  `graphrag_query_context` name the tables that have nearly the same columns
+  as each table -- a current table and its archive, yearly or backup copies,
+  staging beside production -- with the columns only one side has. A query
+  on the wrong copy runs and returns plausible rows that are not the answer;
+  this lets the model check which one the question means. Decided from
+  column names alone (at least three shared, and half of all columns or four
+  fifths of the narrower table's), across every schema discovered on the
+  connection.
 - **Date formats of text and integer columns**: `discover_schema` samples
   date-like text and integer columns and records how they write dates (e.g.
   `%Y%m%d` for `'20150601'`) as `date_format` in table details and
