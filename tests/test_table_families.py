@@ -611,6 +611,13 @@ def test_a_cte_named_like_a_table_is_no_copy(copies: OBQCValidator) -> None:
         "ON r.BUILDING_ID = b.ID",
     ):
         assert len(_family_warnings(copies, sql)) == 1, sql
+    # Aliased, the table is r alone: OLD_ROOMS still names the CTE beside it.
+    both = (
+        cte + "SELECT OLD_ROOMS.ID FROM OLD_ROOMS "
+        "JOIN dw.OLD_ROOMS r ON r.ID = OLD_ROOMS.ID JOIN dw.NEW_BUILDING b "
+    )
+    assert _family_warnings(copies, both + "ON OLD_ROOMS.BUILDING_ID = b.ID") == []
+    assert len(_family_warnings(copies, both + "ON r.BUILDING_ID = b.ID")) == 1
     # A CTE's own join is read in its own SELECT, and warned there.
     inside = (
         "WITH stays AS (SELECT r.ID FROM OLD_ROOMS r "

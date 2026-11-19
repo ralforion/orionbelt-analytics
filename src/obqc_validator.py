@@ -1628,9 +1628,12 @@ class OBQCValidator:
             if not table.name or table.find_ancestor(exp.Select) is not select:
                 continue
             read = None if self._is_cte_reference(table, cte_refs) else table.name
-            references[table.name.lower()] = read
-            if table.alias:
-                references[table.alias.lower()] = read
+            # An aliased table is named by its alias alone (DuckDB, PostgreSQL
+            # and MySQL reject its bare name as a qualifier), so dw.old_rooms r
+            # leaves old_rooms to a CTE of that name. Two readings under one
+            # name leave a column's table unclear: neither.
+            name = (table.alias or table.name).lower()
+            references[name] = read if references.get(name, read) == read else None
         for derived in select.find_all(exp.Subquery):
             if derived.alias and derived.find_ancestor(exp.Select) is select:
                 references[derived.alias.lower()] = None
