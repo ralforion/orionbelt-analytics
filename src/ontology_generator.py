@@ -25,6 +25,7 @@ from .ontology_naming import (
     foreign_keys,
     relationship_local_name,
 )
+from .table_families import FamilyIndex, find_families, split_name
 
 # Minimum word frequency threshold (in Zipf scale ~1e-6).
 # Words below this are considered non-English / abbreviations.
@@ -457,7 +458,12 @@ class OntologyGenerator:
         # Quality tracking
         self.quality_report: OntologyQualityReport | None = None
         self._table_lookup: dict[str, TableInfo] = {}
+        # Upper-cased name after the prefix -> the tables of that name, for
+        # columns that name a prefixed table without its prefix.
+        self._base_lookup: dict[str, list[TableInfo]] = {}
         self._pk_columns: dict[str, list[str]] = {}  # table -> primary key columns
+        # Copies of one schema told apart by a name prefix (OLD_ / NEW_).
+        self._families = FamilyIndex([])
         # Suggestions the last apply_semantic_names() actually matched.
         self._applied_semantic_names: list[dict[str, str]] = []
 
@@ -847,6 +853,10 @@ class OntologyGenerator:
         # Add comprehensive database-specific annotations
         self.graph.add((table_uri, self.oba_ns.tableName, Literal(table_info.name)))
         self.graph.add((table_uri, self.oba_ns.schemaName, Literal(table_info.schema)))
+        # So OBQC can tell a join into another copy (OLD_ROOMS to NEW_BUILDING).
+        family = self._families.family(table_info.schema or "", table_info.name)
+        if family:
+            self.graph.add((table_uri, self.oba_ns.tableFamily, Literal(family)))
 
         if table_info.row_count is not None:
             self.graph.add(
@@ -1096,7 +1106,9 @@ class OntologyGenerator:
     def _build_table_lookup(self, tables_info: list[TableInfo]) -> None:
         """Build lookup structures for tables and their primary keys."""
         self._table_lookup = {}
+        self._base_lookup = {}
         self._pk_columns = {}
+        self._families = FamilyIndex.of(find_families(tables_info))
 
         for table in tables_info:
             # Store with multiple key variations for matching
@@ -1114,8 +1126,79 @@ class OntologyGenerator:
             # Store primary key columns
             self._pk_columns[table.name] = table.primary_keys
 
-    def _find_matching_table(self, name: str) -> TableInfo | None:
-        """Find a table that matches the given name (handles pluralization)."""
+        # Prefixed tables by the name after the prefix. A first word that is
+        # itself a table's name makes a compound name, not a prefix:
+        # order_items holds the items of orders, and item_id is no key of it.
+        # A family's prefix is one whatever else is named like it (NEW_ beside
+        # a NEWS table).
+        for table in tables_info:
+            split = split_name(table.name)
+            if split is not None and (
+                self._families.family(table.schema or "", table.name)
+                or not self._find_unprefixed_table(split[0])
+            ):
+                self._base_lookup.setdefault(split[1], []).append(table)
+
+    def _find_matching_table(
+        self, name: str, source: TableInfo | None = None
+    ) -> TableInfo | None:
+        """Find a table that matches the given name (handles pluralization).
+
+        A name no table has may still name a prefixed one without its prefix:
+        ``customer`` for ``DIM_CUSTOMER``, ``building`` for ``OLD_BUILDING``
+        (:meth:`_find_prefixed_table`), when *source* is given.
+        """
+        found = self._find_unprefixed_table(name)
+        if found is None and source is not None:
+            return self._find_prefixed_table(name, source)
+        return found
+
+    @staticmethod
+    def _name_forms(name: str) -> list[str]:
+        """*name* and its plural or singular forms, in the order tried."""
+        forms = [name, name + "s", name + "es"]
+        if name.endswith("ies") and len(name) > 3:
+            forms.append(name[:-3] + "y")
+        if name.endswith("es") and len(name) > 2:
+            forms.append(name[:-2])
+        if name.endswith("s") and len(name) > 1:
+            forms.append(name[:-1])
+        if name.endswith("y"):
+            forms.append(name[:-1] + "ies")
+        return forms
+
+    def _find_prefixed_table(self, name: str, source: TableInfo) -> TableInfo | None:
+        """The prefixed table *name* refers to from *source*, if one is clear.
+
+        The one with *source*'s own prefix first: from ``OLD_ROOMS``,
+        ``building_id`` means ``OLD_BUILDING``, not ``NEW_BUILDING``. Otherwise
+        the only table of that name after a prefix, so ``customer_id`` in
+        ``FACT_SALES`` finds ``DIM_CUSTOMER``. Several, none of them
+        *source*'s, are copies it cannot choose between: None. Never a table
+        of another copy of the schema (:meth:`FamilyIndex.crosses`).
+        """
+        own = split_name(source.name)
+        schema = source.schema or ""
+        for form in (f.upper() for f in self._name_forms(name.lower())):
+            # Never into another copy of the schema: what OBQC would warn of.
+            candidates = [
+                t
+                for t in self._base_lookup.get(form, [])
+                if t.name != source.name
+                and not self._families.crosses(schema, source.name, t.name)
+            ]
+            if not candidates:
+                continue
+            if own is not None:
+                for candidate in candidates:
+                    split = split_name(candidate.name)
+                    if split is not None and split[0] == own[0]:
+                        return candidate
+            return candidates[0] if len(candidates) == 1 else None
+        return None
+
+    def _find_unprefixed_table(self, name: str) -> TableInfo | None:
+        """A table whose whole name is *name*, or its plural or singular."""
         name_lower = name.lower()
 
         # Direct match
@@ -1249,8 +1332,9 @@ class OntologyGenerator:
                         idx = col_lower.find(target_name)
                         suffix = col_lower[idx + len(target_name) :]
                         if suffix in ["id", "_id", "sk", "_sk", ""]:
-                            target_pk = target_table.primary_keys
-                            target_column = target_pk[0] if target_pk else "id"
+                            target_column = self._key_column(col, target_table)
+                            if target_column is None:
+                                continue
 
                             confidence = self._calculate_fk_confidence(
                                 col, target_table, target_name
@@ -1284,31 +1368,49 @@ class OntologyGenerator:
                             continue
 
                         # Try to find a matching table
-                        matched_table = self._find_matching_table(potential_table)
+                        matched_table = self._find_matching_table(
+                            potential_table, table
+                        )
 
-                        if matched_table and matched_table.name != table.name:
-                            # Determine the likely target column (usually PK)
-                            target_pk = matched_table.primary_keys
-                            target_column = target_pk[0] if target_pk else "id"
+                        if matched_table is None or matched_table.name == table.name:
+                            continue
+                        # Determine the likely target column (usually PK)
+                        target_column = self._key_column(col, matched_table)
+                        if target_column is None:
+                            continue
 
-                            # Determine confidence level
-                            confidence = self._calculate_fk_confidence(
-                                col, matched_table, potential_table
+                        # Determine confidence level
+                        confidence = self._calculate_fk_confidence(
+                            col, matched_table, potential_table
+                        )
+
+                        inferred.append(
+                            InferredRelationship(
+                                source_table=table.name,
+                                column=col.name,
+                                target_table=matched_table.name,
+                                target_column=target_column,
+                                confidence=confidence,
+                                pattern_matched=pattern_name,
                             )
-
-                            inferred.append(
-                                InferredRelationship(
-                                    source_table=table.name,
-                                    column=col.name,
-                                    target_table=matched_table.name,
-                                    target_column=target_column,
-                                    confidence=confidence,
-                                    pattern_matched=pattern_name,
-                                )
-                            )
-                            break  # Only match first pattern
+                        )
+                        break  # Only match first pattern
 
         return inferred
+
+    @staticmethod
+    def _key_column(column: ColumnInfo, target: TableInfo) -> str | None:
+        """The column of *target* that foreign key *column* most likely references.
+
+        Its primary key; without one declared, as warehouses often have none,
+        its column of the same name (``customer_id`` in ``DIM_CUSTOMER``), else
+        its ``id``. None when it has neither: a relationship to a column that
+        does not exist joins nothing.
+        """
+        if target.primary_keys:
+            return target.primary_keys[0]
+        names = {c.name.lower(): c.name for c in target.columns}
+        return names.get(column.name.lower()) or names.get("id")
 
     def _calculate_fk_confidence(
         self, column: ColumnInfo, target_table: TableInfo, extracted_name: str
@@ -1326,10 +1428,14 @@ class OntologyGenerator:
             ) or col_type == target_pk_type:
                 score += 2
 
-        # Higher confidence if exact table name match (vs plural/singular variation)
-        if extracted_name.lower() == target_table.name.lower():
+        # Higher confidence if exact table name match (vs plural/singular
+        # variation), the name after a prefix counting as the name: building
+        # names OLD_BUILDING as exactly as it names BUILDING.
+        split = split_name(target_table.name)
+        names = {target_table.name.lower()} | ({split[1].lower()} if split else set())
+        if extracted_name.lower() in names:
             score += 2
-        elif extracted_name.lower() + "s" == target_table.name.lower():
+        elif extracted_name.lower() + "s" in names:
             score += 1
 
         # Higher confidence for common FK naming patterns

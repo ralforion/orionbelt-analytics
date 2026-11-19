@@ -157,6 +157,19 @@ Join condition does not match any declared foreign key relationship in the ontol
 SELECT * FROM customers JOIN orders ON customers.name = orders.note;
 ```
 
+#### Joins into another copy (WARNING)
+
+A database may keep its schema several times under table-name prefixes, a migration's `OLD_` and `NEW_` tables (see [Table families](tools-reference.md#table-families); the ontology records them as `oba:tableFamily`). Joining one copy's table to another copy's runs, and the column names match a relationship of the other copy, so the check above passes it -- but the rows are of two datasets:
+
+```sql
+-- WARNING: OLD_ROOMS (family OLD) is joined to NEW_BUILDING (family NEW), a table of
+-- another copy of the schema: the join runs, but pairs rows of two datasets
+-- Suggested: Join within one copy: OLD_ROOMS with OLD_BUILDING or NEW_ROOMS with NEW_BUILDING
+SELECT b.name, COUNT(*) FROM old_rooms r JOIN new_building b ON r.building_id = b.id GROUP BY b.name;
+```
+
+Warned when either table's family has its own copy of the other table, for `JOIN ... ON` and for the comma form joined in `WHERE`. Not warned: two copies of one table joined to compare them (`OLD_ROOMS` with `NEW_ROOMS`), a table in no family (a shared `DIM_DATE`), and tables of two families neither of which has the other's table.
+
 ### Type compatibility (WARNING)
 
 Checks `WHERE` and `ON` clause comparisons for type mismatches. Types are inferred from the ontology's XSD type mappings (`RDFS.range`) and categorized as numeric, string, temporal, or boolean.

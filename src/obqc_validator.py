@@ -27,6 +27,7 @@ from .relationship_validation import (
     is_composite_key,
     why_not_checkable,
 )
+from .table_families import FamilyIndex
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class OBQCIssueType(Enum):
     VIEW_NOT_JOINABLE = "view_not_joinable"
     INVALID_AGGREGATION = "invalid_aggregation"
     DATE_FORMAT_MISMATCH = "date_format_mismatch"
+    CROSS_FAMILY_JOIN = "cross_family_join"
 
 
 class OBQCSeverity(Enum):
@@ -378,6 +380,9 @@ class TableSchema:
     primary_keys: list[str] = field(default_factory=list)
     # False when the ontology gave no oba:schemaName and "public" was assumed.
     schema_declared: bool = True
+    # The table-name prefix of the copy of a schema this table belongs to
+    # (OLD for OLD_ROOMS beside NEW_ROOMS), from oba:tableFamily.
+    family: str | None = None
 
 
 # Column-to-column equalities of a join condition: pairs of (table, column).
@@ -755,6 +760,7 @@ class OBQCValidator:
                     name=table_name,
                     schema_name=declared_schema or "public",
                     schema_declared=bool(declared_schema),
+                    family=self._get_literal(subject, self._oba_ns.tableFamily),
                 )
 
                 # Get primary keys
@@ -1060,6 +1066,7 @@ class OBQCValidator:
         self._validate_tables(result)
         self._validate_columns(result)
         self._validate_joins(parsed, result, cte_refs)
+        self._validate_table_families(result)
         self._validate_type_compatibility(parsed, result)
         self._validate_date_formats(
             parsed, result, cte_refs, sqlglot_dialect, dialect.lower()
@@ -2642,6 +2649,74 @@ class OBQCValidator:
                         related_entities=[join_table] if join_table else [],
                     )
                 )
+
+    def _validate_table_families(self, result: OBQCResult) -> None:
+        """Rule: a join stays within one copy of a schema.
+
+        A database may keep a schema several times under name prefixes, a
+        migration's OLD_ and NEW_ tables (oba:tableFamily). OLD_ROOMS joined
+        to NEW_BUILDING on building_id runs, and pairs old rooms with new
+        buildings: ids renumbered in the migration match the wrong one. Warned
+        when either table's family has its own copy of the other table
+        (:meth:`FamilyIndex.crosses`). Two copies of one table joined
+        (OLD_ROOMS with NEW_ROOMS) compare the copies on purpose and are left
+        alone, and so are tables of two families neither of which has the
+        other's table.
+        """
+        if self._schema_cache is None:
+            return
+        tables = self._schema_cache.tables
+        families = FamilyIndex(
+            (t.schema_name, t.name, t.family) for t in tables.values() if t.family
+        )
+        if not families:
+            return
+        reported: set[frozenset[str]] = set()
+        for join_info in result.parsed_joins:
+            joined = join_info.get("table")
+            if not joined or join_info.get("table_is_cte"):
+                continue
+            for other in join_info.get("on_tables") or []:
+                pair = frozenset((joined.lower(), str(other).lower()))
+                if len(pair) < 2 or pair in reported:
+                    continue
+                issue = self._cross_family_join(families, tables, str(other), joined)
+                if issue is not None:
+                    reported.add(pair)
+                    result.issues.append(issue)
+
+    @staticmethod
+    def _cross_family_join(
+        families: FamilyIndex, tables: dict[str, TableSchema], left: str, right: str
+    ) -> OBQCIssue | None:
+        """The warning for joining *left* to *right*, if they are two copies' tables."""
+        a = tables.get(left.lower())
+        b = tables.get(right.lower())
+        if a is None or b is None or a.schema_name.lower() != b.schema_name.lower():
+            return None
+        copies = families.own_copies(a.schema_name, a.name, b.name)
+        if copies is None or not any(copies):
+            return None
+        own_b, own_a = copies
+        instead = []
+        if own_b is not None:
+            instead.append(f"{a.name} with {own_b}")
+        if own_a is not None:
+            instead.append(f"{own_a} with {b.name}")
+        family_a = families.family(a.schema_name, a.name)
+        family_b = families.family(b.schema_name, b.name)
+        return OBQCIssue(
+            issue_type=OBQCIssueType.CROSS_FAMILY_JOIN,
+            severity=OBQCSeverity.WARNING,
+            message=(
+                f"{a.name} (family {family_a}) is joined to {b.name} (family "
+                f"{family_b}), a table of another copy of the schema: the join "
+                "runs, but pairs rows of two datasets"
+            ),
+            location=f"JOIN {right}",
+            suggestion=f"Join within one copy: {' or '.join(instead)}",
+            related_entities=[a.name, b.name, *(t for t in (own_b, own_a) if t)],
+        )
 
     def _is_valid_join_condition(
         self, join_table: str | None, on_condition: str, all_tables: list[str]

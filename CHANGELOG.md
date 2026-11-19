@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Table families**: a schema kept several times in one database under
+  table-name prefixes -- a migration's `OLD_` and `NEW_` tables, regional
+  `EU_` and `US_` ones -- is recognised from names, columns and declared
+  keys: at least three tables of one name under two prefixes with nearly the
+  same columns, keys declared in both copies counting too. `discover_schema`
+  lists the families, the ontology records each member's `oba:tableFamily`,
+  and OBQC warns when a join crosses into another family's copy of a table:
+  `OLD_ROOMS JOIN NEW_BUILDING ON building_id` runs and pairs rows of two
+  datasets. The idea follows NVIDIA Auto Ontology's term families.
 - **Near-copies of tables**: `discover_schema`, `get_table_details` and
   `graphrag_query_context` name the tables that have nearly the same columns
   as each table -- a current table and its archive, yearly or backup copies,
@@ -42,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scans both tables.
 
 ### Changed
+- **Relationships are inferred for prefixed tables**: inference from column
+  names now finds a table behind a prefix: `customer_id` in `FACT_SALES`
+  names `DIM_CUSTOMER`, and `building_id` in `OLD_ROOMS` names
+  `OLD_BUILDING`, never `NEW_BUILDING`. A warehouse whose tables all carry a
+  prefix got no inferred relationships before. Between copies it cannot
+  choose, and for a compound name (`order_items` is no `items` table), it
+  infers none.
 - **Driver SQL is built with sqlglot, not string templates**: every driver's
   own metadata and sample queries (schema lists, BigQuery and Dremio
   `INFORMATION_SCHEMA` lookups, Snowflake and Databricks `SHOW` statements,
@@ -50,6 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schema or table name containing a quote now stays a name. The user's own
   query, which drivers wrap for their syntax check, is still text, guarded by
   the read-only check.
+
+### Fixed
+- An inferred relationship to a table without a declared primary key pointed
+  at an `id` column whether the table had one or not. It now points at the
+  table's column of the foreign key's name (`customer_id`), else its `id`,
+  and is not inferred when the table has neither.
 
 ### Security
 - **DuckDB reads files only where allowed**: a local DuckDB connection now

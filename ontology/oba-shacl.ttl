@@ -84,6 +84,13 @@ oba:TableShape a sh:NodeShape ;
         sh:datatype xsd:integer ;
         sh:name "row count"
     ] ;
+    sh:property [
+        sh:path oba:tableFamily ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "table family" ;
+        sh:message "oba:tableFamily, when present, is one table-name prefix (xsd:string)."
+    ] ;
 
     # Semantic enrichment (optional)
     sh:property [
