@@ -1122,6 +1122,10 @@ class OBQCValidator:
         """
         for table in parsed.find_all(exp.Table):
             name = table.name
+            # A CTE is only ever named bare: dw.old_rooms is the schema's table
+            # beside a WITH old_rooms, in every dialect.
+            if table.db or table.catalog:
+                continue
             if name and name.lower() in self._visible_ctes(table):
                 result.cte_names.add(name.lower())
                 cte_refs.add(id(table))

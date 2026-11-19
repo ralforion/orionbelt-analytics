@@ -2181,6 +2181,19 @@ class TestCommonTableExpressions(unittest.TestCase):
             [],
         )
 
+    def test_a_qualified_name_reads_the_table_beside_a_cte(self):
+        """A CTE is only ever named bare; public.users is the table.
+
+        Checked against DuckDB, which reads the schema's table for the
+        qualified name and the CTE for the bare one.
+        """
+        errors = self._errors(
+            "WITH users AS (SELECT id AS uid FROM orders) "
+            "SELECT u.nonexistent FROM public.users u"
+        )
+
+        self.assertTrue(any("nonexistent" in e for e in errors), errors)
+
     def test_cte_declared_inside_a_subquery_is_exempt_there(self):
         self.assertEqual(
             self._errors(

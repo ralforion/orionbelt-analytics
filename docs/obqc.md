@@ -75,6 +75,8 @@ WITH orders AS (SELECT nonexistent FROM orders) SELECT id FROM orders;
 WITH a AS (SELECT id FROM b), b AS (SELECT id FROM orders) SELECT id FROM a;
 ```
 
+A CTE is only ever named bare, so a name qualified by its schema is the real table even beside a CTE of that name: in `WITH users AS (...) SELECT u.nonexistent FROM public.users u`, the column is checked against `users`.
+
 ### Column existence (ERROR)
 
 Checks that every column reference resolves to an actual column in its table.
@@ -168,7 +170,7 @@ A database may keep its schema several times under table-name prefixes, a migrat
 SELECT b.name, COUNT(*) FROM old_rooms r JOIN new_building b ON r.building_id = b.id GROUP BY b.name;
 ```
 
-Warned when either table's family has its own copy of the other table, for `JOIN ... ON` and for the comma form joined in `WHERE`. The tables a join pairs are those a test in its condition compares columns of, under `AND` or `OR` alike: a filter in `ON` (`AND o.floor > 0`) joins nothing. A CTE or a derived table is no table of the schema, named like one or not: `WITH old_rooms AS (SELECT * FROM new_rooms)` reads new rooms. Not warned: two copies of one table joined to compare them (`OLD_ROOMS` with `NEW_ROOMS`), a table in no family (a shared `DIM_DATE`), and tables of two families neither of which has the other's table.
+Warned when either table's family has its own copy of the other table, for `JOIN ... ON` and for the comma form joined in `WHERE`. The tables a join pairs are those a test in its condition compares columns of, under `AND` or `OR` alike: a filter in `ON` (`AND o.floor > 0`) joins nothing. A CTE or a derived table is no table of the schema, named like one or not: `WITH old_rooms AS (SELECT * FROM new_rooms)` reads new rooms, while `dw.old_rooms` beside it is the old table. Not warned: two copies of one table joined to compare them (`OLD_ROOMS` with `NEW_ROOMS`), a table in no family (a shared `DIM_DATE`), and tables of two families neither of which has the other's table.
 
 ### Type compatibility (WARNING)
 

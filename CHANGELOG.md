@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at an `id` column whether the table had one or not. It now points at the
   table's column of the foreign key's name (`customer_id`), else its `id`,
   and is not inferred when the table has neither.
+- OBQC took a table qualified by its schema (`public.users`) for a CTE of
+  the same bare name in scope, and checked none of its columns. A CTE is
+  only ever named bare, so the qualified name is now checked as the table.
 
 ### Security
 - **DuckDB reads files only where allowed**: a local DuckDB connection now
