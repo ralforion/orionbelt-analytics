@@ -8,7 +8,11 @@ crosses into another copy.
 """
 
 import json
+import random
 import re
+import tracemalloc
+from collections import defaultdict
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -19,12 +23,21 @@ import src.main as main_module
 import src.server_state as state_module
 from src.database_manager import ColumnInfo, TableInfo
 from src.handlers import connection as connection_handler
-from src.handlers.schema import _family_groups
+from src.handlers.schema import MAX_LISTED_FAMILIES, _family_groups
 from src.main import mcp
 from src.obqc_validator import OBQCIssueType, OBQCValidator
 from src.ontology_generator import OntologyGenerator
 from src.server_state import ServerState
-from src.table_families import FamilyIndex, find_families, split_name
+from src.table_families import (
+    _HISTORY,
+    FamilyIndex,
+    _confirm,
+    _signatures,
+    _Table,
+    _without,
+    find_families,
+    split_name,
+)
 
 SHAPES = {
     "BUILDING": ["ID", "NAME", "CITY"],
@@ -176,6 +189,138 @@ def test_a_star_schema_is_no_family() -> None:
     assert find_families(star) == []
 
 
+def _peak(work: Any) -> tuple[Any, int]:
+    """*work*'s result, and the memory it held at its peak, in bytes."""
+    tracemalloc.start()
+    try:
+        before = tracemalloc.get_traced_memory()[0]
+        tracemalloc.reset_peak()
+        result = work()
+        return result, tracemalloc.get_traced_memory()[1] - before
+    finally:
+        tracemalloc.stop()
+
+
+def test_prefixes_sharing_one_name_are_never_paired() -> None:
+    # TENANT0_EVENTS ... TENANT999_EVENTS: 499,500 pairs of prefixes that
+    # share one name, none of which can reach the evidence. Keeping them took
+    # 128 MiB.
+    tables = [_table(f"TENANT{i}_EVENTS", ["ID", "KIND", "AT"]) for i in range(1000)]
+    groups, peak = _peak(lambda: find_families(tables))
+    assert groups == []
+    assert peak < 4 * 2**20, f"held {peak / 2**20:.0f} MiB"
+
+
+def test_identical_tenants_are_compared_once() -> None:
+    # A family per tenant: one class of identical prefixes, not 499,500 pairs.
+    shapes = {k: SHAPES[k] for k in ("BUILDING", "ROOMS", "GUESTS")}
+    tables = [
+        _table(f"T{i}_{base}", cols)
+        for i in range(1000)
+        for base, cols in shapes.items()
+    ]
+    groups, peak = _peak(lambda: find_families(tables))
+    (group,) = groups
+    assert len(group.families) == 1000
+    assert group.copied == ("BUILDING", "GUESTS", "ROOMS")
+    assert peak < 16 * 2**20, f"held {peak / 2**20:.0f} MiB"
+
+
+def _every_pair(tables: list[TableInfo]) -> dict[frozenset[str], set[str]]:
+    """The families by comparing every pair of prefixes: the rule, slowly."""
+    prefixed: dict[str, dict[str, _Table]] = defaultdict(dict)
+    kept: dict[str, _Table] = {}
+    for info in tables:
+        split = split_name(info.name)
+        assert split is not None
+        prefix, base = split
+        if base not in prefixed[prefix]:
+            table = _Table(
+                info.name,
+                prefix,
+                base,
+                frozenset(_without(c.name, prefix) for c in info.columns),
+                base.rsplit("_", 1)[-1] in _HISTORY,
+            )
+            prefixed[prefix][base] = kept[info.name.lower()] = table
+    signatures = _signatures("dw", tables, kept)
+    parent = {p: p for p in prefixed}
+
+    def root(p: str) -> str:
+        while parent[p] != p:
+            p = parent[p]
+        return p
+
+    copied: dict[str, set[str]] = defaultdict(set)
+    for p, q in combinations(sorted(prefixed), 2):
+        shared = sorted(prefixed[p].keys() & prefixed[q].keys())
+        copies = _confirm(
+            [(prefixed[p][b], prefixed[q][b]) for b in shared],
+            signatures[p] & signatures[q],
+        )
+        if copies:
+            parent[root(q)] = root(p)
+            copied[p].update(copies)
+    groups: dict[str, set[str]] = defaultdict(set)
+    for p in prefixed:
+        if any(root(p) == root(o) for o in prefixed if o != p):
+            groups[root(p)].add(p)
+    return {
+        frozenset(members): set().union(*(copied[m] for m in members))
+        for members in groups.values()
+    }
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_the_shortcuts_find_what_comparing_every_pair_finds(seed: int) -> None:
+    # Pruning prefixes, classes of identical ones and counting shared names
+    # must change nothing: random catalogs with copies, edits, history tables,
+    # mirrored keys and prefixes repeated exactly.
+    rng = random.Random(seed)
+    bases = {f"B{i}": [f"C{i}_{j}" for j in range(rng.randint(2, 5))] for i in range(6)}
+    bases["B0_HIST"] = bases["B0"]
+    links = [("B1", "B0"), ("B2", "B1"), ("B3", "B0")]
+    shapes: list[list[TableInfo]] = []
+    for p in range(9):
+        prefix = f"P{p}"
+        if shapes and rng.random() < 0.25:  # the same tables as another prefix
+            source = rng.choice(shapes)
+            old = split_name(source[0].name)
+            assert old is not None
+            tables = [
+                _table(
+                    t.name.replace(old[0], prefix, 1),
+                    [c.name for c in t.columns],
+                    fks=[
+                        _fk(
+                            f["column"],
+                            f["referenced_table"].replace(old[0], prefix, 1),
+                        )
+                        for f in t.foreign_keys
+                    ],
+                )
+                for t in source
+            ]
+        else:
+            tables = []
+            held = [b for b in bases if rng.random() < 0.7]
+            for base in held:
+                cols = ["ID"] + [c for c in bases[base] if rng.random() > 0.15]
+                cols += [f"X{rng.randint(0, 3)}"] if rng.random() < 0.3 else []
+                fks = [
+                    _fk(f"{to}_ID", f"{prefix}_{to}")
+                    for frm, to in links
+                    if frm == base and to in held and rng.random() < 0.6
+                ]
+                tables.append(_table(f"{prefix}_{base}", cols, fks=fks))
+        if tables:
+            shapes.append(tables)
+    catalog = [t for tables in shapes for t in tables]
+    expected = _every_pair(catalog)
+    found = {frozenset(g.families): set(g.copied) for g in find_families(catalog)}
+    assert found == expected
+
+
 # --- Relationships ----------------------------------------------------------------
 
 
@@ -215,6 +360,17 @@ def test_a_fact_table_finds_its_dimensions() -> None:
         if r.target_table == "DIM_CUSTOMER"
     ]
     assert high.confidence == "high"  # customer names DIM_CUSTOMER exactly
+
+
+def test_every_name_form_is_looked_at_before_another_prefix() -> None:
+    # customer_id is spelled like US_CUSTOMER, but EU_ORDERS has its own
+    # EU_CUSTOMERS.
+    tables = [
+        _table("EU_ORDERS", ["ID", "CUSTOMER_ID"]),
+        _table("EU_CUSTOMERS", ["ID", "NAME"]),
+        _table("US_CUSTOMER", ["ID", "NAME"]),
+    ]
+    assert _inferred(tables) == {"EU_ORDERS.CUSTOMER_ID -> EU_CUSTOMERS.ID"}
 
 
 def test_copies_it_cannot_choose_between_are_no_relationship() -> None:
@@ -383,6 +539,23 @@ def test_joins_that_stay_in_a_copy_are_not_warned(
     assert _family_warnings(copies, sql) == []
 
 
+def test_a_filter_in_on_joins_nothing(copies: OBQCValidator) -> None:
+    # o.FLOOR > 0 names OLD_ROOMS in NEW_BUILDING's ON without joining it:
+    # the same query with the filter in WHERE.
+    sql = (
+        "SELECT o.ID FROM OLD_ROOMS o JOIN NEW_ROOMS n ON o.ID = n.ID "
+        "JOIN NEW_BUILDING b ON n.BUILDING_ID = b.ID AND o.FLOOR > 0"
+    )
+    assert _family_warnings(copies, sql) == []
+    # An equality that does join across, written in that ON, still counts.
+    crossing = (
+        "SELECT o.ID FROM OLD_ROOMS o JOIN NEW_ROOMS n ON o.ID = n.ID "
+        "JOIN NEW_BUILDING b ON n.BUILDING_ID = b.ID AND o.BUILDING_ID = b.ID"
+    )
+    (warning,) = _family_warnings(copies, crossing)
+    assert "OLD_ROOMS (family OLD)" in warning.message
+
+
 def test_an_ontology_without_families_warns_of_none() -> None:
     generator = _ontology(_copies("OLD", "NEW"))
     for triple in list(
@@ -413,6 +586,13 @@ def test_discovery_lists_the_families() -> None:
     }
     assert "table_families_note" in section
     assert _family_groups(_copies("OLD")) == {}
+
+
+def test_discovery_lists_a_few_families_and_counts_the_rest() -> None:
+    tables = [_table(f"T{i:02d}_{b}", c) for i in range(25) for b, c in SHAPES.items()]
+    (group,) = _family_groups(tables)["table_families"]
+    assert list(group["families"]) == [f"T{i:02d}" for i in range(MAX_LISTED_FAMILIES)]
+    assert group["more_families"] == 25 - MAX_LISTED_FAMILIES
 
 
 @pytest.fixture

@@ -242,24 +242,34 @@ def _near_copy_pairs(catalog: dict[str, Any], tables: list[Any]) -> dict[str, An
     return section
 
 
+#: Families a discover_schema response lists per group; the rest are counted.
+MAX_LISTED_FAMILIES = 10
+
+
 def _family_groups(tables: list[Any]) -> dict[str, Any]:
-    """The table families among *tables*, for discover_schema; empty if none."""
+    """The table families among *tables*, for discover_schema; empty if none.
+
+    A multi-tenant schema is a family per tenant: the first few are listed,
+    the rest counted.
+    """
     groups = find_families(tables)
     if not groups:
         return {}
-    return {
-        "table_families": [
-            {
-                "schema": group.schema,
-                "families": {
-                    prefix: listed(names) for prefix, names in group.families.items()
-                },
-                "copied_tables": listed(group.copied),
-            }
-            for group in groups
-        ],
-        "table_families_note": TABLE_FAMILIES_NOTE,
-    }
+    entries = []
+    for group in groups:
+        families = list(group.families.items())
+        entry: dict[str, Any] = {
+            "schema": group.schema,
+            "families": {
+                prefix: listed(names)
+                for prefix, names in families[:MAX_LISTED_FAMILIES]
+            },
+            "copied_tables": listed(group.copied),
+        }
+        if len(families) > MAX_LISTED_FAMILIES:
+            entry["more_families"] = len(families) - MAX_LISTED_FAMILIES
+        entries.append(entry)
+    return {"table_families": entries, "table_families_note": TABLE_FAMILIES_NOTE}
 
 
 async def _table_families(tables: list[Any]) -> dict[str, Any]:

@@ -186,7 +186,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 - `relationships` -- foreign key relationships between tables
 - `fan_trap_warnings` -- tables with multiple FK relationships (potential data multiplication risk)
 - `near_copies` -- pairs of tables with nearly the same columns, such as a current table and its archive, with the columns only one side has and the row counts when known (see [Near-copies](#near-copies)); closest first, at most 25, with `near_copies_omitted` counting the rest
-- `table_families` -- copies of the schema kept under table-name prefixes (`OLD_`/`NEW_`, `EU_`/`US_`): each family's tables and the names copied between them, with `table_families_note` (see [Table families](#table-families))
+- `table_families` -- copies of the schema kept under table-name prefixes (`OLD_`/`NEW_`, `EU_`/`US_`): each family's tables and the names copied between them, at most 10 families per group with `more_families` counting the rest, and `table_families_note` (see [Table families](#table-families))
 - `schema_file` -- path to saved schema JSON (full mode)
 - `r2rml_file` -- path to generated R2RML mapping (full mode)
 - `next_step` -- recommended next tool to call

@@ -2676,14 +2676,35 @@ class OBQCValidator:
             joined = join_info.get("table")
             if not joined or join_info.get("table_is_cte"):
                 continue
-            for other in join_info.get("on_tables") or []:
-                pair = frozenset((joined.lower(), str(other).lower()))
+            for left, right in self._joined_pairs(join_info, joined):
+                pair = frozenset((left.lower(), right.lower()))
                 if len(pair) < 2 or pair in reported:
                     continue
-                issue = self._cross_family_join(families, tables, str(other), joined)
+                issue = self._cross_family_join(families, tables, left, right)
                 if issue is not None:
                     reported.add(pair)
                     result.issues.append(issue)
+
+    @staticmethod
+    def _joined_pairs(join_info: dict[str, Any], joined: str) -> list[tuple[str, str]]:
+        """The pairs of tables a join's condition equates columns of.
+
+        Only equalities joining two tables' columns, holding for every row: a
+        filter in ON (``AND o.floor > 0``) names a table without joining it.
+        The comma form's are the WHERE equalities tying the joined table to
+        another. Each pair as ``(other table, joined table)`` when the joined
+        table is in it.
+        """
+        if join_info.get("on_condition"):
+            pairs = []
+            for comparison in join_info.get("on_comparisons") or ():
+                names = sorted({table for table, _ in comparison})
+                if len(names) != 2:
+                    continue
+                a, b = names
+                pairs.append((b, a) if a == joined.lower() else (a, b))
+            return pairs
+        return [(str(other), joined) for other in join_info.get("on_tables") or []]
 
     @staticmethod
     def _cross_family_join(

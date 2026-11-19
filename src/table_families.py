@@ -34,7 +34,6 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from itertools import combinations
 from typing import Any
 
 #: How alike the columns of two tables of one name must be to be copies.
@@ -197,12 +196,15 @@ def _schema_families(schema: str, infos: list[Any]) -> list[FamilyGroup]:
     # prefix -> name after it -> table; the first of a name wins.
     prefixed: dict[str, dict[str, _Table]] = defaultdict(dict)
     members: dict[str, list[str]] = defaultdict(list)
-    by_name: dict[str, _Table] = {}
+    kept: dict[str, _Table] = {}
     for info in infos:
         split = split_name(info.name)
         if split is None:
             continue
         prefix, base = split
+        members[prefix].append(info.name)
+        if base in prefixed[prefix]:
+            continue
         table = _Table(
             name=info.name,
             prefix=prefix,
@@ -210,33 +212,32 @@ def _schema_families(schema: str, infos: list[Any]) -> list[FamilyGroup]:
             columns=frozenset(_without(c.name, prefix) for c in info.columns),
             history=base.rsplit("_", 1)[-1] in _HISTORY,
         )
-        prefixed[prefix].setdefault(base, table)
-        members[prefix].append(info.name)
-        by_name[info.name.lower()] = table
+        prefixed[prefix][base] = table
+        kept[info.name.lower()] = table
 
-    signatures = _signatures(schema, infos, by_name)
+    signatures = _signatures(schema, infos, kept)
 
-    # The names two prefixes share, collected per name so only prefixes that
-    # share one are ever paired.
-    shared: dict[tuple[str, str], list[str]] = defaultdict(list)
-    holders: dict[str, list[str]] = defaultdict(list)
+    # Evidence is copies plus mirrored keys between copies, and a key joins
+    # two names: a pair of prefixes reaches MIN_EVIDENCE only sharing at least
+    # two names outside history tables. Prefixes with fewer are never paired,
+    # so a thousand TENANTn_EVENTS tables cost nothing. Prefixes with the same
+    # tables and keys (one per tenant of a multi-tenant schema) are one class,
+    # compared once.
+    classes: dict[tuple[frozenset[Any], frozenset[_Signature]], list[str]] = (
+        defaultdict(list)
+    )
     for prefix in sorted(prefixed):
-        for base in prefixed[prefix]:
-            holders[base].append(prefix)
-    for base, prefixes in holders.items():
-        for pair in combinations(prefixes, 2):
-            shared[pair].append(base)
-
-    confirmed: list[tuple[str, str, list[str]]] = []
-    for (p, q), bases in sorted(shared.items()):
-        copies = _confirm(
-            [(prefixed[p][b], prefixed[q][b]) for b in sorted(bases)],
-            signatures[p] & signatures[q],
+        eligible = frozenset(
+            (b, t.columns) for b, t in prefixed[prefix].items() if not t.history
         )
-        if copies:
-            confirmed.append((p, q, copies))
+        if len(eligible) >= 2:
+            classes[(eligible, frozenset(signatures[prefix]))].append(prefix)
+    of_class = list(classes.values())
+    names = [
+        frozenset(b for b, t in prefixed[group[0]].items() if not t.history)
+        for group in of_class
+    ]
 
-    # Prefixes confirmed with one another are one group.
     parent: dict[str, str] = {}
 
     def root(prefix: str) -> str:
@@ -246,27 +247,62 @@ def _schema_families(schema: str, infos: list[Any]) -> list[FamilyGroup]:
             prefix = parent[prefix]
         return prefix
 
-    for p, q, _ in confirmed:
-        parent[root(q)] = root(p)
-    prefixes_of: dict[str, set[str]] = defaultdict(set)
-    copied_of: dict[str, set[str]] = defaultdict(set)
-    for p, q, copies in confirmed:
-        prefixes_of[root(p)].update((p, q))
-        copied_of[root(p)].update(copies)
+    copied: dict[str, set[str]] = defaultdict(set)
+
+    def join(a: list[str], b: list[str], copies: list[str]) -> None:
+        for prefix in (*a, *b):
+            parent[root(prefix)] = root(a[0])
+        copied[a[0]].update(copies)
+
+    def compare(c: int, d: int) -> list[str]:
+        p, q = of_class[c][0], of_class[d][0]
+        return _confirm(
+            [(prefixed[p][b], prefixed[q][b]) for b in sorted(names[c] & names[d])],
+            signatures[p] & signatures[q],
+        )
+
+    holders: dict[str, list[int]] = defaultdict(list)
+    for c, held in enumerate(names):
+        for base in held:
+            holders[base].append(c)
+    for c in range(len(of_class)):
+        if len(of_class[c]) > 1 and (copies := compare(c, c)):
+            join(of_class[c], of_class[c], copies)
+        # The classes after this one sharing two names, counted for this one
+        # only: nothing is kept per pair.
+        shared: dict[int, int] = defaultdict(int)
+        for base in names[c]:
+            for d in holders[base]:
+                if d > c:
+                    shared[d] += 1
+        for d in sorted(d for d, count in shared.items() if count >= 2):
+            if copies := compare(c, d):
+                join(of_class[c], of_class[d], copies)
+
+    grouped: dict[str, set[str]] = defaultdict(set)
+    group_copied: dict[str, set[str]] = defaultdict(set)
+    for prefix in parent:
+        grouped[root(prefix)].add(prefix)
+    for prefix, found in copied.items():
+        group_copied[root(prefix)].update(found)
     return [
         FamilyGroup(
             schema=schema,
             families={p: tuple(sorted(members[p])) for p in sorted(prefixes)},
-            copied=tuple(sorted(copied_of[top])),
+            copied=tuple(sorted(group_copied[top])),
         )
-        for top, prefixes in sorted(prefixes_of.items(), key=lambda i: min(i[1]))
+        for top, prefixes in sorted(grouped.items(), key=lambda i: min(i[1]))
     ]
 
 
 def _signatures(
     schema: str, infos: list[Any], by_name: Mapping[str, _Table]
 ) -> dict[str, set[_Signature]]:
-    """Declared foreign keys between tables of one prefix, without the prefix."""
+    """Declared foreign keys between tables of one prefix, without the prefix.
+
+    Only between the tables *by_name* kept, one per name and prefix, so the two
+    ends of a key always have two names.
+    """
     signatures: dict[str, set[_Signature]] = defaultdict(set)
     for info in infos:
         source = by_name.get(info.name.lower())

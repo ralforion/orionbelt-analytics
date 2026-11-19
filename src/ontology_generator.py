@@ -1176,26 +1176,29 @@ class OntologyGenerator:
         ``FACT_SALES`` finds ``DIM_CUSTOMER``. Several, none of them
         *source*'s, are copies it cannot choose between: None. Never a table
         of another copy of the schema (:meth:`FamilyIndex.crosses`).
+
+        Every plural and singular form is looked at before choosing: from
+        ``EU_ORDERS``, ``customer_id`` means ``EU_CUSTOMERS`` even beside a
+        ``US_CUSTOMER`` spelled like the column.
         """
         own = split_name(source.name)
         schema = source.schema or ""
+        candidates: list[TableInfo] = []
         for form in (f.upper() for f in self._name_forms(name.lower())):
-            # Never into another copy of the schema: what OBQC would warn of.
-            candidates = [
-                t
-                for t in self._base_lookup.get(form, [])
-                if t.name != source.name
-                and not self._families.crosses(schema, source.name, t.name)
-            ]
-            if not candidates:
-                continue
-            if own is not None:
-                for candidate in candidates:
-                    split = split_name(candidate.name)
-                    if split is not None and split[0] == own[0]:
-                        return candidate
-            return candidates[0] if len(candidates) == 1 else None
-        return None
+            for table in self._base_lookup.get(form, []):
+                # Never into another copy of the schema: what OBQC would warn of.
+                if (
+                    table.name != source.name
+                    and all(table is not c for c in candidates)
+                    and not self._families.crosses(schema, source.name, table.name)
+                ):
+                    candidates.append(table)
+        if own is not None:
+            for candidate in candidates:
+                split = split_name(candidate.name)
+                if split is not None and split[0] == own[0]:
+                    return candidate
+        return candidates[0] if len(candidates) == 1 else None
 
     def _find_unprefixed_table(self, name: str) -> TableInfo | None:
         """A table whose whole name is *name*, or its plural or singular."""
