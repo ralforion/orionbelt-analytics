@@ -168,7 +168,7 @@ A database may keep its schema several times under table-name prefixes, a migrat
 SELECT b.name, COUNT(*) FROM old_rooms r JOIN new_building b ON r.building_id = b.id GROUP BY b.name;
 ```
 
-Warned when either table's family has its own copy of the other table, for `JOIN ... ON` and for the comma form joined in `WHERE`. The tables a join pairs are those an equality of two columns in its condition compares: a filter in `ON` (`AND o.floor > 0`) joins nothing. Not warned: two copies of one table joined to compare them (`OLD_ROOMS` with `NEW_ROOMS`), a table in no family (a shared `DIM_DATE`), and tables of two families neither of which has the other's table.
+Warned when either table's family has its own copy of the other table, for `JOIN ... ON` and for the comma form joined in `WHERE`. The tables a join pairs are those a test in its condition compares columns of, under `AND` or `OR` alike: a filter in `ON` (`AND o.floor > 0`) joins nothing. A CTE or a derived table is no table of the schema, named like one or not: `WITH old_rooms AS (SELECT * FROM new_rooms)` reads new rooms. Not warned: two copies of one table joined to compare them (`OLD_ROOMS` with `NEW_ROOMS`), a table in no family (a shared `DIM_DATE`), and tables of two families neither of which has the other's table.
 
 ### Type compatibility (WARNING)
 

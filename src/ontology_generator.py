@@ -1180,18 +1180,22 @@ class OntologyGenerator:
         Every plural and singular form is looked at before choosing: from
         ``EU_ORDERS``, ``customer_id`` means ``EU_CUSTOMERS`` even beside a
         ``US_CUSTOMER`` spelled like the column.
+
+        A name that is *source*'s own names no other table: ``customer_id`` in
+        a keyless ``OLD_CUSTOMER`` is its own key, not one of ``NEW_CUSTOMER``,
+        as ``customer_id`` in ``CUSTOMER`` is.
         """
         own = split_name(source.name)
         schema = source.schema or ""
         candidates: list[TableInfo] = []
         for form in (f.upper() for f in self._name_forms(name.lower())):
             for table in self._base_lookup.get(form, []):
+                if table.name == source.name:
+                    return None
                 # Never into another copy of the schema: what OBQC would warn of.
-                if (
-                    table.name != source.name
-                    and all(table is not c for c in candidates)
-                    and not self._families.crosses(schema, source.name, table.name)
-                ):
+                if all(
+                    table is not c for c in candidates
+                ) and not self._families.crosses(schema, source.name, table.name):
                     candidates.append(table)
         if own is not None:
             for candidate in candidates:

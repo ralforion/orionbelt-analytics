@@ -425,6 +425,25 @@ def test_no_key_is_inferred_into_another_copy() -> None:
     assert "OLD_DEALS.RATE_ID -> NEW_RATES.ID" in _inferred(tables)
 
 
+def test_a_tables_own_key_names_no_copy_of_it() -> None:
+    # Keyless copies: customer_id in OLD_CUSTOMER is its own key, not
+    # NEW_CUSTOMER's, as customer_id in CUSTOMER would be.
+    tables = [
+        _table(f"{p}_{base}", columns, pk=None)
+        for p in ("OLD", "NEW")
+        for base, columns in {
+            "CUSTOMER": ["CUSTOMER_ID", "NAME", "EMAIL"],
+            "PRODUCT": ["PRODUCT_ID", "NAME", "PRICE"],
+            "ORDER": ["ORDER_ID", "CUSTOMER_ID", "PRODUCT_ID", "QTY"],
+        }.items()
+    ]
+    assert _inferred(tables) == {
+        f"{p}_ORDER.{key}_ID -> {p}_{key}.{key}_ID"
+        for p in ("OLD", "NEW")
+        for key in ("CUSTOMER", "PRODUCT")
+    }
+
+
 def test_a_whole_name_still_wins_over_a_prefixed_one() -> None:
     tables = [
         _table("ROOMS", SHAPES["ROOMS"]),
@@ -554,6 +573,42 @@ def test_a_filter_in_on_joins_nothing(copies: OBQCValidator) -> None:
     )
     (warning,) = _family_warnings(copies, crossing)
     assert "OLD_ROOMS (family OLD)" in warning.message
+
+
+def test_either_alternative_of_an_on_pairs_rows(copies: OBQCValidator) -> None:
+    # Both alternatives join old rooms to new buildings, as the same test in
+    # WHERE does.
+    on = (
+        "SELECT r.ID FROM OLD_ROOMS r JOIN NEW_BUILDING b "
+        "ON r.BUILDING_ID = b.ID OR r.BACKUP_BUILDING_ID = b.ID"
+    )
+    where = (
+        "SELECT r.ID FROM OLD_ROOMS r, NEW_BUILDING b "
+        "WHERE r.BUILDING_ID = b.ID OR r.BACKUP_BUILDING_ID = b.ID"
+    )
+    assert len(_family_warnings(copies, on)) == 1
+    assert len(_family_warnings(copies, where)) == 1
+
+
+def test_a_cte_named_like_a_table_is_no_copy(copies: OBQCValidator) -> None:
+    # This OLD_ROOMS reads new rooms, joined in either order; so does a
+    # derived table aliased like one.
+    cte = "WITH OLD_ROOMS AS (SELECT * FROM NEW_ROOMS) "
+    for sql in (
+        cte + "SELECT r.ID FROM OLD_ROOMS r JOIN NEW_BUILDING b "
+        "ON r.BUILDING_ID = b.ID",
+        cte + "SELECT r.ID FROM NEW_BUILDING b JOIN OLD_ROOMS r "
+        "ON r.BUILDING_ID = b.ID",
+        "SELECT b.ID FROM (SELECT * FROM NEW_ROOMS) OLD_ROOMS "
+        "JOIN NEW_BUILDING b ON OLD_ROOMS.BUILDING_ID = b.ID",
+    ):
+        assert _family_warnings(copies, sql) == [], sql
+    # A CTE's own join is read in its own SELECT, and warned there.
+    inside = (
+        "WITH stays AS (SELECT r.ID FROM OLD_ROOMS r "
+        "JOIN NEW_BUILDING b ON r.BUILDING_ID = b.ID) SELECT * FROM stays"
+    )
+    assert len(_family_warnings(copies, inside)) == 1
 
 
 def test_an_ontology_without_families_warns_of_none() -> None:

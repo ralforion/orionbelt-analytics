@@ -56,8 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names `DIM_CUSTOMER`, and `building_id` in `OLD_ROOMS` names
   `OLD_BUILDING`, never `NEW_BUILDING`. A warehouse whose tables all carry a
   prefix got no inferred relationships before. Between copies it cannot
-  choose, and for a compound name (`order_items` is no `items` table), it
-  infers none.
+  choose, for a table's own key (`customer_id` in a keyless `OLD_CUSTOMER`),
+  and for a compound name (`order_items` is no `items` table), it infers
+  none.
 - **Driver SQL is built with sqlglot, not string templates**: every driver's
   own metadata and sample queries (schema lists, BigQuery and Dremio
   `INFORMATION_SCHEMA` lookups, Snowflake and Databricks `SHOW` statements,

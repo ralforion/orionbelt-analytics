@@ -219,7 +219,7 @@ Two prefixes are families of one schema when, in one schema, at least three tabl
 
 What they change:
 
-- Relationships inferred from column names never point into another family's copy: in `OLD_ROOMS`, `building_id` names `OLD_BUILDING`. A column naming a table behind a prefix finds it too (`customer_id` in `FACT_SALES` names `DIM_CUSTOMER`), unless it could be either of several copies, or the prefix is itself a table's name (`order_items` is no `items` table)
+- Relationships inferred from column names never point into another family's copy: in `OLD_ROOMS`, `building_id` names `OLD_BUILDING`. A column naming a table behind a prefix finds it too (`customer_id` in `FACT_SALES` names `DIM_CUSTOMER`), unless it could be either of several copies, it is the table's own name (`customer_id` in a keyless `OLD_CUSTOMER` is its own key, not `NEW_CUSTOMER`'s), or the prefix is itself a table's name (`order_items` is no `items` table)
 - `generate_ontology` records each member's family as `oba:tableFamily`
 - OBQC warns when a join crosses into another family's copy of a table -- see [Joins into another copy](obqc.md#joins-into-another-copy-warning)
 

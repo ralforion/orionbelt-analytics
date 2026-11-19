@@ -1478,6 +1478,7 @@ class OBQCValidator:
         # the wrong table -- silently dropping a fan-trap warning.
         for scope_index, select in enumerate(parsed.find_all(exp.Select)):
             alias_map = self._build_alias_map(select)
+            references = self._scope_references(select, cte_refs)
             # Whether the SELECT owning these joins aggregates. Fan-out only
             # inflates a total if the aggregation happens over these joins --
             # an aggregate in some unrelated subquery does not.
@@ -1531,6 +1532,9 @@ class OBQCValidator:
                     # relationship a join uses, when two tables are related
                     # more than one way.
                     "on_comparisons": frozenset(),
+                    # Pairs of tables of the schema whose columns the join's
+                    # condition compares, in any position: which rows it pairs.
+                    "compared_tables": [],
                     # Tables this SELECT sums or averages over, lower-cased.
                     "measure_tables": measure_tables,
                     "counted_tables": counted_tables,
@@ -1578,6 +1582,9 @@ class OBQCValidator:
                     join_info["on_comparisons"] = self._column_comparisons(
                         on_clause, alias_map
                     )
+                    join_info["compared_tables"] = self._compared_tables(
+                        on_clause, select, references, join.this
+                    )
                 elif join_info["table"]:
                     # A comma join states the same relationship in WHERE.
                     # Reading anchors only from ON let the identical query
@@ -1588,8 +1595,98 @@ class OBQCValidator:
                     join_info["on_tables"] = self._where_anchors(
                         select, join.this, alias_map
                     )
+                    where = select.args.get("where")
+                    if where is not None:
+                        join_info["compared_tables"] = self._compared_tables(
+                            where, select, references, join.this, through=True
+                        )
 
                 result.parsed_joins.append(join_info)
+
+    def _scope_references(
+        self, select: exp.Select, cte_refs: set[int]
+    ) -> dict[str, str | None]:
+        """What each table name and alias of one SELECT reads.
+
+        The table of the schema it names, or None for a CTE or a derived
+        table: rows the query makes itself, named like a table or not. ``WITH
+        old_rooms AS (SELECT * FROM new_rooms)`` reads new rooms.
+
+        Args:
+            select: The SELECT whose FROM and JOINs to read.
+            cte_refs: The ids :meth:`_extract_ctes` collected for this query.
+
+        Returns:
+            Lower-cased name or alias -> table name, or None.
+        """
+        references: dict[str, str | None] = {}
+        for table in select.find_all(exp.Table):
+            if not table.name or table.find_ancestor(exp.Select) is not select:
+                continue
+            read = None if self._is_cte_reference(table, cte_refs) else table.name
+            references[table.name.lower()] = read
+            if table.alias:
+                references[table.alias.lower()] = read
+        for derived in select.find_all(exp.Subquery):
+            if derived.alias and derived.find_ancestor(exp.Select) is select:
+                references[derived.alias.lower()] = None
+        return references
+
+    @staticmethod
+    def _compared_tables(
+        condition: exp.Expr,
+        select: exp.Select,
+        references: dict[str, str | None],
+        joined: exp.Expr | None,
+        through: bool = False,
+    ) -> list[tuple[str, str]]:
+        """Pairs of tables of the schema whose columns *condition* compares.
+
+        Every test comparing two tables' columns pairs their rows, under AND
+        or OR alike: ``r.building_id = b.id OR r.backup_building_id = b.id``
+        pairs rooms with buildings both ways. A filter naming one table (``AND
+        o.floor > 0``) pairs nothing, and a CTE's or a derived table's columns
+        are no table's (:meth:`_scope_references`).
+
+        Args:
+            condition: An ON condition, or the WHERE a comma join is stated in.
+            select: The SELECT owning it; tests in a subquery are the
+                subquery's.
+            references: This SELECT's names and aliases, resolved.
+            joined: The table the join introduces.
+            through: Only tests naming *joined*, as WHERE also holds others.
+
+        Returns:
+            Each pair once, ``(other table, joined table)`` when the joined
+            table is in it.
+        """
+        key = ""
+        if isinstance(joined, exp.Table):
+            key = (joined.alias or joined.name).lower()
+        joined_table = references.get(key) or ""
+        pairs: list[tuple[str, str]] = []
+        for test in condition.find_all(exp.Predicate):
+            if test.find_ancestor(exp.Select) is not select:
+                continue
+            names = {
+                column.table.lower()
+                for column in test.find_all(exp.Column)
+                if column.table and column.find_ancestor(exp.Select) is select
+            }
+            if through and key not in names:
+                continue
+            tables = {
+                table.lower(): table
+                for name in names
+                if (table := references.get(name)) is not None
+            }
+            if len(tables) != 2:
+                continue
+            a, b = sorted(tables.values(), key=str.lower)
+            pair = (b, a) if a.lower() == joined_table.lower() else (a, b)
+            if pair not in pairs:
+                pairs.append(pair)
+        return pairs
 
     @staticmethod
     def _column_comparisons(
@@ -2673,10 +2770,9 @@ class OBQCValidator:
             return
         reported: set[frozenset[str]] = set()
         for join_info in result.parsed_joins:
-            joined = join_info.get("table")
-            if not joined or join_info.get("table_is_cte"):
-                continue
-            for left, right in self._joined_pairs(join_info, joined):
+            # Pairs of the schema's tables only, each read in its own SELECT:
+            # a CTE named OLD_ROOMS is none of them (_compared_tables).
+            for left, right in join_info.get("compared_tables") or ():
                 pair = frozenset((left.lower(), right.lower()))
                 if len(pair) < 2 or pair in reported:
                     continue
@@ -2684,27 +2780,6 @@ class OBQCValidator:
                 if issue is not None:
                     reported.add(pair)
                     result.issues.append(issue)
-
-    @staticmethod
-    def _joined_pairs(join_info: dict[str, Any], joined: str) -> list[tuple[str, str]]:
-        """The pairs of tables a join's condition equates columns of.
-
-        Only equalities joining two tables' columns, holding for every row: a
-        filter in ON (``AND o.floor > 0``) names a table without joining it.
-        The comma form's are the WHERE equalities tying the joined table to
-        another. Each pair as ``(other table, joined table)`` when the joined
-        table is in it.
-        """
-        if join_info.get("on_condition"):
-            pairs = []
-            for comparison in join_info.get("on_comparisons") or ():
-                names = sorted({table for table, _ in comparison})
-                if len(names) != 2:
-                    continue
-                a, b = names
-                pairs.append((b, a) if a == joined.lower() else (a, b))
-            return pairs
-        return [(str(other), joined) for other in join_info.get("on_tables") or []]
 
     @staticmethod
     def _cross_family_join(
