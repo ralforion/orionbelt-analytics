@@ -186,6 +186,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 - `relationships` -- foreign key relationships between tables
 - `fan_trap_warnings` -- tables with multiple FK relationships (potential data multiplication risk)
 - `near_copies` -- pairs of tables with nearly the same columns, such as a current table and its archive, with the columns only one side has and the row counts when known (see [Near-copies](#near-copies)); closest first, at most 25, with `near_copies_omitted` counting the rest
+- `table_families` -- copies of the schema kept under table-name prefixes (`OLD_`/`NEW_`, `EU_`/`US_`): each family's tables and the names copied between them, at most 10 families per group with `more_families` counting the rest, and `table_families_note` (see [Table families](#table-families))
 - `schema_file` -- path to saved schema JSON (full mode)
 - `r2rml_file` -- path to generated R2RML mapping (full mode)
 - `next_step` -- recommended next tool to call
@@ -200,6 +201,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 - Detects fan-trap risks: tables connecting to multiple other tables via foreign keys
 - Samples text and integer columns with date-like names (one small query per table that has one) and records how they write dates, as `date_format` -- see [Date formats](obqc.md#date-formats-warning). Set `OBA_INFER_DATE_FORMATS=false` to skip it
 - Names near-copies among the tables it found and every table discovered earlier on the connection, so a copy in another schema (staging beside production) is found too
+- Groups prefixed copies of the schema into table families (see [Table families](#table-families))
 
 #### Near-copies
 
@@ -208,6 +210,18 @@ Warehouses keep several tables of one shape: a current table and its archive, ye
 Two tables are near-copies when, comparing column names without case and leaving out bookkeeping columns -- generic ids (`id`, `uuid`), audit and load stamps (`created_at`, `updated_by`, `last_modified`, `_loaded_at`, `etl_*`), versions and tenancy (`tenant_id`) -- they share at least 3 columns, and either half of all their columns or four fifths of the narrower table's while the wider has at most twice as many. Unrelated tables share bookkeeping columns as much as copies do, so they are no evidence; a table with fewer than 3 other columns is nobody's near-copy. Neither is a lookup table whose few columns were copied into a wide fact table. `shared_columns` counts every column both have. Names only: no query runs.
 
 Closest first means the larger share of the compared columns, then more of them, then by name. A date-sharded export (`events_20240101`, `events_20240102`, ...) is thousands of tables of one shape and millions of pairs: `discover_schema` counts them all in `near_copies_omitted` but builds only the 25 it lists.
+
+#### Table families
+
+A database may keep its schema several times under table-name prefixes: a migration's `OLD_ROOMS` beside `NEW_ROOMS` and `OLD_BUILDING` beside `NEW_BUILDING`, regional `EU_ORDERS` beside `US_ORDERS`. Each prefix is a *family*. A join from one family into another's copy -- `OLD_ROOMS` to `NEW_BUILDING` on `building_id` -- runs, and pairs rows of two datasets: ids renumbered in the migration match the wrong building, or none.
+
+Two prefixes are families of one schema when, in one schema, at least three tables of the same name under both have nearly the same columns (Jaccard >= 0.8, column names compared without the prefix), a foreign key declared under both prefixes counting as one more and lowering the bar for the tables at its ends to 0.5. History tables (`*_HIST`) are no copies. A confirmed family is every table of the schema with its prefix; prefixes confirmed with one another (`V1_`, `V2_`, `V3_`) are listed as one group. The prefix is the name's first word; a name of one word has none. Names, columns and declared keys only: no query runs. The idea follows NVIDIA Auto Ontology's term families.
+
+What they change:
+
+- Relationships inferred from column names never point into another family's copy: in `OLD_ROOMS`, `building_id` names `OLD_BUILDING`. A column naming a table behind a prefix finds it too (`customer_id` in `FACT_SALES` names `DIM_CUSTOMER`), unless it could be either of several copies, it is the table's own name (`customer_id` in a keyless `OLD_CUSTOMER` is its own key, not `NEW_CUSTOMER`'s), or the prefix is itself a table's name (`order_items` is no `items` table)
+- `generate_ontology` records each member's family as `oba:tableFamily`
+- OBQC warns when a join crosses into another family's copy of a table -- see [Joins into another copy](obqc.md#joins-into-another-copy-warning)
 
 ---
 
