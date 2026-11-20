@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Named to your database, with its version**: every connection carries
+  `orionbelt-analytics/<version>`, which the database shows next to the
+  server's queries, as OrionBelt Semantic Layer does with its own name: as the
+  User-Agent on BigQuery, ClickHouse over HTTP, Databricks and DuckDB
+  (MotherDuck, and DuckDB's HTTP reads), as the client name on ClickHouse's
+  native protocol, as `application_name` on PostgreSQL (which used to get
+  `orionbelt-analytics` without a version), and as the `program_name`
+  connection attribute on MySQL. The configuration guide lists where each
+  database shows it.
 - **Near-copies of tables**: `discover_schema`, `get_table_details` and
   `graphrag_query_context` name the tables that have nearly the same columns
   as each table -- a current table and its archive, yearly or backup copies,
@@ -42,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scans both tables.
 
 ### Changed
+- **Snowflake gets no application name**: the driver no longer sends
+  `application=orionbelt-analytics`, since Snowflake keeps that setting for its
+  registered partners; the connector's own default goes instead, as in
+  OrionBelt Semantic Layer.
 - **Driver SQL is built with sqlglot, not string templates**: every driver's
   own metadata and sample queries (schema lists, BigQuery and Dremio
   `INFORMATION_SCHEMA` lookups, Snowflake and Databricks `SHOW` statements,

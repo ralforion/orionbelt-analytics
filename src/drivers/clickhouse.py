@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import QueuePool
 
+from ..client_name import CLIENT_NAME
 from ..constants import (
     CLICKHOUSE_SYSTEM_SCHEMAS,
     CONNECTION_TIMEOUT,
@@ -74,6 +75,15 @@ class ClickHouseDriver(DatabaseDriver):
                 f"{scheme}://{encoded_username}:{encoded_password}"
                 f"@{host}:{port}/{database}"
             )
+            # ClickHouse shows the client's name in system.query_log: over
+            # HTTP as http_user_agent, natively as client_name. The native
+            # dialect reads its options from the URL alone and drops
+            # connect_args; the HTTP one takes headers as connect_args.
+            connect_args: dict[str, Any] = {}
+            if protocol == "native":
+                connection_string += f"?client_name={quote_plus(CLIENT_NAME)}"
+            else:
+                connect_args["header__User-Agent"] = CLIENT_NAME
 
             logger.info(
                 f"Connecting to ClickHouse at {host}:{port}/{database} via {scheme}"
@@ -87,6 +97,7 @@ class ClickHouseDriver(DatabaseDriver):
                 pool_pre_ping=True,
                 pool_recycle=3600,
                 echo=False,
+                connect_args=connect_args,
             )
             self.metadata = MetaData()
 

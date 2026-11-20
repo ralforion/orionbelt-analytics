@@ -11,6 +11,7 @@ from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import NullPool, Pool, StaticPool
 from sqlglot import expressions as exp
 
+from ..client_name import CLIENT_NAME
 from ..constants import (
     DEFAULT_SAMPLE_LIMIT,
     DUCKDB_SYSTEM_SCHEMAS,
@@ -306,16 +307,21 @@ class DuckDBDriver(DatabaseDriver):
             poolclass: type[Pool]
             poolclass = StaticPool if database_path == ":memory:" else NullPool
 
-            # No connect_args: duckdb.connect() accepts only (database,
-            # read_only, config), so anything else here is a TypeError at the
-            # first connection. A "timeout" was passed until it was found to
-            # make every DuckDB connection fail. There is nothing to time out
-            # anyway -- DuckDB is in-process, so a connection is a file open,
-            # not a network round trip.
+            # connect_args holds only "config": duckdb.connect() accepts only
+            # (database, read_only, config), so anything else here is a
+            # TypeError at the first connection. A "timeout" was passed until
+            # it was found to make every DuckDB connection fail. There is
+            # nothing to time out anyway -- DuckDB is in-process, so a
+            # connection is a file open, not a network round trip.
+            # custom_user_agent names this server to MotherDuck and on
+            # DuckDB's HTTP reads; duckdb_engine puts its own name in front.
+            # Every connection must send the same value: DuckDB refuses a
+            # second connection to an open file whose options differ.
             self.engine = create_engine(
                 connection_string,
                 poolclass=poolclass,
                 echo=False,
+                connect_args={"config": {"custom_user_agent": CLIENT_NAME}},
             )
             self.metadata = MetaData()
             if not self._is_motherduck:

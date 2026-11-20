@@ -13,6 +13,7 @@ import pytest
 from google.auth.credentials import AnonymousCredentials
 from google.cloud import bigquery
 
+from src.client_name import CLIENT_NAME
 from src.drivers.bigquery import BigQueryDriver
 
 # Without google-cloud-bigquery-storage, which is not a dependency, the DB-API
@@ -81,3 +82,11 @@ def test_connect_runs_its_test_query(bigquery_http):
 
     assert [r["method"] for r in bigquery_http.requests] == ["POST"]
     assert json.loads(bigquery_http.requests[0]["data"])["query"] == "SELECT 1"
+
+
+def test_its_requests_carry_the_client_name_first(bigquery_http):
+    """BigQuery shows it in Cloud Audit Logs as ``callerSuppliedUserAgent``."""
+    assert BigQueryDriver().connect(project_id="p", dataset="d")
+
+    agent = bigquery_http.requests[0]["headers"]["User-Agent"]
+    assert agent.startswith(f"{CLIENT_NAME} gl-python/")
