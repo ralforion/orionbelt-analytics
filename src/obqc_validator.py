@@ -19,6 +19,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
+from .personal_data import enabled as personal_data_enabled
 from .relationship_validation import (
     STATUS_CONFIRMED,
     STATUS_PARTIAL,
@@ -27,6 +28,7 @@ from .relationship_validation import (
     is_composite_key,
     why_not_checkable,
 )
+from .result_lineage import result_columns
 from .table_families import FamilyIndex
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,7 @@ class OBQCIssueType(Enum):
     INVALID_AGGREGATION = "invalid_aggregation"
     DATE_FORMAT_MISMATCH = "date_format_mismatch"
     CROSS_FAMILY_JOIN = "cross_family_join"
+    PERSONAL_DATA = "personal_data"
 
 
 class OBQCSeverity(Enum):
@@ -368,6 +371,9 @@ class ColumnSchema:
     # How a text or integer column writes its dates (strftime), from
     # oba:dateFormat; None when the ontology does not say.
     date_format: str | None = None
+    # The kind of personal data the column's name says it holds, from
+    # oba:personalData; None when the ontology does not say.
+    personal_data: str | None = None
 
 
 @dataclass
@@ -437,6 +443,8 @@ class OntologySchema:
     # (from table, to table), lower-cased, of relationships the data refuted.
     # They join nothing, but say what a generated axiom was derived from.
     refuted_links: set[tuple[str, str]] = field(default_factory=set)
+    # (table, column) -> kind, of columns carrying oba:personalData.
+    personal_columns: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -803,6 +811,9 @@ class OBQCValidator:
                             subject, self._oba_ns.measureReason
                         ),
                         date_format=self._get_literal(subject, self._oba_ns.dateFormat),
+                        personal_data=self._get_literal(
+                            subject, self._oba_ns.personalData
+                        ),
                     )
 
                     # Get XSD type from rdfs:range
@@ -812,6 +823,10 @@ class OBQCValidator:
                             break
 
                     schema.tables[table_key].columns[column_name.lower()] = col_schema
+                    if col_schema.personal_data:
+                        schema.personal_columns[
+                            (schema.tables[table_key].name, column_name)
+                        ] = col_schema.personal_data
 
         # Extract relationships (owl:ObjectProperty with oba:foreignKeyColumn)
         for subject in self._graph.subjects(RDF.type, OWL.ObjectProperty):
@@ -1067,6 +1082,7 @@ class OBQCValidator:
         self._validate_columns(result)
         self._validate_joins(parsed, result, cte_refs)
         self._validate_table_families(result)
+        self._validate_personal_data(parsed, result)
         self._validate_type_compatibility(parsed, result)
         self._validate_date_formats(
             parsed, result, cte_refs, sqlglot_dialect, dialect.lower()
@@ -2787,6 +2803,60 @@ class OBQCValidator:
                 if issue is not None:
                     reported.add(pair)
                     result.issues.append(issue)
+
+    def _validate_personal_data(self, parsed: exp.Expr, result: OBQCResult) -> None:
+        """Rule: say so when the result holds personal data (oba:personalData).
+
+        Only what the query returns: a column followed from the output through
+        derived tables, CTEs, set operations and stars back to its table
+        (:func:`~src.result_lineage.result_columns`). One counted, compared or
+        filtered on returns nothing of it. A warning, not a refusal: the
+        question may need it, and the person asking may see it.
+        """
+        if self._schema_cache is None or not personal_data_enabled():
+            return
+        tables = self._schema_cache.tables
+        tagged = self._schema_cache.personal_columns
+        if not tagged:
+            return
+
+        def catalog(node: exp.Table) -> list[tuple[str, str]] | None:
+            table = tables.get(node.name.lower())
+            if table is None:
+                return None
+            return [(table.name, column.name) for column in table.columns.values()]
+
+        try:
+            returned = result_columns(parsed, catalog)
+        except Exception as e:
+            # A query sqlglot cannot scope: any tagged column it names, or all
+            # of its tables' under a star.
+            logger.debug(f"Result lineage unavailable, judged by names: {e}")
+            named = {column.name.lower() for column in parsed.find_all(exp.Column)}
+            star = any(True for _ in parsed.find_all(exp.Star))
+            read = {table.name.lower() for table in parsed.find_all(exp.Table)}
+            returned = {
+                (table, column)
+                for table, column in tagged
+                if table.lower() in read and (star or column.lower() in named)
+            }
+        found = sorted(pair for pair in returned if pair in tagged)
+        if not found:
+            return
+        listed = ", ".join(f"{t}.{c} ({tagged[(t, c)]})" for t, c in found)
+        result.issues.append(
+            OBQCIssue(
+                issue_type=OBQCIssueType.PERSONAL_DATA,
+                severity=OBQCSeverity.WARNING,
+                message=f"The result includes personal data, by its column names: {listed}",
+                location="SELECT",
+                suggestion=(
+                    "Return it only where the question needs it; "
+                    "COUNT(DISTINCT ...) counts people without returning their data"
+                ),
+                related_entities=[f"{t}.{c}" for t, c in found],
+            )
+        )
 
     @staticmethod
     def _cross_family_join(

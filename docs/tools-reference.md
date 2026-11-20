@@ -187,6 +187,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 - `fan_trap_warnings` -- tables with multiple FK relationships (potential data multiplication risk)
 - `near_copies` -- pairs of tables with nearly the same columns, such as a current table and its archive, with the columns only one side has and the row counts when known (see [Near-copies](#near-copies)); closest first, at most 25, with `near_copies_omitted` counting the rest
 - `table_families` -- copies of the schema kept under table-name prefixes (`OLD_`/`NEW_`, `EU_`/`US_`): each family's tables and the names copied between them, at most 10 families per group with `more_families` counting the rest, and `table_families_note` (see [Table families](#table-families))
+- `personal_data` -- the columns whose names say they hold personal data, by table, each with its kind (`{"customers": {"email": "email", "name": "name"}}`); at most 25 tables, with `more_personal_data_tables` counting the rest, and `personal_data_note` (see [Personal data](#personal-data))
 - `schema_file` -- path to saved schema JSON (full mode)
 - `r2rml_file` -- path to generated R2RML mapping (full mode)
 - `next_step` -- recommended next tool to call
@@ -202,6 +203,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 - Samples text and integer columns with date-like names (one small query per table that has one) and records how they write dates, as `date_format` -- see [Date formats](obqc.md#date-formats-warning). Set `OBA_INFER_DATE_FORMATS=false` to skip it
 - Names near-copies among the tables it found and every table discovered earlier on the connection, so a copy in another schema (staging beside production) is found too
 - Groups prefixed copies of the schema into table families (see [Table families](#table-families))
+- Tags columns whose names say they hold personal data (see [Personal data](#personal-data))
 
 #### Near-copies
 
@@ -210,6 +212,12 @@ Warehouses keep several tables of one shape: a current table and its archive, ye
 Two tables are near-copies when, comparing column names without case and leaving out bookkeeping columns -- generic ids (`id`, `uuid`), audit and load stamps (`created_at`, `updated_by`, `last_modified`, `_loaded_at`, `etl_*`), versions and tenancy (`tenant_id`) -- they share at least 3 columns, and either half of all their columns or four fifths of the narrower table's while the wider has at most twice as many. Unrelated tables share bookkeeping columns as much as copies do, so they are no evidence; a table with fewer than 3 other columns is nobody's near-copy. Neither is a lookup table whose few columns were copied into a wide fact table. `shared_columns` counts every column both have. Names only: no query runs.
 
 Closest first means the larger share of the compared columns, then more of them, then by name. A date-sharded export (`events_20240101`, `events_20240102`, ...) is thousands of tables of one shape and millions of pairs: `discover_schema` counts them all in `near_copies_omitted` but builds only the 25 it lists.
+
+#### Personal data
+
+A column named for a kind of personal data -- `email`, `customer_phone`, `date_of_birth`, `billing_address` -- is tagged with that kind: `discover_schema` lists them, `get_table_details` marks each column with `personal_data`, the ontology records it as `oba:personalData`, and `execute_sql_query` warns when a result includes one (see [Personal data in the result](obqc.md#personal-data-in-the-result-warning)). The kinds are `email`, `phone`, `name`, `address`, `birth_date`, `government_id`, `payment_card`, `bank_account`, `credential`, `biometric`, `network_id`, `location`, `personal_attribute` and `financial`.
+
+The whole column name has to be the field, after optional words saying whose or which it is (`customer_`, `billing_`, `primary_`): `email_verified`, `has_email` and `email_count` are about an email, not one, and a boolean is a flag. Some fields are personal in any table (`email`, `first_name`, `ssn`, `iban`, `password_hash`); others only where the column or its table names a person: `address` in `customers` or as `shipping_address`, not in `stores`; `salary` in `employees`, not in `job_postings`; and a bare `name` only in a table of people (`customers.name`, not `customer_segments.name`) or after a person (`guest_name`). Names and types only: no value is read, so a column whose name says nothing (`contact`, `c7`) is not tagged. To correct the tags, add or remove `oba:personalData` in an ontology and load it with `load_my_ontology`; `OBA_DETECT_PERSONAL_DATA=false` tags nothing and warns of nothing. The idea follows NVIDIA Auto Ontology's PII rules, which hand the columns they cannot decide to a model; these leave them untagged.
 
 #### Table families
 
@@ -237,7 +245,7 @@ Get detailed metadata for a single table, including all columns, data types, key
 | `schema_name` | string | No | Schema containing the table |
 
 **Returns:** Dictionary containing:
-- `columns` -- array of column details (name, data type, nullability, key status, comments, and `date_format` where a text or integer column stores dates, e.g. `%Y%m%d` for `'20150601'`)
+- `columns` -- array of column details (name, data type, nullability, key status, comments, `personal_data` where its name says it holds personal data (see [Personal data](#personal-data)), and `date_format` where a text or integer column stores dates, e.g. `%Y%m%d` for `'20150601'`)
 - `primary_keys` -- list of primary key columns
 - `foreign_keys` -- list of foreign key relationships
 - `row_count` -- approximate row count
