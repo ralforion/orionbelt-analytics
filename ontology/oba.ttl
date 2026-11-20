@@ -348,3 +348,8 @@ oba:dateFormat a owl:AnnotationProperty ;
     rdfs:label "date format" ;
     rdfs:comment "How a text or integer column writes the dates it holds, as a strftime format (e.g. '%Y%m%d' for '20150601'). Inferred from sampled values and recorded only when every sampled value reads in it unambiguously. A query has to compare against this form: '2015-06-01' never equals '20150601'. Absent on native DATE/TIMESTAMP columns and wherever no single format was found." ;
     rdfs:range xsd:string .
+
+oba:personalData a owl:AnnotationProperty ;
+    rdfs:label "personal data" ;
+    rdfs:comment "The kind of personal data a column holds, as its name says: email, phone, name, address, birth_date, government_id, payment_card, bank_account, credential, biometric, network_id, location, personal_attribute or financial. Tagged from column and table names only (no value is read), and only where the name is the field itself: email_verified is about an email, not one. OBQC warns when a query returns a column carrying it. Absent where the name says nothing personal; add or remove it by hand in an ontology you load." ;
+    rdfs:range xsd:string .

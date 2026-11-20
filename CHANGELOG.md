@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Personal data**: columns whose names say they hold personal data --
+  `email`, `customer_phone`, `date_of_birth`, `billing_address`, a `name` in
+  a table of people -- are tagged with their kind. `discover_schema` lists
+  them, `get_table_details` marks each column, the ontology records
+  `oba:personalData`, and OBQC warns when a query's result includes one,
+  followed back through derived tables, CTEs, set operations and stars;
+  `COUNT(DISTINCT email)` or a filter on one returns none of it. Names only,
+  no value is read; `OBA_DETECT_PERSONAL_DATA=false` turns it off. The idea
+  follows NVIDIA Auto Ontology's PII rules.
 - **Table families**: a schema kept several times in one database under
   table-name prefixes -- a migration's `OLD_` and `NEW_` tables, regional
   `EU_` and `US_` ones -- is recognised from names, columns and declared

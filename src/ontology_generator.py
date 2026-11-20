@@ -25,6 +25,7 @@ from .ontology_naming import (
     foreign_keys,
     relationship_local_name,
 )
+from .personal_data import tagged as tagged_personal_data
 from .table_families import FamilyIndex, find_families, split_name
 
 # Minimum word frequency threshold (in Zipf scale ~1e-6).
@@ -905,6 +906,12 @@ class OntologyGenerator:
             self.graph.add(
                 (prop_uri, self.oba_ns.dateFormat, Literal(column.date_format))
             )
+        # Personal data by the column's name: OBQC warns when a query returns it.
+        personal = tagged_personal_data(
+            table_name, [(column.name, column.data_type)]
+        ).get(column.name)
+        if personal:
+            self.graph.add((prop_uri, self.oba_ns.personalData, Literal(personal)))
 
         # Measure semantics: what SUM() may meaningfully touch. Per column,
         # because a denormalized table holds additive measures next to

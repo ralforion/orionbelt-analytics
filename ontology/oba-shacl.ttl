@@ -159,6 +159,13 @@ oba:ColumnShape a sh:NodeShape ;
         sh:name "date format" ;
         sh:message "oba:dateFormat, when present, is one strftime format string (xsd:string)."
     ] ;
+    sh:property [
+        sh:path oba:personalData ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "personal data" ;
+        sh:message "oba:personalData, when present, is one category of personal data (xsd:string)."
+    ] ;
     # Measure semantics.  oba:measureBasis says how the classification was
     # reached, because a structural fact (a key, a text column) can justify
     # blocking a query while a name-pattern guess can only warn.
