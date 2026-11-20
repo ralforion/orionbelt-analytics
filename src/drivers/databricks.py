@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import NullPool
 
+from ..client_name import CLIENT_NAME
 from ..constants import (
     CONNECTION_TIMEOUT,
     DATABRICKS_SYSTEM_SCHEMAS,
@@ -125,6 +126,9 @@ class DatabricksDriver(DatabaseDriver):
                 echo=False,
                 connect_args={
                     "timeout": CONNECTION_TIMEOUT,
+                    # Added to the User-Agent, which Databricks shows in
+                    # Query History and the audit log.
+                    "user_agent_entry": CLIENT_NAME,
                 },
             )
             self.metadata = MetaData()

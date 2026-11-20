@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Named to your database, with its version**: every connection carries
+  `orionbelt-analytics/<version>`, which the database shows next to the
+  server's queries, as OrionBelt Semantic Layer does with its own name: as the
+  User-Agent on BigQuery, ClickHouse over HTTP, Databricks and DuckDB
+  (MotherDuck, and DuckDB's HTTP reads), as the client name on ClickHouse's
+  native protocol, as `application_name` on PostgreSQL (which used to get
+  `orionbelt-analytics` without a version), and as the `program_name`
+  connection attribute on MySQL. The configuration guide lists where each
+  database shows it.
 - **Table families**: a schema kept several times in one database under
   table-name prefixes -- a migration's `OLD_` and `NEW_` tables, regional
   `EU_` and `US_` ones -- is recognised from names, columns and declared
@@ -51,6 +60,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scans both tables.
 
 ### Changed
+- **Snowflake gets no application name**: the driver no longer sends
+  `application=orionbelt-analytics`, since Snowflake keeps that setting for its
+  registered partners; the connector's own default goes instead, as in
+  OrionBelt Semantic Layer.
 - **Relationships are inferred for prefixed tables**: inference from column
   names now finds a table behind a prefix: `customer_id` in `FACT_SALES`
   names `DIM_CUSTOMER`, and `building_id` in `OLD_ROOMS` names
@@ -69,6 +82,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the read-only check.
 
 ### Fixed
+- **BigQuery connects again**: the driver passed a `timeout` that
+  google-cloud-bigquery's DB-API does not take, so every BigQuery
+  connection failed with a `TypeError` before running a query.
 - An inferred relationship to a table without a declared primary key pointed
   at an `id` column whether the table had one or not. It now points at the
   table's column of the foreign key's name (`customer_id`), else its `id`,

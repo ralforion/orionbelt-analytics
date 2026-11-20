@@ -73,8 +73,10 @@ class SnowflakeDriver(DatabaseDriver):
             # the dialect splits it as db/schema on any unquoted "/", and from
             # snowflake-sqlalchemy 2.1 neither "+" nor an encoded "%2F" decodes
             # back, so encoding cannot make every name round-trip.
+            # No "application": Snowflake reserves it for its registered
+            # partners, so this driver does not name itself (see
+            # src/client_name.py).
             connect_args: dict[str, Any] = {
-                "application": "orionbelt-analytics",
                 "network_timeout": CONNECTION_TIMEOUT,
                 "database": database,
                 "schema": schema,

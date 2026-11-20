@@ -572,6 +572,28 @@ The server validates `MCP_TRANSPORT` on startup. `sse` stops it with an error, s
 
 ---
 
+## How OrionBelt Analytics names itself to your database
+
+Each connection OrionBelt Analytics opens carries the name
+`orionbelt-analytics/<version>`, for example `orionbelt-analytics/2.3.1`. Your
+database shows it next to the queries the server runs, so you can tell them
+apart from other tools' queries. OrionBelt Semantic Layer names itself the same
+way, as `orionbelt-semantic-layer/<version>`.
+
+| Database | Sent as | Where you see it |
+| --- | --- | --- |
+| BigQuery | The start of the User-Agent | Cloud Audit Logs: `protoPayload.requestMetadata.callerSuppliedUserAgent` |
+| ClickHouse (HTTP) | The User-Agent | `http_user_agent` in `system.query_log` and `system.processes` |
+| ClickHouse (native) | The client name, as `ClickHouse orionbelt-analytics/<version>` | `client_name` in `system.query_log` and `system.processes` |
+| Databricks | Inside the User-Agent | The Source column of Query History, and `user_agent` in `system.access.audit` |
+| DuckDB, MotherDuck | DuckDB's `custom_user_agent`, after `duckdb_engine`'s own name | MotherDuck: `USER_AGENT` in `MD_INFORMATION_SCHEMA.QUERY_HISTORY` (Business plan). Files read over HTTP: the User-Agent of each request |
+| MySQL | The `program_name` connection attribute | `performance_schema.session_connect_attrs` |
+| PostgreSQL | `application_name` | `pg_stat_activity` |
+| Snowflake | Nothing | Snowflake's `application` setting is for its registered partners |
+| Dremio | Nothing | |
+
+---
+
 ## Troubleshooting
 
 ### PostgreSQL
