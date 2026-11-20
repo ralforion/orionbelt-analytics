@@ -20,6 +20,7 @@ from ..lifecycle.metadata import (
 )
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..r2rml_generator import R2RMLGenerator
+from ..table_families import TABLE_FAMILIES_NOTE, find_families
 from ..utils import notify_client, utc_now, write_json_file, write_text_file
 from .connection_scope import (
     connection_changed_response,
@@ -239,6 +240,45 @@ def _near_copy_pairs(catalog: dict[str, Any], tables: list[Any]) -> dict[str, An
     if pairs.total > len(pairs.closest):
         section["near_copies_omitted"] = pairs.total - len(pairs.closest)
     return section
+
+
+#: Families a discover_schema response lists per group; the rest are counted.
+MAX_LISTED_FAMILIES = 10
+
+
+def _family_groups(tables: list[Any]) -> dict[str, Any]:
+    """The table families among *tables*, for discover_schema; empty if none.
+
+    A multi-tenant schema is a family per tenant: the first few are listed,
+    the rest counted.
+    """
+    groups = find_families(tables)
+    if not groups:
+        return {}
+    entries = []
+    for group in groups:
+        families = list(group.families.items())
+        entry: dict[str, Any] = {
+            "schema": group.schema,
+            "families": {
+                prefix: listed(names)
+                for prefix, names in families[:MAX_LISTED_FAMILIES]
+            },
+            "copied_tables": listed(group.copied),
+        }
+        if len(families) > MAX_LISTED_FAMILIES:
+            entry["more_families"] = len(families) - MAX_LISTED_FAMILIES
+        entries.append(entry)
+    return {"table_families": entries, "table_families_note": TABLE_FAMILIES_NOTE}
+
+
+async def _table_families(tables: list[Any]) -> dict[str, Any]:
+    """:func:`_family_groups` in a worker; never fails discovery."""
+    try:
+        return await asyncio.to_thread(_family_groups, tables)
+    except Exception as e:
+        logger.warning(f"Table-family detection skipped: {e}")
+        return {}
 
 
 async def _near_copies(session: Any, tables: list[Any]) -> dict[str, Any]:
@@ -526,6 +566,7 @@ async def discover_schema(
         if fan_trap_warnings:
             lightweight_result["fan_trap_warnings"] = fan_trap_warnings
         lightweight_result.update(await _near_copies(session, table_info_objects))
+        lightweight_result.update(await _table_families(table_info_objects))
 
         # Auto-initialize GraphRAG in background
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
@@ -679,6 +720,7 @@ async def discover_schema(
         if fan_trap_warnings:
             schema_result["fan_trap_warnings"] = fan_trap_warnings
         schema_result.update(await _near_copies(session, table_info_objects))
+        schema_result.update(await _table_families(table_info_objects))
 
         # Generate R2RML mapping
         if table_info_objects:

@@ -75,6 +75,8 @@ WITH orders AS (SELECT nonexistent FROM orders) SELECT id FROM orders;
 WITH a AS (SELECT id FROM b), b AS (SELECT id FROM orders) SELECT id FROM a;
 ```
 
+A CTE is only ever named bare, so a name qualified by its schema is the real table even beside a CTE of that name: in `WITH users AS (...) SELECT u.nonexistent FROM public.users u`, the column is checked against `users`.
+
 ### Column existence (ERROR)
 
 Checks that every column reference resolves to an actual column in its table.
@@ -156,6 +158,19 @@ Join condition does not match any declared foreign key relationship in the ontol
 -- Suggested: orders.customer_id = customers.id
 SELECT * FROM customers JOIN orders ON customers.name = orders.note;
 ```
+
+#### Joins into another copy (WARNING)
+
+A database may keep its schema several times under table-name prefixes, a migration's `OLD_` and `NEW_` tables (see [Table families](tools-reference.md#table-families); the ontology records them as `oba:tableFamily`). Joining one copy's table to another copy's runs, and the column names match a relationship of the other copy, so the check above passes it -- but the rows are of two datasets:
+
+```sql
+-- WARNING: OLD_ROOMS (family OLD) is joined to NEW_BUILDING (family NEW), a table of
+-- another copy of the schema: the join runs, but pairs rows of two datasets
+-- Suggested: Join within one copy: OLD_ROOMS with OLD_BUILDING or NEW_ROOMS with NEW_BUILDING
+SELECT b.name, COUNT(*) FROM old_rooms r JOIN new_building b ON r.building_id = b.id GROUP BY b.name;
+```
+
+Warned when either table's family has its own copy of the other table, for `JOIN ... ON` and for the comma form joined in `WHERE`. The tables a join pairs are those a test in its condition compares columns of, under `AND` or `OR` alike: a filter in `ON` (`AND o.floor > 0`) joins nothing. A CTE or a derived table is no table of the schema, named like one or not: `WITH old_rooms AS (SELECT * FROM new_rooms)` reads new rooms, while `dw.old_rooms` beside it is the old table. Not warned: two copies of one table joined to compare them (`OLD_ROOMS` with `NEW_ROOMS`), a table in no family (a shared `DIM_DATE`), and tables of two families neither of which has the other's table.
 
 ### Type compatibility (WARNING)
 

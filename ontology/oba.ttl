@@ -59,6 +59,11 @@ oba:rowCount a owl:AnnotationProperty ;
     rdfs:comment "Approximate number of rows in the table." ;
     rdfs:range xsd:integer .
 
+oba:tableFamily a owl:AnnotationProperty ;
+    rdfs:label "table family" ;
+    rdfs:comment "The table-name prefix marking this table as part of one copy of a schema the database keeps several times: a migration's OLD_ and NEW_ tables, regional EU_ and US_ ones. Recorded only when at least three tables of one name under two prefixes have nearly the same columns (declared foreign keys mirrored between the copies count too); every table of the schema with that prefix is then in the family. Tables of one family join each other; a join into another family's copy of a table pairs rows of two datasets." ;
+    rdfs:range xsd:string .
+
 # =============================================================================
 # 2. COLUMN PROPERTIES (used on owl:DatatypeProperty)
 # =============================================================================

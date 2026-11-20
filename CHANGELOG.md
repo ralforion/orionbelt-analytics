@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `orionbelt-analytics` without a version), and as the `program_name`
   connection attribute on MySQL. The configuration guide lists where each
   database shows it.
+- **Table families**: a schema kept several times in one database under
+  table-name prefixes -- a migration's `OLD_` and `NEW_` tables, regional
+  `EU_` and `US_` ones -- is recognised from names, columns and declared
+  keys: at least three tables of one name under two prefixes with nearly the
+  same columns, keys declared in both copies counting too. `discover_schema`
+  lists the families, the ontology records each member's `oba:tableFamily`,
+  and OBQC warns when a join crosses into another family's copy of a table:
+  `OLD_ROOMS JOIN NEW_BUILDING ON building_id` runs and pairs rows of two
+  datasets. The idea follows NVIDIA Auto Ontology's term families.
 - **Near-copies of tables**: `discover_schema`, `get_table_details` and
   `graphrag_query_context` name the tables that have nearly the same columns
   as each table -- a current table and its archive, yearly or backup copies,
@@ -55,6 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `application=orionbelt-analytics`, since Snowflake keeps that setting for its
   registered partners; the connector's own default goes instead, as in
   OrionBelt Semantic Layer.
+- **Relationships are inferred for prefixed tables**: inference from column
+  names now finds a table behind a prefix: `customer_id` in `FACT_SALES`
+  names `DIM_CUSTOMER`, and `building_id` in `OLD_ROOMS` names
+  `OLD_BUILDING`, never `NEW_BUILDING`. A warehouse whose tables all carry a
+  prefix got no inferred relationships before. Between copies it cannot
+  choose, for a table's own key (`customer_id` in a keyless `OLD_CUSTOMER`),
+  and for a compound name (`order_items` is no `items` table), it infers
+  none.
 - **Driver SQL is built with sqlglot, not string templates**: every driver's
   own metadata and sample queries (schema lists, BigQuery and Dremio
   `INFORMATION_SCHEMA` lookups, Snowflake and Databricks `SHOW` statements,
@@ -68,6 +85,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BigQuery connects again**: the driver passed a `timeout` that
   google-cloud-bigquery's DB-API does not take, so every BigQuery
   connection failed with a `TypeError` before running a query.
+- An inferred relationship to a table without a declared primary key pointed
+  at an `id` column whether the table had one or not. It now points at the
+  table's column of the foreign key's name (`customer_id`), else its `id`,
+  and is not inferred when the table has neither.
+- OBQC took a table qualified by its schema (`public.users`) for a CTE of
+  the same bare name in scope, and checked none of its columns. A CTE is
+  only ever named bare, so the qualified name is now checked as the table.
 
 ### Security
 - **DuckDB reads files only where allowed**: a local DuckDB connection now
