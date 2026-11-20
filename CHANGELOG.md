@@ -51,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   query, which drivers wrap for their syntax check, is still text, guarded by
   the read-only check.
 
+### Fixed
+- **BigQuery connects again**: the driver passed a `timeout` that
+  google-cloud-bigquery's DB-API does not take, so every BigQuery
+  connection failed with a `TypeError` before running a query.
+
 ### Security
 - **DuckDB reads files only where allowed**: a local DuckDB connection now
   has DuckDB's own external access switched off, so files and network

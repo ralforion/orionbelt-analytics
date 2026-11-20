@@ -12,7 +12,6 @@ from sqlalchemy.pool import NullPool
 
 from ..constants import (
     BIGQUERY_SYSTEM_SCHEMAS,
-    CONNECTION_TIMEOUT,
     DEFAULT_SAMPLE_LIMIT,
     MAX_SAMPLE_LIMIT,
     MIN_SAMPLE_LIMIT,
@@ -136,9 +135,10 @@ class BigQueryDriver(DatabaseDriver):
                 connection_string,
                 poolclass=NullPool,
                 echo=False,
-                connect_args={
-                    "timeout": CONNECTION_TIMEOUT,
-                },
+                # No connect_args "timeout": google.cloud.bigquery.dbapi.connect()
+                # takes only client, bqstorage_client and
+                # prefer_bqstorage_client, so it failed every connection with
+                # a TypeError.
                 **engine_kwargs,
             )
             self.metadata = MetaData()
