@@ -2303,6 +2303,38 @@ class TestPositionalAndAllGrouping(unittest.TestCase):
                 dialect,
             )
 
+    def test_a_star_before_a_position_leaves_its_place_open(self):
+        # The second output is the table's second column, not order_date:
+        # DuckDB rejects the ungrouped date, and so does the check.
+        errors = self._errors(
+            "SELECT *, order_date, COUNT(*) FROM orders GROUP BY id, total, 2"
+        )
+        self.assertIn("Column 'order_date' not in GROUP BY clause", errors)
+        # COUNT(*) is one output, and leaves the places after it known.
+        self.assertEqual(
+            self._errors("SELECT COUNT(*), user_id FROM orders GROUP BY 2"), []
+        )
+
+    def test_group_by_all_beside_a_legacy_grouping_set_is_no_bare_all(self):
+        """Older sqlglot kept ROLLUP in an argument beside "all": GROUP BY ALL
+        ROLLUP(user_id) is the SQL set quantifier, not every output."""
+        import sqlglot
+        from sqlglot import exp
+
+        parsed = sqlglot.parse_one(
+            "SELECT user_id, order_date, COUNT(*) FROM orders GROUP BY ALL",
+            dialect="duckdb",
+        )
+        parsed.args["group"].set(
+            "rollup", [exp.Rollup(expressions=[exp.column("user_id")])]
+        )
+        result = OBQCResult(is_valid=True, has_aggregation=True, has_group_by=True)
+        self.validator._validate_aggregation_context(parsed, result)
+        self.assertEqual(
+            [i.message for i in result.issues],
+            ["Column 'order_date' not in GROUP BY clause"],
+        )
+
 
 class TestGroupingSetConstructs(unittest.TestCase):
     """ROLLUP, CUBE and GROUPING SETS declare grouping keys like GROUP BY does."""

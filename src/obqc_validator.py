@@ -19,7 +19,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
-from .group_grain import Keyed, kept_once
+from .group_grain import Keyed, kept_once, output_at
 from .personal_data import enabled as personal_data_enabled
 from .relationship_validation import (
     STATUS_CONFIRMED,
@@ -3469,8 +3469,18 @@ class OBQCValidator:
 
             # GROUP BY ALL (DuckDB, Snowflake, Databricks, BigQuery, ClickHouse)
             # groups by every output outside an aggregate: none is ungrouped.
+            # Only bare: in older sqlglot a ROLLUP, CUBE or GROUPING SETS sat in
+            # an argument of its own beside "all", which then means the SQL
+            # set quantifier (GROUP BY ALL ROLLUP(x)), not every output.
             group = select.args.get("group")
-            if group is not None and group.args.get("all") and not group.expressions:
+            if (
+                group is not None
+                and group.args.get("all")
+                and not group.expressions
+                and not any(
+                    group.args.get(k) for k in ("rollup", "cube", "grouping_sets")
+                )
+            ):
                 continue
 
             # Aliases declared by this select, mapped to the column they stand
@@ -3574,14 +3584,14 @@ class OBQCValidator:
         Every dialect OBQC serves reads an integer there as a position, not a
         constant. Read as nothing, it left every selected column ungrouped,
         and ``SELECT id, COUNT(*) ... GROUP BY 1`` was blocked as an error.
-        Anything else, and a position past the outputs, is returned as it is.
+        Anything else is returned as it is: a position past the outputs, and
+        one behind a star, whose place is open (:func:`output_at`).
         """
-        if not (isinstance(key, exp.Literal) and not key.is_string):
+        projection = output_at(expressions, key)
+        if projection is None:
             return key
-        if not key.name.isdigit() or not 1 <= int(key.name) <= len(expressions):
-            return key
-        projection = expressions[int(key.name) - 1]
-        return projection.this if isinstance(projection, exp.Alias) else projection
+        output = projection.this if isinstance(projection, exp.Alias) else projection
+        return output if isinstance(output, exp.Expression) else key
 
     def _is_inside_aggregate(self, expr: exp.Expression, select: exp.Select) -> bool:
         """Check if expression is inside an aggregate function of this SELECT.
