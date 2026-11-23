@@ -115,6 +115,23 @@ class TestDuckDBPrimaryKeys(DuckDBDriverTestCase):
         self.assertTrue(all(c.is_primary_key for c in pair.columns))
         self.assertEqual(self.driver.analyze_table("notes", "main").primary_keys, [])
 
+    def test_an_attached_databases_keys_are_not_this_ones(self):
+        # A table of the same name, keyed otherwise, in another database.
+        self._exec("ATTACH ':memory:' AS other")
+        self._exec(
+            "CREATE TABLE other.main.notes (body TEXT PRIMARY KEY, extra INTEGER)"
+        )
+        self._exec("CREATE TABLE other.main.students (name TEXT PRIMARY KEY)")
+        self.assertEqual(self.driver.analyze_table("notes", "main").primary_keys, [])
+        self.assertEqual(
+            self.driver.analyze_table("students", "main").primary_keys, ["id"]
+        )
+        analyzed = self.driver.analyze_tables(["notes", "students"], "main")
+        self.assertEqual(
+            {name: info.primary_keys for name, info in analyzed.items()},
+            {"notes": [], "students": ["id"]},
+        )
+
     def test_the_whole_schema_at_once(self):
         analyzed = self.driver.analyze_tables(
             ["students", "courses", "student_courses", "notes"], "main"

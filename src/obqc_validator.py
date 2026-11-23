@@ -1765,13 +1765,32 @@ class OBQCValidator:
             "COUNT(DISTINCT ...) its key"
         )
         keyed = self._schema_cache.tables.get(other.lower())
-        if len(bridge.primary_keys) < 2 or keyed is None or not keyed.primary_keys:
+        if not self._pairs_unique(bridge) or keyed is None or not keyed.primary_keys:
             return f"{linked} Its key does not say each pair appears once, so {first}."
         key = ", ".join(f"{other}.{k}" for k in keyed.primary_keys)
         return (
             f"{linked} Per {other} (GROUP BY {key}) each {measure} row counts "
             f"once; for a total over {measure}, {first}."
         )
+
+    def _pairs_unique(self, bridge: TableSchema) -> bool:
+        """Whether *bridge*'s key is the pair of rows it links, and no more.
+
+        Its primary key made only of its foreign keys' columns, from at least
+        two of them. A longer key -- (student_id, course_id, version) -- lets a
+        pair appear once per version, and grouping by either side does not
+        help.
+        """
+        if self._schema_cache is None or not bridge.primary_keys:
+            return False
+        keys = [
+            {column.lower() for column, _ in rel.pairs}
+            for rel in self._schema_cache.relationships.values()
+            if rel.from_table.lower() == bridge.name.lower()
+        ]
+        primary = {k.lower() for k in bridge.primary_keys}
+        in_keys = {column for key in keys for column in key}
+        return primary <= in_keys and sum(1 for key in keys if key & primary) >= 2
 
     def _kept_once(self, select: exp.Select, cte_refs: set[int]) -> set[str]:
         """Tables of *select* whose rows its GROUP BY keeps once per group.

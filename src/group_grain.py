@@ -28,8 +28,12 @@ is certain counts:
   with NULLs, whose missing row is still one row; none across a FULL join;
 - plain tables of the schema only: a CTE, a derived table, UNNEST or a
   table function may hold any number of rows per key;
-- plain grouping keys: ROLLUP, CUBE, GROUPING SETS and GROUP BY ALL add or
-  change groups, and an expression (``date_trunc(...)``) fixes no column.
+- plain grouping keys: ROLLUP, CUBE, GROUP BY ALL add or change groups,
+  and an expression (``date_trunc(...)``) fixes no column;
+- a table renamed by a column alias list (``AS oi(qty, order_id, id)``) is
+  not judged: its key may now go by another column's name;
+- a window aggregate sums across the groups (``SUM(o.total) OVER ()``), so a
+  table it reads is kept once per group for nothing.
 """
 
 from __future__ import annotations
@@ -92,11 +96,34 @@ def kept_once(select: exp.Select, catalog: Catalog) -> set[str]:
     by_name: dict[str, list[str]] = {}
     for alias, (name, _) in tables.items():
         by_name.setdefault(name, []).append(alias)
-    return {
+    kept = {
         name
         for name, aliases in by_name.items()
         if all(_all_known(alias, tables, edges, known) for alias in aliases)
     }
+    windowed = _windowed(select, tables)
+    return set() if windowed is None else kept - windowed
+
+
+def _windowed(
+    select: exp.Select, tables: dict[str, tuple[str, Keyed]]
+) -> set[str] | None:
+    """Tables a window function of *select* takes values from.
+
+    None when one of its columns cannot be placed: any table may be read.
+    """
+    names: set[str] = set()
+    for window in select.find_all(exp.Window):
+        if window.find_ancestor(exp.Select) is not select:
+            continue
+        for column in window.this.find_all(exp.Column):
+            if column.find_ancestor(exp.Select) is not select:
+                continue
+            ref = _ref(column, tables)
+            if ref is None:
+                return None
+            names.add(tables[ref[0]][0])
+    return names
 
 
 def _tables(
@@ -114,6 +141,10 @@ def _tables(
             or node.args.get("joins")
             or node.args.get("pivots")
         ):
+            return None
+        alias_node = node.args.get("alias")
+        if isinstance(alias_node, exp.TableAlias) and alias_node.args.get("columns"):
+            # Renamed columns: the key may now go by another column's name.
             return None
         keyed = catalog(node)
         if keyed is None or not keyed.primary_key:

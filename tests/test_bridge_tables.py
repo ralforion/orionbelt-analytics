@@ -333,6 +333,13 @@ def test_a_total_grouped_so_that_nothing_repeats_passes(
         "JOIN courses c ON c.id = sc.course_id GROUP BY s.id",
         "SELECT o.id, SUM(o.total) FROM orders o "
         "JOIN order_items oi ON oi.order_id = o.id GROUP BY o.id",
+        # A window sums across the groups: one order, two items, twice.
+        "SELECT oi.id, o.total, SUM(o.total) OVER () AS t FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id GROUP BY oi.id, o.total",
+        # Renamed columns: this oi.id is the quantity, no key at all.
+        "SELECT oi.id, SUM(o.total) FROM orders o "
+        "JOIN order_items AS oi(qty, order_id, id) ON oi.order_id = o.id "
+        "GROUP BY oi.id",
     ],
 )
 def test_a_total_that_repeats_rows_is_still_blocked(
@@ -357,6 +364,28 @@ def test_the_suggestion_names_the_key_to_group_by(school: OBQCValidator) -> None
         "JOIN student_clubs k ON k.student_id = s.id "
         "JOIN clubs cl ON cl.id = k.club_id GROUP BY cl.id",
     )
+    assert "does not say each pair appears once" in (finding.suggestion or "")
+    assert "GROUP BY" not in (finding.suggestion or "")
+
+
+def test_a_key_longer_than_the_pair_is_no_pair_key() -> None:
+    # (student_id, course_id, version): a pair once per version. Grouping by
+    # the course does not help, so the suggestion does not offer it.
+    versioned = _table(
+        "student_courses",
+        ["student_id", "course_id", "version"],
+        pk=["student_id", "course_id", "version"],
+        fks=[_fk("student_id", "students"), _fk("course_id", "courses")],
+    )
+    assert _bridges([versioned]) == {
+        "student_courses": (("students", "courses"), False, False)
+    }
+    validator = OBQCValidator()
+    validator.load_ontology(
+        _ontology([STUDENTS, COURSES, versioned]).graph, "http://example.com/ontology/"
+    )
+    sql = "SELECT c.id, SUM(s.tuition) " + THROUGH + "GROUP BY c.id"
+    (finding,) = _fan_traps(validator, sql)
     assert "does not say each pair appears once" in (finding.suggestion or "")
     assert "GROUP BY" not in (finding.suggestion or "")
 
@@ -397,6 +426,19 @@ def test_an_outer_join_carries_what_is_known_toward_its_nulls_only() -> None:
     # in one NULL group, where a student may come twice.
     assert "students" not in _kept(
         right.format("c.id").replace("sc.course_id,", "c.id,")
+    )
+
+
+def test_a_window_reading_no_measured_table_changes_nothing() -> None:
+    assert "courses" in _kept(
+        "SELECT s.id, SUM(c.credits), ROW_NUMBER() OVER (ORDER BY s.id) "
+        + THROUGH
+        + "GROUP BY s.id"
+    )
+    assert "courses" not in _kept(
+        "SELECT s.id, SUM(c.credits), SUM(SUM(c.credits)) OVER () "
+        + THROUGH
+        + "GROUP BY s.id"
     )
 
 

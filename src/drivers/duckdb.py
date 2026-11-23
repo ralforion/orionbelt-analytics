@@ -440,8 +440,9 @@ class DuckDBDriver(DatabaseDriver):
 
         duckdb_engine reflects none (``get_pk_constraint`` comes back empty),
         so every DuckDB table looked keyless: no ``oba:primaryKey``, and no key
-        to tell a bridge's pair is unique. Empty when the catalog cannot be
-        read.
+        to tell a bridge's pair is unique. The current database's only, as
+        reflection reads: an attached database may hold a table of the same
+        name keyed otherwise. Empty when the catalog cannot be read.
         """
         if self.engine is None:
             return {}
@@ -452,6 +453,7 @@ class DuckDBDriver(DatabaseDriver):
                         SELECT table_name, constraint_column_names
                         FROM duckdb_constraints()
                         WHERE schema_name = :schema_name
+                          AND database_name = current_database()
                           AND constraint_type = 'PRIMARY KEY'
                     """),
                     {"schema_name": schema},
