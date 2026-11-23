@@ -873,8 +873,9 @@ class OntologyGenerator:
                 self.graph.add((table_uri, self.oba_ns.primaryKey, Literal(pk)))
 
         # Add columns as properties
-        for column in table_info.columns:
-            self._add_column_to_ontology(table_uri, column, table_info.name)
+        # In the database's order, which SELECT * follows: recorded with each.
+        for ordinal, column in enumerate(table_info.columns, start=1):
+            self._add_column_to_ontology(table_uri, column, table_info.name, ordinal)
 
         # Define relationships
         for key in foreign_keys(table_info.name, table_info.foreign_keys):
@@ -882,7 +883,11 @@ class OntologyGenerator:
                 self._add_relationship_to_ontology(table_uri, fk, table_info.name, key)
 
     def _add_column_to_ontology(
-        self, table_uri: URIRef, column: ColumnInfo, table_name: str
+        self,
+        table_uri: URIRef,
+        column: ColumnInfo,
+        table_name: str,
+        ordinal: int | None = None,
     ) -> None:
         """Add a column as a data property to the ontology with comprehensive database annotations."""
         # Create proper property URI
@@ -900,6 +905,8 @@ class OntologyGenerator:
         self.graph.add((prop_uri, self.oba_ns.tableName, Literal(table_name)))
         self.graph.add((prop_uri, self.oba_ns.sqlDataType, Literal(column.data_type)))
         self.graph.add((prop_uri, self.oba_ns.isNullable, Literal(column.is_nullable)))
+        if ordinal is not None:
+            self.graph.add((prop_uri, self.oba_ns.columnOrdinal, Literal(ordinal)))
         # How dates stored as text or numbers are written, when sampling
         # found one format: queries must compare against that form.
         if getattr(column, "date_format", None):

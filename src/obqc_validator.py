@@ -28,7 +28,7 @@ from .relationship_validation import (
     is_composite_key,
     why_not_checkable,
 )
-from .result_lineage import result_columns
+from .result_lineage import Known, result_columns
 from .table_families import FamilyIndex
 
 logger = logging.getLogger(__name__)
@@ -374,6 +374,8 @@ class ColumnSchema:
     # The kind of personal data the column's name says it holds, from
     # oba:personalData; None when the ontology does not say.
     personal_data: str | None = None
+    # Its place in the table, from 1, as SELECT * returns it (oba:columnOrdinal).
+    ordinal: int | None = None
 
 
 @dataclass
@@ -814,6 +816,7 @@ class OBQCValidator:
                         personal_data=self._get_literal(
                             subject, self._oba_ns.personalData
                         ),
+                        ordinal=self._get_int(subject, self._oba_ns.columnOrdinal),
                     )
 
                     # Get XSD type from rdfs:range
@@ -988,6 +991,14 @@ class OBQCValidator:
         for obj in self._graph.objects(subject, predicate):
             return str(obj)
         return None
+
+    def _get_int(self, subject: Node, predicate: URIRef) -> int | None:
+        """Get an integer literal, or None when absent or not one."""
+        val = self._get_literal(subject, predicate)
+        try:
+            return int(val) if val is not None else None
+        except ValueError:
+            return None
 
     def _get_bool(self, subject: Node, predicate: URIRef, default: bool) -> bool:
         """Get boolean value of a literal predicate."""
@@ -2820,11 +2831,20 @@ class OBQCValidator:
         if not tagged:
             return
 
-        def catalog(node: exp.Table) -> list[tuple[str, str]] | None:
+        def catalog(node: exp.Table) -> Known | None:
             table = tables.get(node.name.lower())
             if table is None:
                 return None
-            return [(table.name, column.name) for column in table.columns.values()]
+            columns = list(table.columns.values())
+            # The ontology's own order is no database's: only ordinals 1..n
+            # say where SELECT * puts each column.
+            ordinals = [column.ordinal for column in columns]
+            ordered = sorted(o or 0 for o in ordinals) == list(
+                range(1, len(columns) + 1)
+            )
+            if ordered:
+                columns.sort(key=lambda column: column.ordinal or 0)
+            return Known(tuple((table.name, c.name) for c in columns), ordered)
 
         try:
             returned = result_columns(parsed, catalog)

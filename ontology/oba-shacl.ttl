@@ -160,6 +160,14 @@ oba:ColumnShape a sh:NodeShape ;
         sh:message "oba:dateFormat, when present, is one strftime format string (xsd:string)."
     ] ;
     sh:property [
+        sh:path oba:columnOrdinal ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 1 ;
+        sh:name "column ordinal" ;
+        sh:message "oba:columnOrdinal, when present, is one integer from 1 (xsd:integer)."
+    ] ;
+    sh:property [
         sh:path oba:personalData ;
         sh:maxCount 1 ;
         sh:datatype xsd:string ;

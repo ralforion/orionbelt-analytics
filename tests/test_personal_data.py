@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from fastmcp import Client
+from rdflib import Graph
 
 import src.main as main_module
 import src.server_state as state_module
@@ -302,6 +303,147 @@ def test_a_result_without_personal_data_is_not_warned(
     shop: OBQCValidator, sql: str
 ) -> None:
     assert _returned(shop, sql) == []
+
+
+# --- Places and names -----------------------------------------------------------------
+
+
+def _loaded(strip_ordinals: bool = False) -> OBQCValidator:
+    """A validator on the ontology as saved and read back: RDF keeps no order."""
+    ttl = OntologyGenerator(
+        base_uri="http://example.com/ontology/"
+    ).generate_from_schema(SHOP)
+    graph = Graph().parse(data=ttl, format="turtle")
+    if strip_ordinals:
+        for triple in list(graph):
+            if str(triple[1]).endswith("columnOrdinal"):
+                graph.remove(triple)
+    validator = OBQCValidator()
+    validator.load_ontology(graph, "http://example.com/ontology/")
+    return validator
+
+
+@pytest.fixture(scope="module")
+def loaded() -> OBQCValidator:
+    return _loaded()
+
+
+def test_the_ontology_records_each_columns_place() -> None:
+    generator = _ontology(SHOP)
+    graph = generator.graph
+    places = {
+        str(graph.value(s, generator.oba_ns.columnName)): int(o)
+        for s, o in graph.subject_objects(generator.oba_ns.columnOrdinal)
+        if str(graph.value(s, generator.oba_ns.tableName)) == "customers"
+    }
+    assert places == {"id": 1, "name": 2, "email": 3, "segment": 4, "created_at": 5}
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        # Column alias lists: of a CTE, a derived table, a table.
+        ("WITH c(e) AS (SELECT email FROM customers) SELECT e FROM c", ["email"]),
+        ("SELECT e FROM (SELECT email FROM customers) AS d(e)", ["email"]),
+        ("SELECT e FROM customers AS c(i, n, e)", ["email"]),
+        ("SELECT n FROM customers AS c(i, n)", ["name"]),
+        (
+            "WITH c(x) AS (SELECT segment, email FROM customers) SELECT email FROM c",
+            ["email"],
+        ),
+        ("WITH c(x) AS (SELECT segment, email FROM customers) SELECT x FROM c", []),
+        ("WITH c(a, b, x) AS (SELECT * FROM customers) SELECT x FROM c", ["email"]),
+        ("WITH c(a, b, x) AS (SELECT * FROM customers) SELECT a FROM c", []),
+        # A star's place, by the recorded order, read back from a saved ontology.
+        (
+            "SELECT segment FROM (SELECT * FROM customers UNION ALL "
+            "SELECT id, segment, segment, email, created_at FROM customers) u",
+            ["email"],
+        ),
+        (
+            "SELECT segment FROM (SELECT * FROM customers UNION ALL "
+            "SELECT * FROM customers) u",
+            [],
+        ),
+        # REPLACE gives an output the replacement's value; RENAME a new name.
+        (
+            "SELECT * EXCLUDE (name, email) REPLACE (email AS segment) FROM customers",
+            ["email"],
+        ),
+        ("SELECT * REPLACE ('x' AS email, 'y' AS name) FROM customers", []),
+        ("SELECT x FROM (SELECT * RENAME (email AS x) FROM customers) t", ["email"]),
+        # BY NAME lines branches up by name, not place.
+        (
+            "SELECT addr FROM (SELECT segment AS addr, segment AS unused "
+            "FROM customers UNION ALL BY NAME "
+            "SELECT segment AS unused, email AS addr FROM customers) u",
+            ["email"],
+        ),
+        (
+            "SELECT unused FROM (SELECT segment AS addr, segment AS unused "
+            "FROM customers UNION ALL BY NAME "
+            "SELECT segment AS unused, email AS addr FROM customers) u",
+            [],
+        ),
+        # EXCEPT returns its first branch's rows only.
+        ("SELECT segment FROM customers EXCEPT SELECT email FROM customers", []),
+        # A recursive CTE, to a fixed point: email reaches c in the third round.
+        (
+            "WITH RECURSIVE r(a, b, c) AS (SELECT email, NULL, NULL FROM customers "
+            "UNION ALL SELECT NULL, a, b FROM r WHERE a IS NOT NULL OR b IS NOT NULL) "
+            "SELECT c FROM r",
+            ["email"],
+        ),
+        (
+            "WITH RECURSIVE r(i, e) AS (SELECT id, email FROM customers "
+            "UNION ALL SELECT e, i FROM r WHERE i < 0) SELECT i FROM r",
+            ["email"],
+        ),
+        (
+            "WITH RECURSIVE r(i, e) AS (SELECT id, email FROM customers "
+            "UNION ALL SELECT * FROM r WHERE i < 0) SELECT i FROM r",
+            [],
+        ),
+        # Stars a pattern picks from, or that a USING join folds: places open,
+        # names hold.
+        ("SELECT * LIKE 'e%' FROM customers", ["email", "name"]),
+        ("SELECT COLUMNS('e.*') FROM customers", ["email", "name"]),
+        (
+            "SELECT * FROM customers JOIN orders USING (id)",
+            ["email", "name", "billing_address"],
+        ),
+    ],
+)
+def test_places_and_names_are_followed(
+    loaded: OBQCValidator, sql: str, expected: list[str]
+) -> None:
+    assert [e.split(".", 1)[1] for e in _returned(loaded, sql)] == expected
+
+
+def test_without_recorded_places_a_star_may_put_anything_anywhere() -> None:
+    # An ontology loaded without oba:columnOrdinal: a star's places are unknown,
+    # so a union by place lends every output every column.
+    unknown = _loaded(strip_ordinals=True)
+    sql = (
+        "SELECT segment FROM (SELECT * FROM customers UNION ALL "
+        "SELECT * FROM customers) u"
+    )
+    assert _returned(unknown, sql) == ["customers.email", "customers.name"]
+    # So does an alias list, which names by place.
+    listed = "WITH c(a, b, x) AS (SELECT * FROM customers) SELECT a FROM c"
+    assert _returned(unknown, listed) == ["customers.email", "customers.name"]
+    # By name it still knows.
+    assert _returned(unknown, "SELECT segment FROM (SELECT * FROM customers) t") == []
+
+
+def test_a_replacement_in_a_table_the_ontology_lacks_is_still_returned(
+    loaded: OBQCValidator,
+) -> None:
+    sql = (
+        "SELECT u.* REPLACE ((SELECT email FROM customers LIMIT 1) AS note) "
+        "FROM unknown_t u"
+    )
+    assert _returned(loaded, sql) == ["customers.email"]
 
 
 def test_the_warning_names_each_column_and_its_kind(shop: OBQCValidator) -> None:
