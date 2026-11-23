@@ -2256,6 +2256,88 @@ class TestCommonTableExpressions(unittest.TestCase):
         )
 
 
+class TestPositionalAndAllGrouping(unittest.TestCase):
+    """GROUP BY 1 groups by the first output, GROUP BY ALL by every one.
+
+    Both were read as grouping by nothing, so every selected column was
+    reported missing from the GROUP BY -- an error, which blocked the query.
+    Checked against DuckDB, which runs the accepted ones and rejects the rest.
+    """
+
+    def setUp(self):
+        self.graph, self.base_uri = create_sample_ontology_graph()
+        self.validator = OBQCValidator()
+        self.validator.load_ontology(self.graph, self.base_uri)
+
+    def _errors(self, sql, dialect="duckdb"):
+        result = self.validator.validate(sql, dialect=dialect)
+        return [i.message for i in result.issues if i.severity == OBQCSeverity.ERROR]
+
+    def test_a_position_groups_by_that_output(self):
+        for sql in (
+            "SELECT user_id, COUNT(*) FROM orders GROUP BY 1",
+            "SELECT o.user_id, o.order_date, SUM(o.total) FROM orders o GROUP BY 1, 2",
+            "SELECT o.user_id AS uid, SUM(o.total) FROM orders o GROUP BY 1",
+            "SELECT SUM(o.total), o.user_id FROM orders o GROUP BY 2",
+        ):
+            self.assertEqual(self._errors(sql), [], sql)
+
+    def test_an_output_no_position_names_is_still_ungrouped(self):
+        errors = self._errors(
+            "SELECT o.user_id, o.order_date, SUM(o.total) FROM orders o GROUP BY 1"
+        )
+        self.assertEqual(errors, ["Column 'order_date' not in GROUP BY clause"])
+        # A position past the outputs, or one naming the aggregate, groups by
+        # no column: the database rejects both.
+        self.assertTrue(self._errors("SELECT user_id, COUNT(*) FROM orders GROUP BY 5"))
+        self.assertTrue(self._errors("SELECT user_id, COUNT(*) FROM orders GROUP BY 2"))
+
+    def test_group_by_all_groups_by_every_output(self):
+        for dialect in ("duckdb", "snowflake", "databricks"):
+            self.assertEqual(
+                self._errors(
+                    "SELECT user_id, order_date, SUM(total) FROM orders GROUP BY ALL",
+                    dialect,
+                ),
+                [],
+                dialect,
+            )
+
+    def test_a_star_before_a_position_leaves_its_place_open(self):
+        # The second output is the table's second column, not order_date:
+        # DuckDB rejects the ungrouped date, and so does the check.
+        for star in ("*", "(*)", "((*))", "((orders.*))"):
+            errors = self._errors(
+                f"SELECT {star}, order_date, COUNT(*) FROM orders "
+                "GROUP BY id, total, 2"
+            )
+            self.assertIn("Column 'order_date' not in GROUP BY clause", errors, star)
+        # COUNT(*) is one output, and leaves the places after it known.
+        self.assertEqual(
+            self._errors("SELECT COUNT(*), user_id FROM orders GROUP BY 2"), []
+        )
+
+    def test_group_by_all_beside_a_legacy_grouping_set_is_no_bare_all(self):
+        """Older sqlglot kept ROLLUP in an argument beside "all": GROUP BY ALL
+        ROLLUP(user_id) is the SQL set quantifier, not every output."""
+        import sqlglot
+        from sqlglot import exp
+
+        parsed = sqlglot.parse_one(
+            "SELECT user_id, order_date, COUNT(*) FROM orders GROUP BY ALL",
+            dialect="duckdb",
+        )
+        parsed.args["group"].set(
+            "rollup", [exp.Rollup(expressions=[exp.column("user_id")])]
+        )
+        result = OBQCResult(is_valid=True, has_aggregation=True, has_group_by=True)
+        self.validator._validate_aggregation_context(parsed, result)
+        self.assertEqual(
+            [i.message for i in result.issues],
+            ["Column 'order_date' not in GROUP BY clause"],
+        )
+
+
 class TestGroupingSetConstructs(unittest.TestCase):
     """ROLLUP, CUBE and GROUPING SETS declare grouping keys like GROUP BY does."""
 

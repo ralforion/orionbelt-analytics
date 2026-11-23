@@ -109,6 +109,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the read-only check.
 
 ### Fixed
+- OBQC blocked every query grouped by position or with `GROUP BY ALL`:
+  `SELECT user_id, COUNT(*) FROM orders GROUP BY 1` was rejected because
+  `user_id` was "not in GROUP BY clause". A position now groups by the output
+  it names, and `GROUP BY ALL` by every output outside an aggregate.
 - DuckDB tables had no primary keys: duckdb_engine reflects none, so no
   DuckDB ontology carried `oba:primaryKey`. They are now read from DuckDB's
   own catalog.

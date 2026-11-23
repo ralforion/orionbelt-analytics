@@ -572,6 +572,13 @@ def test_a_grouping_key_may_be_a_position_or_an_output_name() -> None:
     assert "courses" in _kept(
         "SELECT s.id AS sid, SUM(c.credits) " + THROUGH + "GROUP BY sid"
     )
+    # Behind a star a position's place is open: here 2 is the orders'
+    # total, not oi.id.
+    for star in ("o.*", "(o.*)", "((o.*))"):
+        assert "orders" not in _kept(
+            f"SELECT {star}, oi.id AS x, SUM(o.total) FROM orders o "
+            "JOIN order_items oi ON oi.order_id = o.id GROUP BY o.id, o.total, 2"
+        ), star
     # An expression fixes no column.
     assert "courses" not in _kept(
         "SELECT s.id + 0, SUM(c.credits) " + THROUGH + "GROUP BY s.id + 0"

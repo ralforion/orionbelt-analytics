@@ -41,7 +41,7 @@ is certain counts:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 
 from sqlglot import exp
@@ -251,6 +251,45 @@ def _equalities(
     return edges, pinned
 
 
+def _expands(projection: exp.Expr) -> bool:
+    """Whether *projection* stands for any number of outputs.
+
+    A star outside any function and any subquery, however wrapped: ``*``,
+    ``t.*``, ``(*)``, ``((t.*))``, ``* LIKE 'e%'`` (sqlglot reads that as a
+    comparison of the star). And ``COLUMNS(...)`` anywhere in it. A star a
+    function takes is one output (``COUNT(*)``, ``struct_pack(*)``), and so
+    is a subquery's (``(SELECT * ...)``).
+    """
+    select = projection.parent
+    for star in projection.find_all(exp.Star):
+        node = star.parent
+        while node is not None and node is not select:
+            if isinstance(node, (exp.Func, exp.Query)):
+                break
+            node = node.parent
+        else:
+            return True
+    return any(True for _ in projection.find_all(exp.Columns))
+
+
+def output_at(expressions: Sequence[exp.Expr], key: exp.Expr) -> exp.Expr | None:
+    """The output a positional grouping key names: ``GROUP BY 2``, the second.
+
+    None when *key* is no position, it is past the outputs, or a star before
+    it leaves its place open: in ``SELECT *, order_date ... GROUP BY 2`` the
+    second output is the table's second column, not ``order_date``.
+    """
+    key = key.unnest() if isinstance(key, exp.Paren) else key
+    if not (isinstance(key, exp.Literal) and not key.is_string):
+        return None
+    if not key.name.isdigit() or not 1 <= int(key.name) <= len(expressions):
+        return None
+    position = int(key.name)
+    if any(_expands(p) for p in expressions[:position]):
+        return None
+    return expressions[position - 1]
+
+
 def _group_ref(
     key: exp.Expr, select: exp.Select, tables: dict[str, tuple[str, Keyed]]
 ) -> Ref | None:
@@ -258,10 +297,8 @@ def _group_ref(
     key = key.unnest() if isinstance(key, exp.Paren) else key
     projection: exp.Expr | None = None
     if isinstance(key, exp.Literal) and not key.is_string:
-        # GROUP BY 2: the second output.
-        position = int(key.name) if key.name.isdigit() else 0
-        if 1 <= position <= len(select.selects):
-            projection = select.selects[position - 1]
+        # GROUP BY 2: the second output, if its place is certain.
+        projection = output_at(select.selects, key)
     elif isinstance(key, exp.Column):
         ref = _ref(key, tables)
         if ref is not None:
