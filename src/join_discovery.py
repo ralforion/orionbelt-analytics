@@ -67,7 +67,7 @@ from .relationship_validation import (
     build_check_queries,
     classify,
 )
-from .sql_build import quoted, quoted_path, select_columns
+from .sql_build import quoted, quoted_path
 from .utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -483,8 +483,16 @@ def _number(value: Any) -> int:
         return 0
 
 
+_INTEGER_TEXT = re.compile(r"^[+-]?\d+$")
+
+
 def _value(value: Any, value_kind: str) -> Any:
-    """*value* as a key of *value_kind* would hold it, or None if it cannot."""
+    """*value* as a key of *value_kind* would hold it, or None if it cannot.
+
+    Integer columns are sampled as text (:func:`sample_query`), so a
+    ``DECIMAL(20,0)`` key arrives exactly, not as the float a driver turns a
+    Decimal into, which loses digits past 2**53.
+    """
     if value is None or isinstance(value, bool):
         return None
     if value_kind == "integer":
@@ -492,6 +500,8 @@ def _value(value: Any, value_kind: str) -> Any:
             return value
         if isinstance(value, Decimal) and value == value.to_integral_value():
             return int(value)
+        if isinstance(value, str) and _INTEGER_TEXT.match(value.strip()):
+            return int(value.strip())
         return None
     if isinstance(value, (bytes, bytearray)):
         return None
@@ -502,6 +512,31 @@ def _literal(value: Any) -> exp.Expression:
     if isinstance(value, int):
         return exp.Literal.number(value)
     return exp.Literal.string(str(value))
+
+
+def sample_query(
+    dialect: str, path: list[str], columns: list[tuple[str, str]], limit: int
+) -> str:
+    """``SELECT <columns> FROM path LIMIT n``, integer columns cast to text.
+
+    Cast in SQL so the database writes each value whole: drivers hand back a
+    DECIMAL as a float, and ``DECIMAL(20,0)`` keys past 2**53 lose digits.
+    """
+    text = exp.DataType.build("text")
+    selected = [
+        (
+            exp.cast(exp.column(quoted(name)), text.copy())
+            if column_kind == "integer"
+            else exp.column(quoted(name))
+        )
+        for name, column_kind in columns
+    ]
+    return (
+        exp.select(*selected)
+        .from_(quoted_path(*path))
+        .limit(int(limit))
+        .sql(dialect=dialect)
+    )
 
 
 def held_query(dialect: str, path: list[str], key: str, values: list[Any]) -> str:
@@ -583,11 +618,8 @@ def discover(
     checks = 0
     for table_name, columns in candidates(tables, linked, names).items():
         table = by_name[table_name]
-        sql = select_columns(
-            dialect,
-            SAMPLE_ROWS,
-            [c for c, _ in columns],
-            *_path(table, schema_name, db_type),
+        sql = sample_query(
+            dialect, _path(table, schema_name, db_type), columns, SAMPLE_ROWS
         )
         try:
             result = db_manager.execute_sql_query(sql, SAMPLE_ROWS)
@@ -613,7 +645,7 @@ def discover(
                 continue
             named = names(column, exclude=table_name)
             held: list[HeldBy] = []
-            cut_short = False
+            cut_short = failed = False
             for key in keys:
                 if key.table is table or key.kind != column_kind:
                     continue
@@ -632,8 +664,13 @@ def discover(
                     answer = db_manager.execute_sql_query(sql, 1)
                 except Exception as e:
                     logger.debug(f"Join discovery lookup failed: {e}")
+                    failed = True
                     continue
-                count = (_rows(answer) or [[0]])[0][0] if answer.get("success") else 0
+                if not answer.get("success"):
+                    logger.debug(f"Join discovery lookup failed: {answer.get('error')}")
+                    failed = True
+                    continue
+                count = (_rows(answer) or [[0]])[0][0]
                 share = _number(count) / len(values)
                 if share >= MIN_CONTAINMENT:
                     held.append(
@@ -651,7 +688,9 @@ def discover(
             distinctive = column_kind == "text" and not all(
                 str(v).isdigit() for v in values
             )
-            if len(held) > 1 or not (distinctive or held[0].name):
+            # A failed lookup is a key that may hold the values too: whatever
+            # held them is no known unique match, only one to confirm.
+            if failed or len(held) > 1 or not (distinctive or held[0].name):
                 ranked = sorted(
                     held,
                     key=lambda h: (

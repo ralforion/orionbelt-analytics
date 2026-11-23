@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from functools import partial
+from types import MethodType
 from typing import Any, cast
 
 from fastmcp import Context
@@ -231,8 +232,10 @@ async def _discover_joins(
     try:
         if not db_manager.has_engine():
             return None
-        found = await run_db(
-            discover_joins_in_data, db_manager, tables, schema_name, embed
+        # Bound to the manager, as its own methods are, so run_db takes the
+        # connection's query lock: an in-memory DuckDB shares one connection.
+        found: Discovery = await run_db(
+            MethodType(discover_joins_in_data, db_manager), tables, schema_name, embed
         )
     except Exception as e:
         logger.warning(f"Join discovery skipped: {e}")

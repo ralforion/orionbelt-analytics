@@ -310,7 +310,9 @@ Relationships are inferred from names: `customer_id` names `customers`. `orders.
 
 - a column whose values are all shorter than three characters is not checked, and a table's own key is never a match;
 - numbers (digits stored as text too) link by themselves only when a word of the column names the table: from dense surrogate ids they coincide with every such key -- `parent_ref` 500..899 sits in any `id` running to 3,000, and all rows confirm it. Distinctive values (`C-0001`, a UUID) link alone;
-- a column whose lookups the limit cut short is linked to nothing.
+- a column whose lookups the limit cut short is linked to nothing, and one with a lookup that failed is only offered to confirm: the key that failed may hold its values too.
+
+Integer columns are sampled as text, cast in SQL, so a `DECIMAL(20,0)` key reaches the lookup whole rather than as the float a driver makes of it. Discovery holds the connection's query lock while it runs, as every other query does.
 
 What the data cannot settle -- several keys holding the values, or numbers only an unnamed key holds -- is listed under **JOINS TO CONFIRM** with the keys, likeliest first (named by a word, an abbreviation, a synonym with its score, then by share), for the agent or the user to pick one with [`confirm_join`](#12-confirm_join). A sample one key held but all rows did not is reported, not linked. Discovery runs when an ontology is built, also in the background, not on one returned from cache; joins confirmed with `confirm_join` are added back to every regenerated ontology. On BigQuery the samples are billed for the columns scanned. The idea follows NVIDIA Auto Ontology, which asks a model inside its server to pick among the keys that hold a column's values; here the client's model does, or a person.
 
@@ -459,7 +461,7 @@ Link a column to another table's key in the ontology, once the data confirms it.
 | `target_column` | string | No | The referenced column; by default the target's one-column primary key, or its `id` |
 | `schema_name` | string | No | The tables' schema, when two schemas hold them |
 
-**What it does:** checks the join on all rows, with the two queries `validate_relationship` runs. Only a `confirmed` join is added: an inferred relationship (`oba:inferencePattern "confirmed_join"`) carrying its verdict, so `execute_sql_query` treats it like a checked key. The ontology is saved as a new version and refreshed in the RDF store, and the join is kept in the workspace, so every regenerated ontology has it again. A join the data does not confirm is reported with its verdict and not added. A column that already references a table is refused (`validate_relationship` checks it), and so is a column joined to its own table's key.
+**What it does:** checks the join on all rows, with the two queries `validate_relationship` runs. Only a `confirmed` join is added: an inferred relationship (`oba:inferencePattern "confirmed_join"`) carrying its verdict, so `execute_sql_query` treats it like a checked key. The ontology is saved as a new version and refreshed in the RDF store, and the join is kept in the workspace, so every regenerated ontology has it again. A join the data does not confirm is reported with its verdict and not added. A column that already references a table is refused (`validate_relationship` checks it), and so is a column joined to its own table's key. The relationship links the classes as the active ontology names them, so it works on an uploaded ontology whose class names follow its own scheme.
 
 **Returns:** `linked`, the verdict (`status`, `meaning`, `match_ratio`, `checked_rows`, `matched_rows`), and the new ontology file when linked.
 

@@ -1587,27 +1587,40 @@ class OntologyGenerator:
 
         return denormalized
 
-    def add_inferred_relationship(self, relationship: InferredRelationship) -> None:
+    def add_inferred_relationship(
+        self,
+        relationship: InferredRelationship,
+        source: URIRef | None = None,
+        target: URIRef | None = None,
+    ) -> None:
         """Add one inferred relationship to the ontology in hand.
 
-        For a join confirmed after generation (``confirm_join``); the classes
-        it connects must exist.
+        For a join confirmed after generation (``confirm_join``). *source* and
+        *target* are the classes it connects as the ontology names them: an
+        uploaded ontology's classes need not follow this generator's naming.
         """
-        self._add_inferred_relationship_to_ontology(relationship)
+        self._add_inferred_relationship_to_ontology(relationship, source, target)
         self._inferred_fk_columns = getattr(self, "_inferred_fk_columns", set()) | {
             (relationship.source_table.lower(), relationship.column.lower())
         }
 
     def _add_inferred_relationship_to_ontology(
-        self, inferred_rel: InferredRelationship
+        self,
+        inferred_rel: InferredRelationship,
+        source_uri: URIRef | None = None,
+        target_uri: URIRef | None = None,
     ) -> None:
         """Add an inferred relationship to the ontology with appropriate annotations.
 
         Args:
             inferred_rel: The inferred relationship to add
         """
-        source_table_uri = self.base_uri[self._clean_name(inferred_rel.source_table)]
-        target_table_uri = self.base_uri[self._clean_name(inferred_rel.target_table)]
+        source_table_uri = (
+            source_uri or self.base_uri[self._clean_name(inferred_rel.source_table)]
+        )
+        target_table_uri = (
+            target_uri or self.base_uri[self._clean_name(inferred_rel.target_table)]
+        )
 
         # Named after the two tables; a second key between them -- cust beside
         # customer_id, both to customers -- after its column too, as declared

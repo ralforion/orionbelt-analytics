@@ -779,6 +779,8 @@ async def _remember_join(
 
 @dataclass(frozen=True)
 class _OntologyTable:
+    #: The table's class, as the ontology names it.
+    uri: URIRef
     name: str
     schema: str | None
     #: Lower-cased column name -> as the ontology spells it.
@@ -804,6 +806,7 @@ def _ontology_tables(graph: Any, name: str, schema: str | None) -> list[_Ontolog
                 columns[str(column).lower()] = str(column)
         found.append(
             _OntologyTable(
+                uri=URIRef(str(cls)),
                 name=str(table),
                 schema=str(declared) if declared is not None else None,
                 columns=columns,
@@ -949,6 +952,8 @@ async def confirm_join(
         )
         return result
 
+    # Between the classes as the active ontology names them: an upload's
+    # need not follow the generator's naming.
     generator.add_inferred_relationship(
         InferredRelationship(
             source_table=ref.from_table,
@@ -957,9 +962,17 @@ async def confirm_join(
             target_column=ref.to_column,
             confidence="high",
             pattern_matched=CONFIRMED_PATTERN,
-        )
+        ),
+        source=source.uri,
+        target=target.uri,
     )
-    record_in_graph(graph, record)
+    if record_in_graph(graph, record) == 0:
+        err = services.create_error_response(
+            f"{label} was confirmed, but the ontology could not take it: its "
+            "classes do not carry the oba: table annotations it is found by.",
+            "ontology_error",
+        )
+        return err
     saved = await _save_active_ontology(
         ctx, services, session, pinned, generator, is_upload, [record]
     )

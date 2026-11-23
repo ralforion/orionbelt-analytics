@@ -595,3 +595,172 @@ async def test_off_by_default(connected: Path, monkeypatch: pytest.MonkeyPatch) 
         )
     assert "JOINS FOUND IN THE DATA" not in str(generated.data)
     assert PATTERN not in _ontologies(connected)[-1]
+
+
+# --- Failed lookups, the query lock, exact values, an upload's classes ---------------
+
+
+@pytest.fixture(scope="module")
+def twins(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Two text keys holding the same ids, and a ledger of DECIMAL(20,0) keys."""
+    import duckdb
+
+    path = tmp_path_factory.mktemp("jd2") / "twins.duckdb"
+    con = duckdb.connect(str(path))
+    con.execute("""
+        CREATE TABLE customers (id VARCHAR PRIMARY KEY, name VARCHAR);
+        INSERT INTO customers
+          SELECT 'C-' || lpad(i::VARCHAR, 4, '0'), 'n' FROM range(1, 201) t(i);
+        CREATE TABLE customers_archive (id VARCHAR PRIMARY KEY, name VARCHAR);
+        INSERT INTO customers_archive SELECT * FROM customers;
+        CREATE TABLE orders (id INTEGER PRIMARY KEY, cust VARCHAR);
+        INSERT INTO orders
+          SELECT i, 'C-' || lpad(((i % 150) + 1)::VARCHAR, 4, '0') FROM range(1, 501) t(i);
+        -- Past 2**53: as floats, 9007199254740993 reads as ...992.
+        CREATE TABLE accounts (id DECIMAL(20, 0) PRIMARY KEY, label VARCHAR);
+        INSERT INTO accounts SELECT 9007199254740993 + i, 'a' FROM range(0, 200) t(i);
+        CREATE TABLE postings (id INTEGER PRIMARY KEY, acct_no DECIMAL(20, 0));
+        INSERT INTO postings SELECT i, 9007199254740993 + (i % 150) FROM range(1, 501) t(i);
+        """)
+    con.close()
+    return path
+
+
+def _manager(path: Path) -> tuple[DatabaseManager, list[TableInfo]]:
+    manager = DatabaseManager()
+    assert manager.connect_duckdb(database_path=str(path))
+    names = manager.get_tables("main")
+    return manager, list(manager.analyze_tables(names, "main").values())
+
+
+class _Failing:
+    """A manager whose lookups against one table fail, by raising or by answer."""
+
+    def __init__(self, real: DatabaseManager, table: str, how: str) -> None:
+        self._real, self._table, self._how = real, table, how
+        self.connection_info = real.connection_info
+
+    def execute_sql_query(self, sql: str, limit: int) -> dict[str, Any]:
+        if "COUNT(DISTINCT" in sql and f'"{self._table}"' in sql:
+            if self._how == "raise":
+                raise RuntimeError("lookup failed")
+            return {"success": False, "error": "lookup failed"}
+        return self._real.execute_sql_query(sql, limit)
+
+
+@pytest.mark.parametrize("how", ["raise", "unsuccessful"])
+def test_a_failed_lookup_leaves_the_column_to_confirm(twins: Path, how: str) -> None:
+    manager, tables = _manager(twins)
+    both = run(manager, tables, "main")
+    (choice,) = [c for c in both.to_confirm if c.column == "cust"]
+    assert [k.table for k in choice.keys] == ["customers", "customers_archive"]
+    # The archive's lookup fails: customers alone held the values it saw, but
+    # the archive may hold them too. Not linked; offered to confirm.
+    failing = run(_Failing(manager, "customers_archive", how), tables, "main")
+    assert "orders.cust" not in {f"{j.table}.{j.column}" for j in failing.found}
+    (choice,) = [c for c in failing.to_confirm if c.column == "cust"]
+    assert [k.table for k in choice.keys] == ["customers"]
+
+
+def test_decimal_keys_are_sampled_whole(twins: Path) -> None:
+    # DECIMAL(20,0) keys past 2**53 reach the lookup exactly; as the floats a
+    # driver makes of them, they would match nothing.
+    manager, tables = _manager(twins)
+    found = {
+        f"{j.table}.{j.column}": f"{j.target_table}.{j.target_column}"
+        for j in run(manager, tables, "main").found
+    }
+    assert found["postings.acct_no"] == "accounts.id"
+
+
+def test_integer_columns_are_sampled_as_text() -> None:
+    sql = join_discovery.sample_query(
+        "duckdb", ["main", "t"], [("acct_no", "integer"), ("cust", "text")], 10
+    )
+    assert sql == 'SELECT CAST("acct_no" AS TEXT), "cust" FROM "main"."t" LIMIT 10'
+    assert "AS CHAR)" in join_discovery.sample_query(
+        "mysql", ["t"], [("a", "integer")], 1
+    )
+
+
+async def test_discovery_waits_for_the_connections_query_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from src.handlers import ontology_generation
+
+    monkeypatch.setenv(DISCOVER_VARIABLE, "true")
+    seen: list[bool] = []
+
+    def discover(manager: Any, tables: Any, schema: Any, embed: Any) -> Any:
+        seen.append(manager.query_lock.locked())
+        return join_discovery.Discovery()
+
+    monkeypatch.setattr(ontology_generation, "discover_joins_in_data", discover)
+
+    class Manager:
+        def __init__(self) -> None:
+            self.query_lock = asyncio.Lock()
+
+        def has_engine(self) -> bool:
+            return True
+
+    manager = Manager()
+    async with manager.query_lock:
+        task = asyncio.create_task(
+            ontology_generation._discover_joins(manager, [], "main")
+        )
+        await asyncio.sleep(0.05)
+        assert not task.done()  # waits while another query holds the lock
+    await task
+    assert seen == [True]  # and runs holding it
+
+
+async def test_confirm_join_keeps_an_uploads_own_classes(
+    connected: Path, shop: Path
+) -> None:
+    from rdflib import Graph, URIRef
+    from rdflib.namespace import RDFS
+
+    from src.obqc_validator import OBQCValidator
+
+    # An upload whose classes live in a namespace of its own.
+    custom = "http://custom.example/onto#"
+    _, tables = _manager(shop)
+    ttl = OntologyGenerator(base_uri=custom).generate_from_schema(tables)
+    async with Client(mcp) as client:
+        on = await _connect(client)
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool("load_my_ontology", {**on, "ontology_content": ttl})
+        linked = _data(
+            await client.call_tool(
+                "confirm_join",
+                {
+                    **on,
+                    "table": "orders",
+                    "column": "supplier_ref",
+                    "target_table": "suppliers",
+                },
+            )
+        )
+    assert linked["linked"] is True, linked
+    graph = Graph().parse(data=_ontologies(connected)[-1], format="turtle")
+    oba = OntologyGenerator().oba_ns
+    (prop,) = [
+        s
+        for s, o in graph.subject_objects(oba.foreignKeyColumn)
+        if str(o) == "supplier_ref"
+    ]
+    assert graph.value(prop, RDFS.domain) == URIRef(f"{custom}orders")
+    assert graph.value(prop, RDFS.range) == URIRef(f"{custom}suppliers")
+    assert str(graph.value(prop, oba.validationStatus)) == "confirmed"
+    validator = OBQCValidator()
+    validator.load_ontology(graph, custom)
+    assert validator._schema_cache is not None
+    assert any(
+        r.from_table == "orders"
+        and r.from_column == "supplier_ref"
+        and r.to_table == "suppliers"
+        for r in validator._schema_cache.relationships.values()
+    )
