@@ -254,18 +254,21 @@ def _equalities(
 def _expands(projection: exp.Expr) -> bool:
     """Whether *projection* stands for any number of outputs.
 
-    ``*``, ``t.*``, ``* LIKE 'e%'`` (sqlglot reads it as a comparison of the
-    star) and ``COLUMNS(...)`` anywhere in it. ``COUNT(*)`` is one output.
+    A star outside any function and any subquery, however wrapped: ``*``,
+    ``t.*``, ``(*)``, ``((t.*))``, ``* LIKE 'e%'`` (sqlglot reads that as a
+    comparison of the star). And ``COLUMNS(...)`` anywhere in it. A star a
+    function takes is one output (``COUNT(*)``, ``struct_pack(*)``), and so
+    is a subquery's (``(SELECT * ...)``).
     """
-    node = projection.this if isinstance(projection, exp.Alias) else projection
-    if isinstance(node, exp.Not):
-        node = node.this
-    if isinstance(node, exp.Predicate):
-        node = node.this
-    if isinstance(node, exp.Star):
-        return True
-    if isinstance(node, exp.Column) and isinstance(node.this, exp.Star):
-        return True
+    select = projection.parent
+    for star in projection.find_all(exp.Star):
+        node = star.parent
+        while node is not None and node is not select:
+            if isinstance(node, (exp.Func, exp.Query)):
+                break
+            node = node.parent
+        else:
+            return True
     return any(True for _ in projection.find_all(exp.Columns))
 
 

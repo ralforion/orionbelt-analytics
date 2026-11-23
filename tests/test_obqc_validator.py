@@ -2306,10 +2306,12 @@ class TestPositionalAndAllGrouping(unittest.TestCase):
     def test_a_star_before_a_position_leaves_its_place_open(self):
         # The second output is the table's second column, not order_date:
         # DuckDB rejects the ungrouped date, and so does the check.
-        errors = self._errors(
-            "SELECT *, order_date, COUNT(*) FROM orders GROUP BY id, total, 2"
-        )
-        self.assertIn("Column 'order_date' not in GROUP BY clause", errors)
+        for star in ("*", "(*)", "((*))", "((orders.*))"):
+            errors = self._errors(
+                f"SELECT {star}, order_date, COUNT(*) FROM orders "
+                "GROUP BY id, total, 2"
+            )
+            self.assertIn("Column 'order_date' not in GROUP BY clause", errors, star)
         # COUNT(*) is one output, and leaves the places after it known.
         self.assertEqual(
             self._errors("SELECT COUNT(*), user_id FROM orders GROUP BY 2"), []
