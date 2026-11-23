@@ -409,6 +409,38 @@ def test_a_bridge_of_three_keys_has_no_pair_key_unless_its_key_is_a_pair() -> No
     assert "GROUP BY courses.id" in suggestion(pair, "clubs cl ON cl.id = e.club_id")
 
 
+def test_the_advice_follows_the_key_the_query_joins_by() -> None:
+    # Two keys to students: the student's own, in the pair key, and the
+    # mentor's, beside it. Joined by mentor_id, two students sharing a mentor
+    # count the mentor twice per course: grouping by course is no help.
+    mentored = _table(
+        "student_courses",
+        ["student_id", "course_id", "mentor_id"],
+        pk=["student_id", "course_id"],
+        fks=[
+            _fk("student_id", "students"),
+            _fk("course_id", "courses"),
+            _fk("mentor_id", "students"),
+        ],
+    )
+    validator = OBQCValidator()
+    validator.load_ontology(
+        _ontology([STUDENTS, COURSES, mentored]).graph, "http://example.com/ontology/"
+    )
+    sql = (
+        "SELECT c.id, SUM(s.tuition) FROM students s "
+        "JOIN student_courses sc ON sc.{} = s.id "
+        "JOIN courses c ON c.id = sc.course_id GROUP BY c.id"
+    )
+    (finding,) = _fan_traps(validator, sql.format("mentor_id"))
+    assert "does not say each pair appears once" in (finding.suggestion or "")
+    assert "GROUP BY" not in (finding.suggestion or "")
+    result = validator.validate(sql.format("mentor_id"), dialect="duckdb")
+    assert all("_via" not in f for f in result.fan_trap_findings)
+    # By student_id the grouping keeps each student once per course.
+    assert _fan_traps(validator, sql.format("student_id")) == []
+
+
 def test_a_key_longer_than_the_pair_is_no_pair_key() -> None:
     # (student_id, course_id, version): a pair once per version. Grouping by
     # the course does not help, so the suggestion does not offer it.

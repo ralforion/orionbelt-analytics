@@ -1742,13 +1742,17 @@ class OBQCValidator:
                 pairs.append(pair)
         return pairs
 
-    def _bridge_suggestion(self, measure: str, fanning: str) -> str | None:
+    def _bridge_suggestion(
+        self, measure: str, fanning: str, via: frozenset[str] | None = None
+    ) -> str | None:
         """How to sum *measure* across *fanning*, when that is a bridge table.
 
         Per key of the other side, each measured row counts once only when the
-        bridge's key is exactly that pair (:meth:`_pair_keyed`). Otherwise a
-        pair may repeat -- (student_id, course_id, club_id) lists a student
-        once per course in a club -- and only aggregating first helps.
+        bridge's key is exactly that pair (:meth:`_pair_keyed`), through the
+        key the query joins the measured table by (*via*, the bridge's columns
+        of it). Otherwise a pair may repeat -- (student_id, course_id, club_id)
+        lists a student once per course in a club; joined by mentor_id, a
+        mentor once per student -- and only aggregating first helps.
         """
         if self._schema_cache is None:
             return None
@@ -1774,7 +1778,7 @@ class OBQCValidator:
             keyed = self._schema_cache.tables.get(other.lower())
             if keyed is None or not keyed.primary_keys:
                 continue
-            if not self._pair_keyed(bridge, measure, other):
+            if not self._pair_keyed(bridge, measure, other, via):
                 continue
             key = ", ".join(f"{other}.{k}" for k in keyed.primary_keys)
             return (
@@ -1783,12 +1787,19 @@ class OBQCValidator:
             )
         return f"{linked} Its key does not say each pair appears once, so {first}."
 
-    def _pair_keyed(self, bridge: TableSchema, one: str, other: str) -> bool:
+    def _pair_keyed(
+        self,
+        bridge: TableSchema,
+        one: str,
+        other: str,
+        via: frozenset[str] | None = None,
+    ) -> bool:
         """Whether *bridge*'s primary key is exactly its keys to *one* and *other*.
 
         Then a row of each matches one bridge row at most. A key over more --
         (student_id, course_id, version), or a third table's key -- lets the
-        pair repeat.
+        pair repeat. The key to *one* is the one the query joins by (*via*);
+        unknown, it must be the bridge's only key to *one*.
         """
         if self._schema_cache is None or not bridge.primary_keys:
             return False
@@ -1798,12 +1809,14 @@ class OBQCValidator:
             if rel.from_table.lower() == bridge.name.lower()
         ]
         primary = {k.lower() for k in bridge.primary_keys}
+        to_one = [i for i, (_, to) in enumerate(keys) if to == one.lower()]
+        if via is not None:
+            to_one = [i for i in to_one if keys[i][0] == via]
+        if len(to_one) != 1:
+            return False
+        (i,) = to_one
         return any(
-            i != j
-            and to_a == one.lower()
-            and to_b == other.lower()
-            and columns_a | columns_b == primary
-            for i, (columns_a, to_a) in enumerate(keys)
+            j != i and to_b == other.lower() and keys[i][0] | columns_b == primary
             for j, (columns_b, to_b) in enumerate(keys)
         )
 
@@ -3890,6 +3903,17 @@ class OBQCValidator:
                         findings[pair]["assumed"] and not rel.assumed
                     ):
                         continue
+                    # The fan-out table's columns of the key the join compares,
+                    # when it compares one in full: which key a bridge with two
+                    # to the same table is joined by. Not part of the finding.
+                    compared = self._used_relationships(
+                        [rel], join_info.get("on_comparisons", frozenset())
+                    )
+                    via = (
+                        frozenset(child.lower() for child, _ in rel.pairs)
+                        if compared and rel.from_table.lower() == other.lower()
+                        else None
+                    )
                     findings[pair] = {
                         "kind": kind,
                         "measure_table": measure_table,
@@ -3898,6 +3922,7 @@ class OBQCValidator:
                         "relationship": self._describe(rel),
                         # Only naming backs it: reported, never blocking.
                         "assumed": rel.assumed,
+                        "_via": via,
                     }
 
         return list(findings.values())
@@ -3972,6 +3997,7 @@ class OBQCValidator:
         inflated = self._inflated_measures(result)
         if inflated:
             for finding in inflated:
+                via = finding.pop("_via", None)
                 assumed = finding["assumed"]
                 record(finding, blocks=not assumed)
                 measure = anchor = finding["measure_table"]
@@ -3988,7 +4014,7 @@ class OBQCValidator:
                             + (assumption(finding["relationship"]) if assumed else "")
                         ),
                         location="Query structure",
-                        suggestion=self._bridge_suggestion(measure, fanning)
+                        suggestion=self._bridge_suggestion(measure, fanning, via)
                         or (
                             f"Pre-aggregate {fanning} in a CTE and join the one row per "
                             f"{anchor} that produces, or aggregate each fact separately "
@@ -4105,6 +4131,7 @@ class OBQCValidator:
             result, key="counted_tables", kind=KIND_CONDITIONAL_ROW_COUNT
         )
         for finding in counts:
+            finding.pop("_via", None)
             result.fan_trap_risk = True
             result.fan_trap_findings.append(finding)
             counted, fanning = finding["measure_table"], finding["fan_out_table"]
