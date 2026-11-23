@@ -12,11 +12,13 @@ from fastmcp import Context
 from ..async_utils import run_db
 from ..constants import DB_SQLGLOT_DIALECTS
 from ..database_manager import ColumnInfo, TableInfo
+from ..graphrag.embedder import MODEL_TFIDF
 from ..graphrag.manager import _annotate_view_sources
 from ..handler_context import HandlerContext
-from ..join_discovery import Discovery, as_inferred
+from ..join_discovery import Discovery, Embed, as_inferred
 from ..join_discovery import enabled as join_discovery_enabled
 from ..join_discovery import note as found_joins_note
+from ..join_discovery import records as join_records
 from ..join_discovery import run as discover_joins_in_data
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import (
@@ -27,8 +29,10 @@ from ..lifecycle.metadata import (
     update_workspace_rdf,
     update_workspace_section,
 )
+from ..ontology_generator import OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
+from ..relationship_validation import record_in_graph
 from ..utils import notify_client, utc_now, write_text_file
 from .connection_scope import (
     connection_changed_response,
@@ -36,7 +40,9 @@ from .connection_scope import (
     still_connected,
 )
 from .ontology_validation import (
+    _remember_verdicts,
     auto_validation_enabled,
+    confirmed_joins,
     reapply_recorded,
     validate_cached_ontology,
     validate_inferred_relationships,
@@ -191,8 +197,29 @@ def _relationship_checks_note(checks: dict[str, Any] | None) -> str:
     return note
 
 
+def _synonyms(session: Any) -> Embed | None:
+    """The embedding model GraphRAG has loaded, to read synonyms with.
+
+    None while GraphRAG is not up, or runs on the TF-IDF fallback, which
+    knows no synonyms: discovery then names tables by words and
+    abbreviations only, and never loads a model of its own.
+    """
+    manager = getattr(session, "graphrag_manager", None)
+    embedder = getattr(manager, "embedder", None)
+    if embedder is None or getattr(embedder, "embedding_model", MODEL_TFIDF) in (
+        MODEL_TFIDF,
+        None,
+    ):
+        return None
+    embed: Embed = embedder._embed_texts
+    return embed
+
+
 async def _discover_joins(
-    db_manager: Any, tables: list[Any], schema_name: str | None
+    db_manager: Any,
+    tables: list[Any],
+    schema_name: str | None,
+    embed: Embed | None = None,
 ) -> Discovery | None:
     """Joins found in the data, when OBA_DISCOVER_JOINS_BY_DATA is on.
 
@@ -204,15 +231,77 @@ async def _discover_joins(
     try:
         if not db_manager.has_engine():
             return None
-        found = await run_db(discover_joins_in_data, db_manager, tables, schema_name)
+        found = await run_db(
+            discover_joins_in_data, db_manager, tables, schema_name, embed
+        )
     except Exception as e:
         logger.warning(f"Join discovery skipped: {e}")
         return None
     logger.info(
-        f"Join discovery: {len(found.found)} found, {len(found.ambiguous)} "
-        f"ambiguous, {found.skipped_checks} lookups skipped"
+        f"Join discovery: {len(found.found)} found, {len(found.to_confirm)} to "
+        "confirm, "
+        f"{len(found.unconfirmed)} unconfirmed, {found.skipped_checks} lookups "
+        "skipped"
     )
     return found
+
+
+async def generate_with_joins(
+    generator: OntologyGenerator,
+    tables_info: list[Any],
+    views_info: list[Any] | None,
+    *,
+    session: Any,
+    connection_id: str | None,
+    schema_name: str | None,
+    db_manager: Any,
+) -> tuple[str, Discovery | None]:
+    """Generate the ontology with the joins found in the data and confirmed.
+
+    Joins found (OBA_DISCOVER_JOINS_BY_DATA) are added with the check that
+    confirmed them on all rows; joins confirm_join linked are added back
+    from the workspace, their verdicts with every other recorded one.
+
+    Args:
+        generator: Builds the ontology; its graph holds the result.
+        tables_info: The tables.
+        views_info: The views.
+        session: The session, for GraphRAG's loaded model.
+        connection_id: The connection the work is pinned to.
+        schema_name: The schema.
+        db_manager: The pinned connection's manager; None not to look in the
+            data (the session moved to another connection).
+
+    Returns:
+        The ontology as Turtle, and what discovery found.
+    """
+    found = (
+        await _discover_joins(db_manager, tables_info, schema_name, _synonyms(session))
+        if db_manager is not None
+        else None
+    )
+    extra = as_inferred(found) + await asyncio.to_thread(
+        confirmed_joins, connection_id, schema_name
+    )
+    generate = partial(
+        generator.generate_from_schema, tables_info, views_info=views_info
+    )
+    if extra:
+        generate = partial(generate, extra_relationships=extra)
+    # rdflib work is CPU-bound (~876 ms per 2.65 MB of Turtle); off the loop
+    # so it does not freeze every concurrent session.
+    ontology_ttl = await asyncio.to_thread(generate)
+    # Relationships checked with validate_relationship keep their verdicts.
+    ontology_ttl = await asyncio.to_thread(
+        reapply_recorded, generator, connection_id, schema_name, ontology_ttl
+    )
+    checks = join_records(found)
+    if checks:
+        for record in checks:
+            record_in_graph(generator.graph, record)
+        ontology_ttl = await asyncio.to_thread(generator.serialize_ontology)
+        await _remember_verdicts(connection_id, schema_name or "default", checks)
+    return ontology_ttl, found
 
 
 async def generate_ontology(
@@ -417,28 +506,20 @@ async def generate_ontology(
     generator = services.server_state.get_ontology_generator(base_uri=base_uri)
     views_info = _views_for_ontology(session, schema_name)
     # Opt-in (OBA_DISCOVER_JOINS_BY_DATA): joins names do not say, found by
-    # which key holds a column's values.
-    # Only while the session is on the connection this generation is pinned
-    # to: its tables are that database's.
-    found_joins = (
-        await _discover_joins(
-            services.get_session_db_manager(ctx), tables_info, schema_name
-        )
-        if still_connected(services.get_session_data(ctx), pinned)
-        else None
-    )
-    # rdflib work is CPU-bound (~876 ms per 2.65 MB of Turtle); off the loop
-    # so it does not freeze every concurrent session.
-    generate = partial(
-        generator.generate_from_schema, tables_info, views_info=views_info
-    )
-    found = as_inferred(found_joins)
-    if found:
-        generate = partial(generate, extra_relationships=found)
-    ontology_ttl = await asyncio.to_thread(generate)
-    # Relationships checked with validate_relationship keep their verdicts.
-    ontology_ttl = await asyncio.to_thread(
-        reapply_recorded, generator, pinned.connection_id, schema_name, ontology_ttl
+    # which key holds a column's values -- only while the session is on the
+    # connection this generation is pinned to: its tables are that database's.
+    ontology_ttl, found_joins = await generate_with_joins(
+        generator,
+        tables_info,
+        views_info,
+        session=session,
+        connection_id=pinned.connection_id,
+        schema_name=schema_name,
+        db_manager=(
+            services.get_session_db_manager(ctx)
+            if still_connected(session, pinned)
+            else None
+        ),
     )
     # Opt-in (AUTO_VALIDATE_RELATIONSHIPS): check what was only guessed from
     # column names, so OBQC blocks a fan-trap on a confirmed relationship as

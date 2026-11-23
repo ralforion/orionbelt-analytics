@@ -62,6 +62,7 @@ Successful results of the main tools name the most likely next call, read from t
 | `generate_ontology`, `load_my_ontology`, `apply_semantic_names` | `graphrag_query_context` once GraphRAG is ready (otherwise `get_table_details`), then `execute_sql_query`; optionally `suggest_semantic_names` (generated ontology, not yet enriched) and `validate_relationship` |
 | `suggest_semantic_names` | `apply_semantic_names` |
 | `validate_relationship` | questions; or `graphrag_find_join_path` when refuted |
+| `confirm_join` | questions |
 | `graphrag_query_context`, `graphrag_find_join_path`, `plan_composite_query`, `reachable_from`, `measurable_from` | `execute_sql_query` |
 | `execute_sql_query` | `generate_chart` (optional) |
 
@@ -297,9 +298,20 @@ Generate an RDF/OWL ontology from the database schema with `oba:` (OrionBelt Ana
 
 #### Joins found in the data
 
-Relationships are inferred from names: `customer_id` names `customers`. `orders.cust`, `tickets.owner_ref` or `payments.acct_no` name no table, and nothing linked them. With `OBA_DISCOVER_JOINS_BY_DATA=true`, `generate_ontology` checks each column that looks like a reference -- ending in a key word (`_id`, `_ref`, `_no`, `_code`, `_key`, ...) or named like a table (`cust` for `customers`) -- and is linked by no declared key or name, against the one-column keys of the other tables (a primary key, or an `id` without one) of the same kind of type. It samples up to 1,000 rows of each table with a candidate (up to 100 distinct values per column) and asks each candidate key how many of them it holds, one small lookup per key, at most 300 per run.
+Relationships are inferred from names: `customer_id` names `customers`. `orders.cust`, `tickets.owner_ref` or `purchases.vendor` name no table, and nothing linked them. With `OBA_DISCOVER_JOINS_BY_DATA=true`, `generate_ontology` checks each column that looks like a reference and is linked by no declared key or name against the one-column keys of the other tables (a primary key, or an `id` without one) of the same kind of type.
 
-A key that holds nine in ten of the values links them, if it is the only one. Values alone are weak evidence: small numbers and dense surrogate ids coincide with every key. So a column whose values are all shorter than three characters is not checked; when several keys hold the values, a key named like the column decides (`supplier_ref` and `suppliers`), and otherwise the column stays unlinked and the result says so; and a table's own key is never a match. What is found is an inferred relationship like one from names, marked `oba:inferencePattern "data_containment"` (`high` confidence when also named like its table, `medium` otherwise): OBQC warns on a fan-trap resting on it rather than blocking, until `AUTO_VALIDATE_RELATIONSHIPS` or `validate_relationship` confirms it on all rows. It runs when an ontology is built, also in the background, not on one returned from cache. On BigQuery the samples are billed for the columns scanned. The idea follows NVIDIA Auto Ontology, which asks a model to pick among the keys that hold a column's values; here only a unique match, or a name, does.
+**Names choose what is checked, and rank; they never link.** A column is checked when it ends in a key word (`_id`, `_ref`, `_no`, `_code`, `_key`, ...) or a word of it names another table, in two steps:
+
+1. *Abbreviations*, from the schema's own table words, with no fixed list: `cust` is the start of `customer`, and `cstmr` and `acct` keep the letters of `customer` and `account` in order (from four letters).
+2. *Synonyms*, for a word no table word expands, with the embedding model GraphRAG already runs: `vendor` means `suppliers`, `client` means `customers` -- only with a similarity of at least 0.5 and a lead of 0.15 over every other table, so `buyer` (customers 0.48, products 0.46) stays unresolved. Only when GraphRAG has the model loaded and it is not the TF-IDF fallback; discovery never loads one. Measured on all-MiniLM-L6-v2, the model scores short abbreviations badly (`cust` lands nearer `products` than `customers`), which is why abbreviations come first.
+
+**The data links.** It samples up to 1,000 rows of each table with a candidate (up to 100 distinct values per column) and asks each candidate key how many of them it holds, one small lookup per key, at most 300 per run. A key that holds nine in ten of the values, if it is the only one, is checked on all rows as `validate_relationship` checks one, and the join is linked only when that confirms it: it carries the verdict, so OBQC treats it like a checked key (`oba:inferencePattern "data_containment"`). Values alone are weak evidence:
+
+- a column whose values are all shorter than three characters is not checked, and a table's own key is never a match;
+- numbers (digits stored as text too) link by themselves only when a word of the column names the table: from dense surrogate ids they coincide with every such key -- `parent_ref` 500..899 sits in any `id` running to 3,000, and all rows confirm it. Distinctive values (`C-0001`, a UUID) link alone;
+- a column whose lookups the limit cut short is linked to nothing.
+
+What the data cannot settle -- several keys holding the values, or numbers only an unnamed key holds -- is listed under **JOINS TO CONFIRM** with the keys, likeliest first (named by a word, an abbreviation, a synonym with its score, then by share), for the agent or the user to pick one with [`confirm_join`](#12-confirm_join). A sample one key held but all rows did not is reported, not linked. Discovery runs when an ontology is built, also in the background, not on one returned from cache; joins confirmed with `confirm_join` are added back to every regenerated ontology. On BigQuery the samples are billed for the columns scanned. The idea follows NVIDIA Auto Ontology, which asks a model inside its server to pick among the keys that hold a column's values; here the client's model does, or a person.
 
 ---
 
@@ -432,7 +444,27 @@ Check a relationship the ontology states -- declared, inferred from column names
 
 ---
 
-### 12. download_artifact
+### 12. confirm_join
+
+Link a column to another table's key in the ontology, once the data confirms it. For a column `generate_ontology` lists under JOINS TO CONFIRM (see [Joins found in the data](#joins-found-in-the-data)) -- several keys hold its values, or numbers only one unnamed key holds, so the data cannot choose -- or for any reference the ontology misses.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `table` | string | Yes | Table holding the column |
+| `column` | string | Yes | The column |
+| `target_table` | string | Yes | The table it references |
+| `target_column` | string | No | The referenced column; by default the target's one-column primary key, or its `id` |
+| `schema_name` | string | No | The tables' schema, when two schemas hold them |
+
+**What it does:** checks the join on all rows, with the two queries `validate_relationship` runs. Only a `confirmed` join is added: an inferred relationship (`oba:inferencePattern "confirmed_join"`) carrying its verdict, so `execute_sql_query` treats it like a checked key. The ontology is saved as a new version and refreshed in the RDF store, and the join is kept in the workspace, so every regenerated ontology has it again. A join the data does not confirm is reported with its verdict and not added. A column that already references a table is refused (`validate_relationship` checks it), and so is a column joined to its own table's key.
+
+**Returns:** `linked`, the verdict (`status`, `meaning`, `match_ratio`, `checked_rows`, `matched_rows`), and the new ontology file when linked.
+
+---
+
+### 13. download_artifact
 
 Download a generated artifact -- the ontology or the R2RML mapping -- as a Turtle (`.ttl`) file with its full content.
 
@@ -461,7 +493,7 @@ Download a generated artifact -- the ontology or the R2RML mapping -- as a Turtl
 
 ---
 
-### 13. sample_table_data
+### 14. sample_table_data
 
 Safely sample rows from a specific table for data exploration and quality assessment.
 
@@ -483,7 +515,7 @@ Safely sample rows from a specific table for data exploration and quality assess
 
 ---
 
-### 14. execute_sql_query
+### 15. execute_sql_query
 
 Execute a SQL query with built-in validation, fan-trap protection, and automatic GraphRAG context enrichment.
 
@@ -521,7 +553,7 @@ Execute a SQL query with built-in validation, fan-trap protection, and automatic
 
 ---
 
-### 15. generate_chart
+### 16. generate_chart
 
 Generate interactive Plotly charts rendered via MCP Apps, or export as static PNG images.
 
@@ -554,7 +586,7 @@ Generate interactive Plotly charts rendered via MCP Apps, or export as static PN
 
 ---
 
-### 16. cleanup_workspace
+### 17. cleanup_workspace
 
 Delete all workspace files for the current database connection and clear session state. The database connection remains active.
 
@@ -572,7 +604,7 @@ Delete all workspace files for the current database connection and clear session
 
 ---
 
-### 17. save_semantic_model
+### 18. save_semantic_model
 
 Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse across sessions.
 
@@ -594,7 +626,7 @@ Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse ac
 
 ---
 
-### 18. get_semantic_model
+### 19. get_semantic_model
 
 Retrieve a stored semantic model YAML by name.
 
@@ -612,7 +644,7 @@ Retrieve a stored semantic model YAML by name.
 
 ---
 
-### 19. list_semantic_models
+### 20. list_semantic_models
 
 List all stored semantic models for the current database connection.
 
@@ -622,7 +654,7 @@ List all stored semantic models for the current database connection.
 
 ---
 
-### 20. graphrag_search
+### 21. graphrag_search
 
 Search the schema using natural language via GraphRAG semantic search, or return a schema overview. GraphRAG is auto-initialized by `discover_schema`.
 
@@ -646,7 +678,7 @@ Search the schema using natural language via GraphRAG semantic search, or return
 
 ---
 
-### 21. graphrag_query_context
+### 22. graphrag_query_context
 
 Get an optimized, minimal schema context for SQL generation, selecting only the tables and columns relevant to a natural-language query.
 
@@ -671,7 +703,7 @@ Get an optimized, minimal schema context for SQL generation, selecting only the 
 
 ---
 
-### 22. graphrag_find_join_path
+### 23. graphrag_find_join_path
 
 Discover a join path between two tables using GraphRAG graph traversal.
 
@@ -697,7 +729,7 @@ Discover a join path between two tables using GraphRAG graph traversal.
 
 ---
 
-### 23. store_ontology_in_rdf
+### 24. store_ontology_in_rdf
 
 Persist the current session's ontology in the Oxigraph RDF store so it can be queried with SPARQL. Usually unnecessary -- `generate_ontology` auto-persists by default -- but useful after loading or editing an ontology with auto-persist disabled.
 
@@ -717,7 +749,7 @@ Persist the current session's ontology in the Oxigraph RDF store so it can be qu
 
 ---
 
-### 24. query_sparql
+### 25. query_sparql
 
 Execute a SPARQL query against the RDF ontology store to explore classes, properties, relationships, and semantic metadata.
 
@@ -741,7 +773,7 @@ Execute a SPARQL query against the RDF ontology store to explore classes, proper
 
 ---
 
-### 25. add_rdf_knowledge
+### 26. add_rdf_knowledge
 
 Add a custom triple (subject-predicate-object) to the RDF store to enrich the ontology with bespoke metadata.
 
@@ -763,7 +795,7 @@ Add a custom triple (subject-predicate-object) to the RDF store to enrich the on
 
 ---
 
-### 26. cleanup_old_versions
+### 27. cleanup_old_versions
 
 Prune old ontology and GraphRAG versions for one schema according to the retention policy. Unlike `cleanup_workspace`, this keeps the current generation and recent history -- it deletes only *archived* versions that have aged out.
 

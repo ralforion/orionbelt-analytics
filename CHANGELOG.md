@@ -10,13 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Joins found in the data** (opt-in, `OBA_DISCOVER_JOINS_BY_DATA`):
   `generate_ontology` checks columns that look like references but name no
-  table -- `orders.cust`, `tickets.owner_ref` -- against other tables' keys,
-  from a sampled set of their values, and links a column when exactly one key
-  holds nine in ten of them, or a key named like it among several. Small
-  values, a table's own key and keys that cannot be told apart link nothing.
-  Recorded as inferred relationships (`data_containment`), which
-  `AUTO_VALIDATE_RELATIONSHIPS` then checks on all rows. The idea follows
-  NVIDIA Auto Ontology.
+  table -- `orders.cust`, `purchases.vendor` -- against other tables' keys,
+  from a sample of their values. Names choose what is checked: key words,
+  abbreviations of the schema's own table words (`cust`, `cstmr`), and
+  synonyms by GraphRAG's loaded embedding model (`vendor`, `client`); they
+  never link. A key that alone holds the values is checked on all rows and
+  linked only when confirmed (numbers only when the column also names the
+  table). What the data cannot settle is listed with its keys, likeliest
+  first, for the new `confirm_join` tool, which links a join once all rows
+  confirm it and keeps it across regenerations. The idea follows NVIDIA Auto
+  Ontology, which asks a model inside its server to choose.
 - **Bridge tables**: tables that only link others, many to many --
   `student_courses(student_id, course_id)` -- are named by `discover_schema`
   and recorded in the ontology as `oba:bridgeBetween`. The fan-trap

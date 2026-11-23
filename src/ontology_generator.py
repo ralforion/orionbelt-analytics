@@ -1587,6 +1587,17 @@ class OntologyGenerator:
 
         return denormalized
 
+    def add_inferred_relationship(self, relationship: InferredRelationship) -> None:
+        """Add one inferred relationship to the ontology in hand.
+
+        For a join confirmed after generation (``confirm_join``); the classes
+        it connects must exist.
+        """
+        self._add_inferred_relationship_to_ontology(relationship)
+        self._inferred_fk_columns = getattr(self, "_inferred_fk_columns", set()) | {
+            (relationship.source_table.lower(), relationship.column.lower())
+        }
+
     def _add_inferred_relationship_to_ontology(
         self, inferred_rel: InferredRelationship
     ) -> None:

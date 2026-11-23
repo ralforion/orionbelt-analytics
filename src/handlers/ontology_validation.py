@@ -5,22 +5,25 @@ import logging
 import os
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
 
 from fastmcp import Context
 from rdflib import URIRef
+from rdflib.namespace import OWL, RDF
 
 from ..async_utils import run_db
 from ..graphrag.identity import split
 from ..handler_context import HandlerContext
+from ..join_discovery import CONFIRMED_PATTERN
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import VersionMetadataManager, mutate_workspace_metadata
-from ..ontology_generator import OntologyGenerator
+from ..ontology_generator import InferredRelationship, OntologyGenerator
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..relationship_validation import (
+    OBA,
     REASON_AMBIGUOUS_KEY,
     REASON_COMPOSITE_KEY,
     STATUS_CONFIRMED,
@@ -710,3 +713,272 @@ async def validate_relationship(
         },
         "queries": [coverage_sql, uniqueness_sql],
     }
+
+
+# Workspace metadata section of the joins confirm_join linked, per schema, so
+# a regenerated ontology keeps them.
+CONFIRMED_JOINS_SECTION = "confirmed_joins"
+
+
+def confirmed_joins(
+    connection_id: str | None, schema_name: str | None
+) -> list[InferredRelationship]:
+    """The joins confirm_join linked in *schema_name*, to add when regenerating.
+
+    File access; call it off the event loop.
+    """
+    if not connection_id:
+        return []
+    try:
+        manager = VersionMetadataManager(connection_id, OUTPUT_DIR)
+        schema_ws = manager.get_workspace_schema(schema_name or "default") or {}
+    except Exception as e:
+        logger.debug(f"No confirmed joins: {e}")
+        return []
+    joins = schema_ws.get(CONFIRMED_JOINS_SECTION) or {}
+    return [
+        InferredRelationship(
+            source_table=join["table"],
+            column=join["column"],
+            target_table=join["target_table"],
+            target_column=join["target_column"],
+            confidence="high",
+            pattern_matched=CONFIRMED_PATTERN,
+        )
+        for join in joins.values()
+        if isinstance(join, dict)
+        and all(
+            join.get(k) for k in ("table", "column", "target_table", "target_column")
+        )
+    ]
+
+
+async def _remember_join(
+    connection_id: str | None, schema_name: str, record: ValidationRecord
+) -> None:
+    """File a confirmed join in the workspace, so a regeneration keeps it."""
+    if not connection_id:
+        return
+
+    def _record(manager: VersionMetadataManager) -> None:
+        schema_ws = manager.get_workspace_schema(schema_name) or {}
+        joins = dict(schema_ws.get(CONFIRMED_JOINS_SECTION) or {})
+        joins[record.key()] = {
+            "table": record.from_table,
+            "column": record.column,
+            "target_table": record.to_table,
+            "target_column": record.to_column,
+        }
+        manager.update_workspace(schema_name, CONFIRMED_JOINS_SECTION, joins)
+
+    try:
+        await mutate_workspace_metadata(connection_id, OUTPUT_DIR, _record)
+    except Exception as e:
+        logger.warning(f"Failed to record the confirmed join: {e}")
+
+
+@dataclass(frozen=True)
+class _OntologyTable:
+    name: str
+    schema: str | None
+    #: Lower-cased column name -> as the ontology spells it.
+    columns: dict[str, str]
+    primary_keys: tuple[str, ...]
+
+
+def _ontology_tables(graph: Any, name: str, schema: str | None) -> list[_OntologyTable]:
+    """The ontology's tables called *name*, in *schema* if given."""
+    found = []
+    for cls in graph.subjects(RDF.type, OWL.Class):
+        table = graph.value(cls, OBA.tableName)
+        if table is None or str(table).lower() != name.lower():
+            continue
+        declared = graph.value(cls, OBA.schemaName)
+        if schema and declared is not None and str(declared).lower() != schema.lower():
+            continue
+        columns = {}
+        for prop in graph.subjects(RDF.type, OWL.DatatypeProperty):
+            owner = graph.value(prop, OBA.tableName)
+            column = graph.value(prop, OBA.columnName)
+            if owner is not None and column is not None and str(owner) == str(table):
+                columns[str(column).lower()] = str(column)
+        found.append(
+            _OntologyTable(
+                name=str(table),
+                schema=str(declared) if declared is not None else None,
+                columns=columns,
+                primary_keys=tuple(str(k) for k in graph.objects(cls, OBA.primaryKey)),
+            )
+        )
+    return found
+
+
+async def confirm_join(
+    ctx: Context,
+    table: str,
+    column: str,
+    target_table: str,
+    services: "HandlerContext",
+    target_column: str | None = None,
+    schema_name: str | None = None,
+) -> dict[str, Any]:
+    """Link a column to another table's key, once the data confirms it.
+
+    For a column generate_ontology's join discovery left to choose (several
+    keys hold its values), or any reference the ontology misses. The join is
+    checked on all rows, as validate_relationship checks one; only a
+    confirmed join is added, as an inferred relationship carrying its
+    verdict, so OBQC treats it like a checked key. The ontology is saved as a
+    new version, and the join kept when it is regenerated.
+
+    Args:
+        ctx: FastMCP request context.
+        table: Table holding the column.
+        column: The column.
+        target_table: The table it references.
+        services: Request-scoped services.
+        target_column: The referenced column; by default the target's
+            one-column primary key, or its ``id``.
+        schema_name: The tables' schema, when two schemas hold them.
+
+    Returns:
+        Whether it was linked, the verdict and the counts behind it.
+    """
+    session = services.get_session_data(ctx)
+    if session.ontology_file is None and session.loaded_ontology is None:
+        err: dict[str, Any] = services.create_error_response(
+            "No ontology is active. Call generate_ontology() or load_my_ontology() "
+            "first: confirm_join adds a relationship to it.",
+            "ontology_not_found",
+        )
+        return err
+    pinned = pin_connection(session)
+    try:
+        generator, is_upload = await _active_ontology(ctx, session, services)
+    except Exception as e:
+        err = services.create_error_response(
+            f"Could not load the active ontology: {e!s}", "ontology_error"
+        )
+        return err
+    graph = generator.graph
+
+    ends = []
+    for wanted in (table, target_table):
+        tables = _ontology_tables(graph, wanted, schema_name)
+        if len(tables) != 1:
+            err = services.create_error_response(
+                f"The ontology has {'no' if not tables else 'several'} table "
+                f"{wanted!r}" + ("" if not tables else "; pass schema_name") + ".",
+                "table_not_found" if not tables else "ambiguous_table",
+            )
+            return err
+        ends.append(tables[0])
+    source, target = ends
+    if source.name == target.name and source.schema == target.schema:
+        err = services.create_error_response(
+            "A column joined to its own table's key is no join confirm_join "
+            "can check: nearly any integer column matches a dense id.",
+            "parameter_error",
+        )
+        return err
+    key = source.columns.get(column.lower())
+    if key is None:
+        err = services.create_error_response(
+            f"{source.name} has no column {column!r}.", "column_not_found"
+        )
+        return err
+    if target_column is None:
+        primary = list(target.primary_keys)
+        target_column = (
+            primary[0] if len(primary) == 1 else target.columns.get("id") or ""
+        )
+    referenced = target.columns.get((target_column or "").lower())
+    if not referenced:
+        err = services.create_error_response(
+            f"{target.name} has no one-column key to join to; pass target_column.",
+            "column_not_found",
+        )
+        return err
+    existing = find_relationships(graph, source.name, key, None, source.schema)
+    if existing:
+        err = services.create_error_response(
+            f"{source.name}.{key} already references {existing[0].to_table}; "
+            "validate_relationship() checks it.",
+            "relationship_exists",
+        )
+        return err
+
+    ref = RelationshipRef(
+        from_table=source.name,
+        column=key,
+        to_table=target.name,
+        to_column=referenced,
+        from_schema=_physical_schema(session, source.name, source.schema),
+        to_schema=_physical_schema(session, target.name, target.schema),
+        property_uri="",
+    )
+    try:
+        record = await _measure(services.get_session_db_manager(ctx), ref)
+    except Exception as e:
+        err = services.create_error_response(
+            f"Checking {ref.from_table}.{ref.column} -> {ref.to_table}."
+            f"{ref.to_column} failed: {e!s}",
+            "query_error",
+        )
+        return err
+    if not still_connected(session, pinned):
+        return connection_changed_response(
+            services, "the join was being checked", "confirm_join()"
+        )
+    label = f"{ref.from_table}.{ref.column} -> {ref.to_table}.{ref.to_column}"
+    result: dict[str, Any] = {
+        "success": True,
+        "relationship": label,
+        "status": record.status,
+        "meaning": _MEANING[record.status],
+        "match_ratio": (
+            round(record.match_ratio, 4) if record.match_ratio is not None else None
+        ),
+        "checked_rows": record.checked_rows,
+        "matched_rows": record.matched_rows,
+    }
+    if record.status != STATUS_CONFIRMED:
+        result["linked"] = False
+        result["message"] = (
+            f"Not linked: the data does not confirm {label} ({record.status})."
+        )
+        return result
+
+    generator.add_inferred_relationship(
+        InferredRelationship(
+            source_table=ref.from_table,
+            column=ref.column,
+            target_table=ref.to_table,
+            target_column=ref.to_column,
+            confidence="high",
+            pattern_matched=CONFIRMED_PATTERN,
+        )
+    )
+    record_in_graph(graph, record)
+    saved = await _save_active_ontology(
+        ctx, services, session, pinned, generator, is_upload, [record]
+    )
+    if saved is None:
+        return connection_changed_response(
+            services, "the join was being recorded", "confirm_join()"
+        )
+    schema_ws = (
+        session.current_schema or session.get_last_analyzed_schema() or "default"
+    )
+    await _remember_join(pinned.connection_id, schema_ws, record)
+    await notify_client(ctx, f"Linked {label}: confirmed on all rows")
+    result.update(
+        linked=True,
+        message=(
+            f"Linked {label}: confirmed on {record.checked_rows} rows. OBQC now "
+            "treats it like a checked key."
+        ),
+        ontology_file=saved["filename"],
+        persisted_to_rdf=saved["persisted"],
+    )
+    return result

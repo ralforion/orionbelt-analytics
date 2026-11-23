@@ -1,26 +1,41 @@
 """Joins found in the data where column names do not say them.
 
 Relationships are inferred from names: ``customer_id`` names ``customers``.
-``orders.cust``, ``tickets.owner_ref`` or ``payments.acct_no`` name no table,
-and nothing linked them. Here a column that looks like a reference -- named
-with a key word (``_id``, ``_ref``, ``_no``, ``_code``, ...) or like a table
-(``cust`` for ``customers``) -- is checked against the keys of other tables:
-its sampled distinct values must be held by the key, nine in ten at least.
+``orders.cust``, ``tickets.owner_ref`` or ``purchases.vendor`` name no table,
+and nothing linked them. Here a column that looks like a reference is checked
+against the one-column keys of the other tables: which of them holds its
+sampled distinct values, nine in ten at least.
 
-Values alone are weak evidence. Small numbers and dense surrogate ids
-coincide with every key, so a column whose values are all shorter than three
-characters is not checked, and a match must be unique: when several keys hold
-the values, a key named like the column (``supplier_ref`` and ``suppliers``)
-decides, and otherwise nothing is inferred. A table's own key is never a
-match: it holds nearly any integer column's values. What is found is a guess
-like any inferred relationship, marked ``data_containment``;
-``AUTO_VALIDATE_RELATIONSHIPS`` checks it on all rows. The idea follows NVIDIA
-Auto Ontology, which asks a model to pick among the keys that hold a column's
-values; here only a unique match, or a name, does.
+**Names choose what to check, and rank; they never link.** A column is
+checked when it ends in a key word (``_id``, ``_ref``, ``_no``, ...) or a word
+of it names another table, in two steps:
+
+1. Abbreviations, from the schema's own table words: ``cust`` is the start of
+   ``customer``, ``cstmr`` and ``acct`` keep the letters of ``customer`` and
+   ``account`` in order. No fixed list.
+2. Synonyms, for a word no table word expands, with the embedding model
+   GraphRAG already runs when it is loaded: ``vendor`` is ``suppliers``,
+   ``client`` is ``customers`` -- only with a clear lead over every other
+   table. Short abbreviations it scores badly (``cust`` lands nearer
+   ``products``), which is why it comes second.
+
+**The data links.** A key that alone holds the values is checked on all rows,
+as ``validate_relationship`` does, and linked only when that confirms it:
+then the relationship carries the verdict, and OBQC treats it like a checked
+key. Values alone are weak evidence -- numbers from dense surrogate ids
+coincide with every such key, ``parent_ref`` 500..899 sits in any ``id``
+running to 3000 -- so a column whose values are all shorter than three
+characters is not checked, a table's own key is never a match, and numbers
+(digits stored as text too) link by themselves only when a word of the column
+names the table as well. Distinctive values -- ``C-0001``, a UUID -- do. What
+the data cannot settle -- several keys holding the values, or numbers only one
+unnamed key holds -- is listed with the keys, likeliest by name first, for the
+client to confirm one (``confirm_join``). The idea follows NVIDIA Auto Ontology, which asks a model
+inside its server to pick; here the client's does, or a person.
 
 Opt-in (``OBA_DISCOVER_JOINS_BY_DATA``): it reads a sample of every table with
-a candidate column (on BigQuery, billed for the columns scanned) and runs one
-small lookup per candidate key.
+a candidate column (on BigQuery, billed for the columns scanned), runs one
+small lookup per candidate key, and checks each unique match on all rows.
 """
 
 from __future__ import annotations
@@ -28,16 +43,25 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+import numpy as np
 from sqlglot import exp
 
 from .bookkeeping import is_bookkeeping
 from .constants import DB_SQLGLOT_DIALECTS
+from .relationship_validation import (
+    STATUS_CONFIRMED,
+    RelationshipRef,
+    ValidationRecord,
+    build_check_queries,
+    classify,
+)
 from .sql_build import quoted, quoted_path, select_columns
+from .utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +80,16 @@ MIN_VALUE_LENGTH = 3
 MIN_CONTAINMENT = 0.9
 #: Key lookups per run at most; the rest are skipped and counted.
 MAX_CHECKS = 300
+#: A synonym: the model's similarity to the best table at least this...
+MIN_SYNONYM = 0.5
+#: ...and this far ahead of the next table.
+SYNONYM_LEAD = 0.15
 
 PATTERN = "data_containment"
+CONFIRMED_PATTERN = "confirmed_join"
+
+#: Texts in, one vector per text out: the GraphRAG embedder's _embed_texts.
+Embed = Callable[[list[str]], Sequence[Any]]
 
 # Words a reference column ends with.
 _KEY_WORDS = frozenset(
@@ -69,36 +101,17 @@ _INTEGER_DECIMAL = re.compile(
     r"^(?:number|numeric|decimal)\s*\(\s*\d+\s*(?:,\s*0\s*)?\)$"
 )
 
+# How a column word names a table, strongest first.
+WORD, ABBREVIATION, SYNONYM = "word", "abbreviation", "synonym"
+_STRENGTH = {WORD: 3, ABBREVIATION: 2, SYNONYM: 1}
+
 
 def enabled() -> bool:
     """Whether generate_ontology looks for joins in the data."""
     return os.getenv(DISCOVER_VARIABLE, "false").strip().lower() == "true"
 
 
-@dataclass(frozen=True)
-class FoundJoin:
-    """A column whose values a unique key of another table holds."""
-
-    table: str
-    column: str
-    target_table: str
-    target_column: str
-    #: Share of the sampled distinct values the key holds.
-    containment: float
-    #: Whether the column is also named like the target table.
-    named: bool
-
-
-@dataclass
-class Discovery:
-    """What a run found, and what it left unchecked."""
-
-    found: list[FoundJoin]
-    #: Columns several keys held, with no name to choose between them.
-    ambiguous: list[str]
-    #: Key lookups skipped for MAX_CHECKS; a column with any skipped is
-    #: linked to nothing.
-    skipped_checks: int = 0
+# --- Names ---------------------------------------------------------------------
 
 
 def _words(name: str) -> list[str]:
@@ -120,6 +133,113 @@ def _singular(word: str) -> str:
     return word
 
 
+def abbreviates(short: str, word: str) -> bool:
+    """Whether *short* abbreviates *word*.
+
+    Its start (``cust``, ``emp``, ``ord``), from three letters; or, from four,
+    its letters in order from the same first letter (``cstmr``, ``acct``).
+    """
+    if len(short) < 3 or len(short) >= len(word) or short[0] != word[0]:
+        return False
+    if word.startswith(short):
+        return True
+    if len(short) < 4:
+        return False
+    letters = iter(word)
+    return all(letter in letters for letter in short)
+
+
+@dataclass(frozen=True)
+class NameMatch:
+    """How a column names a table."""
+
+    how: str  # WORD, ABBREVIATION or SYNONYM
+    #: 1.0 for a word or an abbreviation; the model's similarity for a synonym.
+    score: float
+
+    def rank(self) -> tuple[int, float]:
+        return _STRENGTH[self.how], self.score
+
+
+class Names:
+    """Which tables a column's name names, by word, abbreviation or synonym."""
+
+    def __init__(self, tables: Iterable[str], embed: Embed | None = None) -> None:
+        self._tables = list(dict.fromkeys(tables))
+        self._words = {t: [_singular(w) for w in _words(t)] for t in self._tables}
+        self._embed = embed
+        self._vectors: dict[str, np.ndarray] | None = None
+
+    def __call__(self, column: str, exclude: str = "") -> dict[str, NameMatch]:
+        """Table -> how *column* names it, for the tables other than *exclude*."""
+        tables = [t for t in self._tables if t != exclude]
+        found: dict[str, NameMatch] = {}
+        unresolved = []
+        for word in (w for w in _words(column) if w not in _KEY_WORDS):
+            hits = False
+            for table in tables:
+                words = self._words[table]
+                if word in words or _singular(word) in words:
+                    found[table] = _stronger(found.get(table), NameMatch(WORD, 1.0))
+                    hits = True
+                elif any(abbreviates(word, w) for w in words):
+                    match = NameMatch(ABBREVIATION, 1.0)
+                    found[table] = _stronger(found.get(table), match)
+                    hits = True
+            if not hits and len(word) >= 3:
+                unresolved.append(word)
+        for word in unresolved:
+            synonym = self._synonym(word, tables)
+            if synonym is not None:
+                table, score = synonym
+                found[table] = _stronger(found.get(table), NameMatch(SYNONYM, score))
+        return found
+
+    def _synonym(self, word: str, tables: list[str]) -> tuple[str, float] | None:
+        """The one table *word* means by the model, with a clear lead."""
+        if self._embed is None or len(tables) < 1:
+            return None
+        try:
+            vectors = self._table_vectors()
+            (vector,) = self._embed([word])
+        except Exception as e:
+            logger.debug(f"Synonym lookup unavailable: {e}")
+            self._embed = None
+            return None
+        mine = np.asarray(vector, dtype=float)
+        scores = sorted(
+            ((_cosine(mine, vectors[t]), t) for t in tables if t in vectors),
+            reverse=True,
+        )
+        if not scores or scores[0][0] < MIN_SYNONYM:
+            return None
+        if len(scores) > 1 and scores[0][0] - scores[1][0] < SYNONYM_LEAD:
+            return None
+        return scores[0][1], round(scores[0][0], 3)
+
+    def _table_vectors(self) -> dict[str, np.ndarray]:
+        if self._vectors is None:
+            assert self._embed is not None
+            texts = [" ".join(_words(t)) for t in self._tables]
+            self._vectors = {
+                t: np.asarray(v, dtype=float)
+                for t, v in zip(self._tables, self._embed(texts), strict=True)
+            }
+        return self._vectors
+
+
+def _stronger(old: NameMatch | None, new: NameMatch) -> NameMatch:
+    return new if old is None or new.rank() > old.rank() else old
+
+
+def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+    norm = float(np.linalg.norm(a) * np.linalg.norm(b))
+    return float(a @ b / norm) if norm else 0.0
+
+
+# --- Columns and keys ----------------------------------------------------------
+
+
 def kind(data_type: str) -> str | None:
     """``integer`` or ``text`` for a type a key may have; None otherwise.
 
@@ -133,24 +253,6 @@ def kind(data_type: str) -> str | None:
     if any(word in t for word in ("char", "text", "string", "uuid", "clob")):
         return "text"
     return None
-
-
-def _names(column: str, table: str) -> bool:
-    """Whether *column* is named like *table*: ``cust`` and ``customers``."""
-    words = [w for w in _words(column) if w not in _KEY_WORDS]
-    targets = [_singular(w) for w in _words(table)]
-    return any(
-        len(word) >= 3
-        and any(t.startswith(word) or word.startswith(t) for t in targets)
-        for word in words
-    )
-
-
-def _looks_like_a_reference(column: str, tables: Iterable[str]) -> bool:
-    words = _words(column)
-    if words and words[-1] in _KEY_WORDS and len(words) > 1:
-        return True
-    return any(_names(column, table) for table in tables)
 
 
 @dataclass(frozen=True)
@@ -180,20 +282,22 @@ def _keys(tables: list[Any]) -> list[_Key]:
 
 
 def candidates(
-    tables: list[Any], linked: Iterable[tuple[str, str]]
+    tables: list[Any], linked: Iterable[tuple[str, str]], names: Names | None = None
 ) -> dict[str, list[tuple[str, str]]]:
     """Per table, the columns worth checking: (column, kind).
 
-    A column that looks like a reference and is no key the table declares or
-    one inferred from names, nor the table's own one-column key, nor a
-    bookkeeping column, and is of a type a key may have.
+    A column that looks like a reference -- a key word last, or a word naming
+    another table -- and is no key the table declares or one inferred from
+    names, nor the table's own one-column key, nor a bookkeeping column, and
+    is of a type a key may have.
 
     Args:
         tables: Analyzed tables (``TableInfo``).
         linked: (table, column) already in a relationship, lower-cased.
+        names: How columns name tables; by abbreviation alone without one.
     """
+    names = names or Names(t.name for t in tables)
     known = {(t.lower(), c.lower()) for t, c in linked}
-    names = [t.name for t in tables]
     found: dict[str, list[tuple[str, str]]] = {}
     for table in tables:
         own = [k.lower() for k in table.primary_keys or []]
@@ -207,21 +311,80 @@ def candidates(
                 or (table.name.lower(), lowered) in known
                 or (len(own) == 1 and lowered == own[0])
                 or is_bookkeeping(lowered)
-                or not _looks_like_a_reference(
-                    column.name, (n for n in names if n != table.name)
-                )
             ):
                 continue
-            found.setdefault(table.name, []).append((column.name, column_kind))
+            words = _words(column.name)
+            keyed = len(words) > 1 and words[-1] in _KEY_WORDS
+            if keyed or names(column.name, exclude=table.name):
+                found.setdefault(table.name, []).append((column.name, column_kind))
     return found
 
 
+# --- In the data -----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FoundJoin:
+    """A column whose values one key alone holds, confirmed on all rows."""
+
+    table: str
+    column: str
+    target_table: str
+    target_column: str
+    #: Share of the sampled distinct values the key holds.
+    containment: float
+    #: The check on all rows, confirmed.
+    record: ValidationRecord
+
+
+@dataclass(frozen=True)
+class HeldBy:
+    """A key that holds a column's sampled values, and how the column names it."""
+
+    table: str
+    column: str
+    containment: float
+    name: NameMatch | None
+
+
+@dataclass(frozen=True)
+class Choice:
+    """A column the data cannot link alone: the client may confirm a key.
+
+    Several keys hold its values, or only one does but the values are numbers
+    and no word of the column names its table.
+    """
+
+    table: str
+    column: str
+    #: Likeliest first: named by a word, an abbreviation, a synonym, none.
+    keys: tuple[HeldBy, ...]
+
+
+@dataclass
+class Discovery:
+    """What a run found, what it left to the client, and what it skipped."""
+
+    found: list[FoundJoin] = field(default_factory=list)
+    to_confirm: list[Choice] = field(default_factory=list)
+    #: One key held the sample, the check on all rows did not confirm it:
+    #: (column, key, status).
+    unconfirmed: list[tuple[str, str, str]] = field(default_factory=list)
+    #: Key lookups skipped for MAX_CHECKS; a column with any skipped is
+    #: linked to nothing.
+    skipped_checks: int = 0
+
+
 def _path(table: Any, schema_name: str | None, db_type: str) -> list[str]:
-    schema = table.schema if table.schema and table.schema != "default" else schema_name
+    schema = _schema(table, schema_name)
     path = [schema, table.name]
     if db_type == "dremio":
         path = [p for part in path for p in str(part or "").split(".")]
     return [str(p) for p in path if p]
+
+
+def _schema(table: Any, schema_name: str | None) -> str | None:
+    return table.schema if table.schema and table.schema != "default" else schema_name
 
 
 def _rows(result: dict[str, Any]) -> list[list[Any]]:
@@ -229,6 +392,13 @@ def _rows(result: dict[str, Any]) -> list[list[Any]]:
         list(row.values()) if isinstance(row, dict) else list(row)
         for row in result.get("data") or []
     ]
+
+
+def _number(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _value(value: Any, value_kind: str) -> Any:
@@ -263,11 +433,49 @@ def held_query(dialect: str, path: list[str], key: str, values: list[Any]) -> st
     )
 
 
+def verify(db_manager: Any, ref: RelationshipRef) -> ValidationRecord:
+    """The check validate_relationship runs, on all rows.
+
+    Raises:
+        RuntimeError: A check query failed.
+    """
+    db_type = (getattr(db_manager, "connection_info", None) or {}).get("type", "")
+    coverage_sql, uniqueness_sql = build_check_queries(ref, db_type)
+    answers = []
+    for sql in (coverage_sql, uniqueness_sql):
+        result = db_manager.execute_sql_query(sql, 5)
+        if not result.get("success"):
+            raise RuntimeError(result.get("error") or "check query failed")
+        answers.append((_rows(result) or [[0, 0]])[0])
+    coverage, uniqueness = answers
+    checked = _number(coverage[0] if coverage else 0)
+    matched = _number(coverage[1] if len(coverage) > 1 else 0)
+    target_rows = _number(uniqueness[0] if uniqueness else 0)
+    target_distinct = _number(uniqueness[1] if len(uniqueness) > 1 else 0)
+    status, ratio = classify(checked, matched, target_rows, target_distinct)
+    return ValidationRecord(
+        from_schema=ref.from_schema,
+        from_table=ref.from_table,
+        column=ref.column,
+        to_schema=ref.to_schema,
+        to_table=ref.to_table,
+        to_column=ref.to_column,
+        status=status,
+        match_ratio=ratio,
+        checked_rows=checked,
+        matched_rows=matched,
+        target_rows=target_rows,
+        target_distinct=target_distinct,
+        checked_at=utc_now().isoformat(),
+    )
+
+
 def discover(
     db_manager: Any,
     tables: list[Any],
     linked: Iterable[tuple[str, str]],
     schema_name: str | None = None,
+    embed: Embed | None = None,
 ) -> Discovery:
     """Look for the keys whose values the candidate columns hold.
 
@@ -277,18 +485,21 @@ def discover(
         linked: (table, column) already in a relationship: declared, or
             inferred from names.
         schema_name: The tables' schema.
+        embed: The loaded embedding model, for synonyms; None for none.
 
     Returns:
-        The joins found, the columns left ambiguous, and how many lookups the
-        cap skipped. A table or key that cannot be read is passed over.
+        The joins found and confirmed, the ties left to the client, the
+        matches all rows did not confirm, and how many lookups the cap
+        skipped. A table or key that cannot be read is passed over.
     """
     db_type = (getattr(db_manager, "connection_info", None) or {}).get("type", "")
     dialect = DB_SQLGLOT_DIALECTS.get(db_type, "postgres")
     by_name = {t.name: t for t in tables}
+    names = Names((t.name for t in tables), embed)
     keys = _keys(tables)
-    discovery = Discovery(found=[], ambiguous=[])
+    discovery = Discovery()
     checks = 0
-    for table_name, columns in candidates(tables, linked).items():
+    for table_name, columns in candidates(tables, linked, names).items():
         table = by_name[table_name]
         sql = select_columns(
             dialect,
@@ -318,7 +529,8 @@ def discover(
                 len(str(v)) < MIN_VALUE_LENGTH for v in values
             ):
                 continue
-            held: list[tuple[_Key, float]] = []
+            named = names(column, exclude=table_name)
+            held: list[HeldBy] = []
             cut_short = False
             for key in keys:
                 if key.table is table or key.kind != column_kind:
@@ -340,37 +552,73 @@ def discover(
                     logger.debug(f"Join discovery lookup failed: {e}")
                     continue
                 count = (_rows(answer) or [[0]])[0][0] if answer.get("success") else 0
-                share = int(count or 0) / len(values)
+                share = _number(count) / len(values)
                 if share >= MIN_CONTAINMENT:
-                    held.append((key, share))
-            if cut_short:
-                # A key left unchecked may hold the values too: no match is
-                # known to be the only one.
+                    held.append(
+                        HeldBy(
+                            key.table.name,
+                            key.column,
+                            round(share, 3),
+                            named.get(key.table.name),
+                        )
+                    )
+            if cut_short or not held:
+                # Cut short, a key left unchecked may hold the values too: no
+                # match is known to be the only one.
                 continue
-            chosen = (
-                held
-                if len(held) == 1
-                else [
-                    (key, share)
-                    for key, share in held
-                    if _names(column, key.table.name)
-                ]
+            distinctive = column_kind == "text" and not all(
+                str(v).isdigit() for v in values
             )
-            if len(chosen) == 1:
-                key, share = chosen[0]
+            if len(held) > 1 or not (distinctive or held[0].name):
+                ranked = sorted(
+                    held,
+                    key=lambda h: (
+                        tuple(-x for x in (h.name.rank() if h.name else (0, 0.0))),
+                        -h.containment,
+                        h.table,
+                    ),
+                )
+                discovery.to_confirm.append(Choice(table_name, column, tuple(ranked)))
+                continue
+            (only,) = held
+            target = by_name[only.table]
+            ref = RelationshipRef(
+                from_table=table_name,
+                column=column,
+                to_table=only.table,
+                to_column=only.column,
+                from_schema=_schema(table, schema_name),
+                to_schema=_schema(target, schema_name),
+                property_uri="",
+            )
+            try:
+                record = verify(db_manager, ref)
+            except Exception as e:
+                logger.debug(f"Join discovery check failed: {e}")
+                continue
+            if record.status == STATUS_CONFIRMED:
                 discovery.found.append(
                     FoundJoin(
-                        table=table_name,
-                        column=column,
-                        target_table=key.table.name,
-                        target_column=key.column,
-                        containment=round(share, 3),
-                        named=_names(column, key.table.name),
+                        table_name,
+                        column,
+                        only.table,
+                        only.column,
+                        only.containment,
+                        record,
                     )
                 )
-            elif held:
-                discovery.ambiguous.append(f"{table_name}.{column}")
+            else:
+                discovery.unconfirmed.append(
+                    (
+                        f"{table_name}.{column}",
+                        f"{only.table}.{only.column}",
+                        record.status,
+                    )
+                )
     return discovery
+
+
+# --- Into the ontology ---------------------------------------------------------
 
 
 def linked_by_names(tables: list[Any]) -> set[tuple[str, str]]:
@@ -383,17 +631,18 @@ def linked_by_names(tables: list[Any]) -> set[tuple[str, str]]:
     }
 
 
-def run(db_manager: Any, tables: list[Any], schema_name: str | None) -> Discovery:
+def run(
+    db_manager: Any,
+    tables: list[Any],
+    schema_name: str | None,
+    embed: Embed | None = None,
+) -> Discovery:
     """:func:`discover`, past the relationships names already suggest."""
-    return discover(db_manager, tables, linked_by_names(tables), schema_name)
+    return discover(db_manager, tables, linked_by_names(tables), schema_name, embed)
 
 
 def as_inferred(discovery: Discovery | None) -> list[Any]:
-    """The joins found, as relationships the ontology generator infers.
-
-    Named like their table as well, they are as firm as name inference gets
-    (``high``); by their values alone, ``medium``.
-    """
+    """The joins found, as relationships the ontology generator infers."""
     from .ontology_generator import InferredRelationship
 
     if discovery is None:
@@ -404,37 +653,67 @@ def as_inferred(discovery: Discovery | None) -> list[Any]:
             column=join.column,
             target_table=join.target_table,
             target_column=join.target_column,
-            confidence="high" if join.named else "medium",
+            confidence="high",
             pattern_matched=PATTERN,
         )
         for join in discovery.found
     ]
 
 
+def records(discovery: Discovery | None) -> list[ValidationRecord]:
+    """The checks that confirmed the joins found, to record on them."""
+    return [join.record for join in discovery.found] if discovery else []
+
+
+def _held(key: HeldBy) -> str:
+    how = ""
+    if key.name is not None:
+        how = f", named by {key.name.how}"
+        if key.name.how == SYNONYM:
+            how += f" {key.name.score:.2f}"
+    return f"{key.table}.{key.column} ({key.containment:.0%}{how})"
+
+
 def note(discovery: Discovery | None) -> str:
-    """What discovery found, for the generate_ontology result."""
+    """What discovery found and left open, for the generate_ontology result."""
     if discovery is None or not (
-        discovery.found or discovery.ambiguous or discovery.skipped_checks
+        discovery.found
+        or discovery.to_confirm
+        or discovery.unconfirmed
+        or discovery.skipped_checks
     ):
         return ""
     lines = [f"\n\nJOINS FOUND IN THE DATA: {len(discovery.found)}"]
     lines += [
         f"  {j.table}.{j.column} -> {j.target_table}.{j.target_column}"
-        f" ({j.containment:.0%} of sampled values)"
+        f" (confirmed on {j.record.checked_rows} rows)"
         for j in discovery.found[:20]
     ]
     if len(discovery.found) > 20:
         lines.append(f"  ... and {len(discovery.found) - 20} more")
-    lines.append(
-        "Inferred, not declared: AUTO_VALIDATE_RELATIONSHIPS or "
-        "validate_relationship() checks each on all rows."
-    )
-    if discovery.ambiguous:
+    if discovery.to_confirm:
         lines.append(
-            "Held by several keys, so left unlinked: "
-            + ", ".join(discovery.ambiguous[:10])
-            + (" ..." if len(discovery.ambiguous) > 10 else "")
+            f"\nJOINS TO CONFIRM: {len(discovery.to_confirm)} -- several keys "
+            "hold the values, or numbers only one key holds that the column "
+            "does not name: the data cannot choose. Keys likeliest first; link "
+            "one with confirm_join(table, column, target_table), which checks "
+            "it on all rows first:"
+        )
+        lines += [
+            f"  {c.table}.{c.column}: " + "; ".join(_held(k) for k in c.keys)
+            for c in discovery.to_confirm[:20]
+        ]
+        if len(discovery.to_confirm) > 20:
+            lines.append(f"  ... and {len(discovery.to_confirm) - 20} more")
+    if discovery.unconfirmed:
+        lines.append(
+            "\nHeld by the sample, not by all rows, so not linked: "
+            + "; ".join(f"{c} -> {k} ({s})" for c, k, s in discovery.unconfirmed[:10])
+            + (" ..." if len(discovery.unconfirmed) > 10 else "")
         )
     if discovery.skipped_checks:
-        lines.append(f"Key lookups skipped past the limit: {discovery.skipped_checks}")
+        lines.append(
+            f"Key lookups skipped past the limit of {MAX_CHECKS}: "
+            f"{discovery.skipped_checks}; their columns are not linked."
+        )
     return "\n".join(lines)

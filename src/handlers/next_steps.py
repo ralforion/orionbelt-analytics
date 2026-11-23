@@ -229,6 +229,8 @@ def for_tool(tool: str, session: Any, result: Any) -> list[dict[str, Any]]:
         ]
     if tool == "apply_semantic_names":
         return _answering(session)
+    if tool == "confirm_join":
+        return _answering(session)
     if tool == "validate_relationship":
         if data.get("status") in ("refuted", "target_not_unique"):
             if _graphrag_ready(session):
