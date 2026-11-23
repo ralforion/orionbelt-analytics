@@ -202,6 +202,23 @@ The second is a range on a column whose form does not sort as dates, such as `%d
 
 Both are warnings rather than errors because the format was inferred from a sample. A literal already in the column's form, a native `DATE` column, and a literal that is no date at all are not reported. Set `OBA_INFER_DATE_FORMATS=false` to skip the sampling.
 
+### Personal data in the result (WARNING)
+
+Columns whose names say they hold personal data carry `oba:personalData` (see [Personal data](tools-reference.md#personal-data)). When a query returns one, OBQC says so, naming each column and its kind:
+
+```sql
+-- WARNING: The result includes personal data, by its column names: customers.email (email),
+--          customers.name (name) -- Return it only where the question needs it;
+--          COUNT(DISTINCT ...) counts people without returning their data
+SELECT name, email FROM customers;
+```
+
+Only what the result holds counts. Each output is followed back to the columns its value is made of: through derived tables and CTEs, under their column alias lists (`WITH c(e) AS ...`, `AS d(e)`, `FROM customers AS c(i, n, e)`); `UNION` and the other set operations, by place or `BY NAME`, with `EXCEPT` returning its first branch's rows only; recursive CTEs, round by round until nothing more reaches an output; `*` and `t.*`, less what `EXCLUDE`/`EXCEPT` leaves out, with `REPLACE` giving an output the replacement's value and `RENAME` a new name; scalar and correlated subqueries; a whole row (`to_json(c)`); an output repeated in a subquery, under the name DuckDB gives it when read (`email_1`); and an earlier output used again in the same `SELECT`. A column that only decides a value returns nothing of it: one counted (`COUNT(DISTINCT email)`), compared or tested (`email IS NULL`, `email LIKE ...`, `IN (SELECT email ...)`, a `CASE` condition), or used to filter, group, partition or sort. A query sqlglot cannot scope is judged by names: any tagged column it names, or all of its tables' under a `*`.
+
+Where a star puts each column is read from `oba:columnOrdinal`, the column's place in its table as the database lists it: an ontology keeps no order of its own. Where that is unknown -- an ontology without ordinals, a `USING` or `NATURAL` join folding columns, a pattern picking them (`* LIKE 'e%'`, `COLUMNS(...)`) -- names still hold, and whatever reads by place (a set operation, an alias list) takes every column the star could have put there.
+
+A warning, not a refusal: the question may need the data, and the person asking may be allowed to see it. Who may read what is for the database's grants and masking policies. `OBA_DETECT_PERSONAL_DATA=false` turns the warning off along with the tagging.
+
 ### Aggregation correctness (ERROR)
 
 When aggregate functions (`SUM`, `COUNT`, `AVG`, `MIN`, `MAX`) are used, OBQC checks that all non-aggregated columns in `SELECT` appear in `GROUP BY`. Grouping by an alias satisfies the check on the column it stands for.

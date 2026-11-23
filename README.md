@@ -68,6 +68,7 @@ A key differentiator of OrionBelt is **OBQC** (Ontology-Based Query Check), a de
 | **Join validity**           | Missing join conditions (Cartesian products), join columns that don't match declared foreign keys |
 | **Copies of a schema**      | Joins from one prefixed copy of a schema into another (`OLD_ROOMS` to `NEW_BUILDING`)            |
 | **Type compatibility**      | WHERE/ON comparisons between incompatible types (e.g. string vs. integer)                         |
+| **Personal data**           | Results that return columns whose names say they hold personal data (`email`, `date_of_birth`)    |
 | **Aggregation correctness** | SELECT columns missing from GROUP BY when aggregates are used                                     |
 | **Fan-trap detection**      | Aggregations across multiple one-to-many joins that silently multiply results                     |
 

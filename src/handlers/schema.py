@@ -19,6 +19,7 @@ from ..lifecycle.metadata import (
     update_workspace_section,
 )
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
+from ..personal_data import tagged as tagged_personal_data
 from ..r2rml_generator import R2RMLGenerator
 from ..table_families import TABLE_FAMILIES_NOTE, find_families
 from ..utils import notify_client, utc_now, write_json_file, write_text_file
@@ -142,8 +143,11 @@ async def reset_cache(
     }
 
 
-def _column_entry(col: Any) -> dict[str, Any]:
-    """A column as discover_schema and get_table_details report it."""
+def _column_entry(col: Any, personal: str | None = None) -> dict[str, Any]:
+    """A column as discover_schema and get_table_details report it.
+
+    *personal* is the kind of personal data its name says it holds.
+    """
     entry: dict[str, Any] = {
         "name": col.name,
         "data_type": col.data_type,
@@ -158,7 +162,64 @@ def _column_entry(col: Any) -> dict[str, Any]:
     # found one: a query must compare against that form ("20150601").
     if getattr(col, "date_format", None):
         entry["date_format"] = col.date_format
+    if personal:
+        entry["personal_data"] = personal
     return entry
+
+
+def _personal_columns(table: Any) -> dict[str, str]:
+    """*table*'s columns whose names say they hold personal data, by kind."""
+    return tagged_personal_data(
+        table.name, [(col.name, col.data_type) for col in table.columns]
+    )
+
+
+def _columns(table: Any) -> list[dict[str, Any]]:
+    """*table*'s columns as discover_schema and get_table_details report them."""
+    personal = _personal_columns(table)
+    return [_column_entry(col, personal.get(col.name)) for col in table.columns]
+
+
+#: Tables whose personal data a discover_schema response lists; the rest are
+#: counted.
+MAX_LISTED_PERSONAL_TABLES = 25
+
+PERSONAL_DATA_NOTE = (
+    "Columns whose names say they hold personal data, by kind. Return them "
+    "only when the question needs them: execute_sql_query warns when a "
+    "result includes one, and COUNT(DISTINCT ...) counts people without "
+    "returning their data."
+)
+
+
+def _personal_data_section(tables: list[Any]) -> dict[str, Any]:
+    """The personal data among *tables*, for discover_schema; empty if none."""
+    found = {}
+    for table in tables:
+        personal = _personal_columns(table)
+        if personal:
+            found[table.name] = personal
+    if not found:
+        return {}
+    names = list(found)
+    section: dict[str, Any] = {
+        "personal_data": {
+            name: found[name] for name in names[:MAX_LISTED_PERSONAL_TABLES]
+        },
+        "personal_data_note": PERSONAL_DATA_NOTE,
+    }
+    if len(names) > MAX_LISTED_PERSONAL_TABLES:
+        section["more_personal_data_tables"] = len(names) - MAX_LISTED_PERSONAL_TABLES
+    return section
+
+
+async def _personal_data(tables: list[Any]) -> dict[str, Any]:
+    """:func:`_personal_data_section` in a worker; never fails discovery."""
+    try:
+        return await asyncio.to_thread(_personal_data_section, tables)
+    except Exception as e:
+        logger.warning(f"Personal-data tagging skipped: {e}")
+        return {}
 
 
 #: Set to false to skip sampling date-like columns during discovery.
@@ -567,6 +628,7 @@ async def discover_schema(
             lightweight_result["fan_trap_warnings"] = fan_trap_warnings
         lightweight_result.update(await _near_copies(session, table_info_objects))
         lightweight_result.update(await _table_families(table_info_objects))
+        lightweight_result.update(await _personal_data(table_info_objects))
 
         # Auto-initialize GraphRAG in background
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
@@ -620,7 +682,7 @@ async def discover_schema(
             table_dict = {
                 "name": table_info.name,
                 "schema": table_info.schema,
-                "columns": [_column_entry(col) for col in table_info.columns],
+                "columns": _columns(table_info),
                 "primary_keys": table_info.primary_keys,
                 "foreign_keys": table_info.foreign_keys,
                 "comment": table_info.comment,
@@ -721,6 +783,7 @@ async def discover_schema(
             schema_result["fan_trap_warnings"] = fan_trap_warnings
         schema_result.update(await _near_copies(session, table_info_objects))
         schema_result.update(await _table_families(table_info_objects))
+        schema_result.update(await _personal_data(table_info_objects))
 
         # Generate R2RML mapping
         if table_info_objects:
@@ -915,7 +978,7 @@ async def get_table_details(
                     "success": True,
                     "name": t.name,
                     "schema": t.schema,
-                    "columns": [_column_entry(col) for col in t.columns],
+                    "columns": _columns(t),
                     "primary_keys": t.primary_keys,
                     "foreign_keys": t.foreign_keys,
                     "comment": t.comment,
@@ -949,7 +1012,7 @@ async def get_table_details(
             "success": True,
             "name": table_info.name,
             "schema": table_info.schema,
-            "columns": [_column_entry(col) for col in table_info.columns],
+            "columns": _columns(table_info),
             "primary_keys": table_info.primary_keys,
             "foreign_keys": table_info.foreign_keys,
             "comment": table_info.comment,

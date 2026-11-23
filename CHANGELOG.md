@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Personal data**: columns whose names say they hold personal data --
+  `email`, `customer_phone`, `date_of_birth`, `billing_address`, a `name` in
+  a table of people -- are tagged with their kind. `discover_schema` lists
+  them, `get_table_details` marks each column, the ontology records
+  `oba:personalData`, and OBQC warns when a query's result includes one,
+  followed back through derived tables, CTEs (also recursive), column alias
+  lists, set operations and stars; `COUNT(DISTINCT email)` or a filter on
+  one returns none of it. The ontology now also records each column's place
+  in its table as `oba:columnOrdinal`, which says where a star puts it.
+  Names only, no value is read; `OBA_DETECT_PERSONAL_DATA=false` turns it
+  off. The idea follows NVIDIA Auto Ontology's PII rules.
 - **Named to your database, with its version**: every connection carries
   `orionbelt-analytics/<version>`, which the database shows next to the
   server's queries, as OrionBelt Semantic Layer does with its own name: as the
