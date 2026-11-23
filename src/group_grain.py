@@ -26,6 +26,9 @@ is certain counts:
 - equalities that hold for every row: conjuncts, not OR alternatives;
 - across an outer join, only from the side it keeps to the side it may fill
   with NULLs, whose missing row is still one row; none across a FULL join;
+- inner, outer and cross joins only: the rows an ANTI join keeps fail its
+  condition, and SEMI, ASOF, POSITIONAL, ClickHouse's ANY and ARRAY joins
+  match rows otherwise;
 - plain tables of the schema only: a CTE, a derived table, UNNEST or a
   table function may hold any number of rows per key;
 - plain grouping keys: ROLLUP, CUBE, GROUP BY ALL add or change groups,
@@ -64,6 +67,10 @@ Catalog = Callable[[exp.Table], Keyed | None]
 
 # Directions an equality carries what is known.
 _BOTH, _FORWARD = "both", "forward"
+
+# Join kinds whose condition holds for every row they produce, one row per
+# match.
+_PLAIN_KINDS = frozenset({"", "INNER", "OUTER", "CROSS", "STRAIGHT_JOIN"})
 
 
 def kept_once(select: exp.Select, catalog: Catalog) -> set[str]:
@@ -222,10 +229,11 @@ def _equalities(
             pinned.add(pin)
 
     for join in select.args.get("joins") or []:
-        if (
-            join.args.get("using")
-            or (join.args.get("method") or "").upper() == "NATURAL"
-        ):
+        if join.args.get("using") or join.args.get("method"):
+            # USING and NATURAL fold columns without saying whose; ASOF and
+            # POSITIONAL match rows by no equality.
+            return None, set()
+        if (join.args.get("kind") or "").upper() not in _PLAIN_KINDS:
             return None, set()
         node = join.this
         joined = (

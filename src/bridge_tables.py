@@ -41,8 +41,9 @@ class Bridge:
     table: str
     #: The tables it links, in the order of its keys, each once.
     connects: tuple[str, ...]
-    #: Whether its primary key is made of its keys' columns, so each
-    #: combination of linked rows appears at most once.
+    #: Whether its primary key is exactly the columns of its two foreign keys,
+    #: so each pair of linked rows appears at most once. A bridge of three
+    #: keys keyed by all three repeats a pair once per third.
     pairs_unique: bool
     #: Whether a key it rests on was inferred from names, not declared.
     inferred: bool = False
@@ -96,8 +97,7 @@ def _bridge(table: Any, guessed: list[tuple[str, str]]) -> Bridge | None:
         name = column.name.lower()
         if name not in in_keys and name not in surrogate and not is_bookkeeping(name):
             return None
-    spanned = [columns for columns, _, _ in keys if columns & set(primary)]
-    pairs_unique = bool(primary) and set(primary) <= in_keys and len(spanned) >= 2
+    pairs_unique = len(keys) == 2 and set(primary) == keys[0][0] | keys[1][0]
     return Bridge(
         schema=table.schema or "",
         table=table.name,

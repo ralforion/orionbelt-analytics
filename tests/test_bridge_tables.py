@@ -336,6 +336,10 @@ def test_a_total_grouped_so_that_nothing_repeats_passes(
         # A window sums across the groups: one order, two items, twice.
         "SELECT oi.id, o.total, SUM(o.total) OVER () AS t FROM orders o "
         "JOIN order_items oi ON oi.order_id = o.id GROUP BY oi.id, o.total",
+        # The rows an ANTI join keeps fail its condition: oi.id = 1 fixes nothing.
+        "SELECT oi.id, SUM(o.total) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id "
+        "ANTI JOIN orders x ON x.id = oi.order_id AND oi.id = 1 GROUP BY oi.id",
         # Renamed columns: this oi.id is the quantity, no key at all.
         "SELECT oi.id, SUM(o.total) FROM orders o "
         "JOIN order_items AS oi(qty, order_id, id) ON oi.order_id = o.id "
@@ -353,7 +357,7 @@ def test_the_suggestion_names_the_key_to_group_by(school: OBQCValidator) -> None
     (finding,) = _fan_traps(
         school, "SELECT c.title, SUM(s.tuition) " + THROUGH + "GROUP BY c.title"
     )
-    assert "student_courses links students and courses many to many" in (
+    assert "student_courses links students to courses many to many" in (
         finding.suggestion or ""
     )
     assert "GROUP BY courses.id" in (finding.suggestion or "")
@@ -366,6 +370,43 @@ def test_the_suggestion_names_the_key_to_group_by(school: OBQCValidator) -> None
     )
     assert "does not say each pair appears once" in (finding.suggestion or "")
     assert "GROUP BY" not in (finding.suggestion or "")
+
+
+def test_a_bridge_of_three_keys_has_no_pair_key_unless_its_key_is_a_pair() -> None:
+    def three(primary: list[str]) -> TableInfo:
+        return _table(
+            "enrolments",
+            ["student_id", "course_id", "club_id"],
+            pk=primary,
+            fks=[
+                _fk("student_id", "students"),
+                _fk("course_id", "courses"),
+                _fk("club_id", "clubs"),
+            ],
+        )
+
+    def suggestion(table: TableInfo, by: str) -> str:
+        validator = OBQCValidator()
+        validator.load_ontology(
+            _ontology([STUDENTS, COURSES, CLUBS, table]).graph,
+            "http://example.com/ontology/",
+        )
+        (finding,) = _fan_traps(
+            validator,
+            "SELECT cl.id, SUM(s.tuition) FROM students s "
+            f"JOIN enrolments e ON e.student_id = s.id JOIN {by} GROUP BY cl.id",
+        )
+        return finding.suggestion or ""
+
+    # Keyed by all three: a student comes once per course in a club.
+    every = three(["student_id", "course_id", "club_id"])
+    assert _bridges([every])["enrolments"][1] is False
+    assert "does not say each pair appears once" in suggestion(
+        every, "clubs cl ON cl.id = e.club_id"
+    )
+    # Keyed by the student and the course: per course, not per club.
+    pair = three(["student_id", "course_id"])
+    assert "GROUP BY courses.id" in suggestion(pair, "clubs cl ON cl.id = e.club_id")
 
 
 def test_a_key_longer_than_the_pair_is_no_pair_key() -> None:
@@ -471,6 +512,16 @@ def test_a_grouping_key_may_be_a_position_or_an_output_name() -> None:
         "GROUP BY s.id",
         # No grouping at all.
         "SELECT SUM(c.credits) " + THROUGH,
+        # Joins that match rows by other rules than every row's equality.
+        "SELECT s.id, SUM(c.credits) " + THROUGH + "ANTI JOIN clubs k ON k.id = s.id "
+        "GROUP BY s.id",
+        "SELECT s.id, SUM(c.credits) " + THROUGH + "SEMI JOIN clubs k ON k.id = s.id "
+        "GROUP BY s.id",
+        "SELECT s.id, SUM(c.credits) FROM students s "
+        "JOIN student_courses sc ON sc.student_id = s.id "
+        "ASOF JOIN courses c ON c.id = sc.course_id AND c.credits >= 0 GROUP BY s.id",
+        "SELECT s.id, SUM(c.credits) FROM students s POSITIONAL JOIN courses c "
+        "GROUP BY s.id",
     ],
 )
 def test_what_is_not_certain_keeps_nothing(sql: str) -> None:
