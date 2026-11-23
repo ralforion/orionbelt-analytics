@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bridge tables**: tables that only link others, many to many --
   `student_courses(student_id, course_id)` -- are named by `discover_schema`
   and recorded in the ontology as `oba:bridgeBetween`. The fan-trap
-  suggestion for a total across one names the key to group by. The idea
-  follows NVIDIA Auto Ontology's bridge tables.
+  suggestion for a total across one names the bridge's column to group by.
+  The idea follows NVIDIA Auto Ontology's bridge tables.
 - **Personal data**: columns whose names say they hold personal data --
   `email`, `customer_phone`, `date_of_birth`, `billing_address`, a `name` in
   a table of people -- are tagged with their kind. `discover_schema` lists

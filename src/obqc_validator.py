@@ -1747,12 +1747,14 @@ class OBQCValidator:
     ) -> str | None:
         """How to sum *measure* across *fanning*, when that is a bridge table.
 
-        Per key of the other side, each measured row counts once only when the
-        bridge's key is exactly that pair (:meth:`_pair_keyed`), through the
-        key the query joins the measured table by (*via*, the bridge's columns
-        of it). Otherwise a pair may repeat -- (student_id, course_id, club_id)
-        lists a student once per course in a club; joined by mentor_id, a
-        mentor once per student -- and only aggregating first helps.
+        Grouped by the bridge's own key to the other side, each measured row
+        counts once -- when the bridge's primary key is exactly that key and
+        the one the query joins the measured table by (*via*, which the join
+        must compare in full: :meth:`_pair_key`). The advice names the
+        bridge's column, so it holds however the other side is joined. In
+        every other case a pair may repeat -- (student_id, course_id,
+        club_id), a join by mentor_id, an OR in the join -- and only
+        aggregating first helps.
         """
         if self._schema_cache is None:
             return None
@@ -1775,50 +1777,52 @@ class OBQCValidator:
             "COUNT(DISTINCT ...) its key"
         )
         for other in candidates:
-            keyed = self._schema_cache.tables.get(other.lower())
-            if keyed is None or not keyed.primary_keys:
+            columns = self._pair_key(bridge, measure, other, via)
+            if not columns:
                 continue
-            if not self._pair_keyed(bridge, measure, other, via):
-                continue
-            key = ", ".join(f"{other}.{k}" for k in keyed.primary_keys)
+            key = ", ".join(f"{bridge.name}.{column}" for column in columns)
             return (
-                f"{linked} Per {other} (GROUP BY {key}) each {measure} row counts "
-                f"once; for a total over {measure}, {first}."
+                f"{linked} Grouped by its key to {other} (GROUP BY {key}), each "
+                f"{measure} row counts once per {other}; for a total over "
+                f"{measure}, {first}."
             )
-        return f"{linked} Its key does not say each pair appears once, so {first}."
+        return (
+            f"{linked} No grouping keeps each {measure} row once through this "
+            f"join, so {first}."
+        )
 
-    def _pair_keyed(
+    def _pair_key(
         self,
         bridge: TableSchema,
         one: str,
         other: str,
-        via: frozenset[str] | None = None,
-    ) -> bool:
-        """Whether *bridge*'s primary key is exactly its keys to *one* and *other*.
+        via: frozenset[str] | None,
+    ) -> tuple[str, ...]:
+        """*bridge*'s columns of its key to *other*, if they pair with *via*.
 
-        Then a row of each matches one bridge row at most. A key over more --
-        (student_id, course_id, version), or a third table's key -- lets the
-        pair repeat. The key to *one* is the one the query joins by (*via*);
-        unknown, it must be the bridge's only key to *one*.
+        *via* is the bridge's columns of the key the query joins *one* by.
+        Together the two keys must be exactly the bridge's primary key: then a
+        row of *one* and a value of the key to *other* match one bridge row at
+        most. Empty when the join compares no key in full, or no key to
+        *other* completes the pair (a key over more, or another key).
         """
-        if self._schema_cache is None or not bridge.primary_keys:
-            return False
+        if self._schema_cache is None or not bridge.primary_keys or via is None:
+            return ()
         keys = [
-            ({column.lower() for column, _ in rel.pairs}, rel.to_table.lower())
+            (rel.to_table.lower(), [child for child, _ in rel.pairs])
             for rel in self._schema_cache.relationships.values()
             if rel.from_table.lower() == bridge.name.lower()
         ]
+        if not any(
+            to == one.lower() and {c.lower() for c in cols} == via for to, cols in keys
+        ):
+            return ()
         primary = {k.lower() for k in bridge.primary_keys}
-        to_one = [i for i, (_, to) in enumerate(keys) if to == one.lower()]
-        if via is not None:
-            to_one = [i for i in to_one if keys[i][0] == via]
-        if len(to_one) != 1:
-            return False
-        (i,) = to_one
-        return any(
-            j != i and to_b == other.lower() and keys[i][0] | columns_b == primary
-            for j, (columns_b, to_b) in enumerate(keys)
-        )
+        for to, columns in keys:
+            lowered = {c.lower() for c in columns}
+            if to == other.lower() and lowered != via and via | lowered == primary:
+                return tuple(columns)
+        return ()
 
     def _kept_once(self, select: exp.Select, cte_refs: set[int]) -> set[str]:
         """Tables of *select* whose rows its GROUP BY keeps once per group.

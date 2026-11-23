@@ -360,7 +360,7 @@ def test_the_suggestion_names_the_key_to_group_by(school: OBQCValidator) -> None
     assert "student_courses links students to courses many to many" in (
         finding.suggestion or ""
     )
-    assert "GROUP BY courses.id" in (finding.suggestion or "")
+    assert "GROUP BY student_courses.course_id" in (finding.suggestion or "")
     # Without a key on the pair, grouping cannot fix it: aggregate first.
     (finding,) = _fan_traps(
         school,
@@ -368,7 +368,7 @@ def test_the_suggestion_names_the_key_to_group_by(school: OBQCValidator) -> None
         "JOIN student_clubs k ON k.student_id = s.id "
         "JOIN clubs cl ON cl.id = k.club_id GROUP BY cl.id",
     )
-    assert "does not say each pair appears once" in (finding.suggestion or "")
+    assert "No grouping keeps each" in (finding.suggestion or "")
     assert "GROUP BY" not in (finding.suggestion or "")
 
 
@@ -401,12 +401,14 @@ def test_a_bridge_of_three_keys_has_no_pair_key_unless_its_key_is_a_pair() -> No
     # Keyed by all three: a student comes once per course in a club.
     every = three(["student_id", "course_id", "club_id"])
     assert _bridges([every])["enrolments"][1] is False
-    assert "does not say each pair appears once" in suggestion(
+    assert "No grouping keeps each" in suggestion(
         every, "clubs cl ON cl.id = e.club_id"
     )
     # Keyed by the student and the course: per course, not per club.
     pair = three(["student_id", "course_id"])
-    assert "GROUP BY courses.id" in suggestion(pair, "clubs cl ON cl.id = e.club_id")
+    assert "GROUP BY enrolments.course_id" in suggestion(
+        pair, "clubs cl ON cl.id = e.club_id"
+    )
 
 
 def test_the_advice_follows_the_key_the_query_joins_by() -> None:
@@ -433,12 +435,62 @@ def test_the_advice_follows_the_key_the_query_joins_by() -> None:
         "JOIN courses c ON c.id = sc.course_id GROUP BY c.id"
     )
     (finding,) = _fan_traps(validator, sql.format("mentor_id"))
-    assert "does not say each pair appears once" in (finding.suggestion or "")
+    assert "No grouping keeps each" in (finding.suggestion or "")
     assert "GROUP BY" not in (finding.suggestion or "")
     result = validator.validate(sql.format("mentor_id"), dialect="duckdb")
     assert all("_via" not in f for f in result.fan_trap_findings)
     # By student_id the grouping keeps each student once per course.
     assert _fan_traps(validator, sql.format("student_id")) == []
+
+
+def test_the_advice_needs_a_key_the_join_compares_in_full(
+    school: OBQCValidator,
+) -> None:
+    # OR s.id = 0: student 0 joins every enrolment, so no grouping helps.
+    (finding,) = _fan_traps(
+        school,
+        "SELECT c.id, SUM(s.tuition) FROM students s "
+        "JOIN student_courses sc ON sc.student_id = s.id OR s.id = 0 "
+        "JOIN courses c ON c.id = sc.course_id GROUP BY c.id",
+    )
+    assert "No grouping keeps each" in (finding.suggestion or "")
+    assert "GROUP BY" not in (finding.suggestion or "")
+
+
+def test_the_advice_names_the_bridges_own_column() -> None:
+    # Two keys to courses, the pair key by course_id. Joined by the alternate,
+    # courses.id would count a student once per shared alternate; the
+    # bridge's course_id is right however courses is joined.
+    alternate = _table(
+        "enrollments",
+        ["student_id", "course_id", "alternate_course_id"],
+        pk=["student_id", "course_id"],
+        fks=[
+            _fk("student_id", "students"),
+            _fk("course_id", "courses"),
+            _fk("alternate_course_id", "courses"),
+        ],
+    )
+    validator = OBQCValidator()
+    validator.load_ontology(
+        _ontology([STUDENTS, COURSES, alternate]).graph, "http://example.com/ontology/"
+    )
+    joined = (
+        "FROM students s JOIN enrollments e ON e.student_id = s.id "
+        "JOIN courses c ON c.id = e.alternate_course_id "
+    )
+    (finding,) = _fan_traps(
+        validator, "SELECT c.id, SUM(s.tuition) " + joined + "GROUP BY c.id"
+    )
+    assert "GROUP BY enrollments.course_id" in (finding.suggestion or "")
+    # Followed, the advice passes.
+    assert (
+        _fan_traps(
+            validator,
+            "SELECT e.course_id, SUM(s.tuition) " + joined + "GROUP BY e.course_id",
+        )
+        == []
+    )
 
 
 def test_a_key_longer_than_the_pair_is_no_pair_key() -> None:
@@ -459,7 +511,7 @@ def test_a_key_longer_than_the_pair_is_no_pair_key() -> None:
     )
     sql = "SELECT c.id, SUM(s.tuition) " + THROUGH + "GROUP BY c.id"
     (finding,) = _fan_traps(validator, sql)
-    assert "does not say each pair appears once" in (finding.suggestion or "")
+    assert "No grouping keeps each" in (finding.suggestion or "")
     assert "GROUP BY" not in (finding.suggestion or "")
 
 

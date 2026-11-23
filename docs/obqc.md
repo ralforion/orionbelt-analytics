@@ -301,7 +301,8 @@ JOIN courses c ON c.id = sc.course_id
 GROUP BY s.id;
 
 -- ERROR: two students may share a name, and a course then counts once per student.
---        Suggested: ... Per students (GROUP BY students.id) each courses row counts once
+--        Suggested: ... Grouped by its key to students (GROUP BY student_courses.student_id),
+--        each courses row counts once per students
 SELECT s.full_name, SUM(c.credits) FROM ... GROUP BY s.full_name;
 ```
 
