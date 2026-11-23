@@ -2,6 +2,7 @@
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -24,6 +25,7 @@ from .ontology_naming import (
     clean_name,
     column_property_local_name,
     foreign_keys,
+    inverse_relationship_local_name,
     relationship_local_name,
 )
 from .personal_data import tagged as tagged_personal_data
@@ -513,6 +515,7 @@ class OntologyGenerator:
         include_inferred_relationships: bool = True,
         annotate_denormalized: bool = True,
         views_info: list[Any] | None = None,
+        extra_relationships: Sequence[InferredRelationship] = (),
     ) -> str:
         """Generate an ontology from a list of table information with quality enhancements.
 
@@ -525,6 +528,9 @@ class OntologyGenerator:
                 excluded from every table-driven step below (relationship
                 inference, denormalization, disjointness, property chains) --
                 a view has no keys for any of those to reason about.
+            extra_relationships: Relationships inferred elsewhere, such as in
+                the data (src/join_discovery.py), added beside the ones names
+                suggest -- never over a column those or a declared key link.
 
         Returns:
             Serialized ontology in Turtle format
@@ -554,6 +560,18 @@ class OntologyGenerator:
             if include_inferred_relationships
             else []
         )
+        if include_inferred_relationships:
+            keyed = {(r.source_table.lower(), r.column.lower()) for r in inferred}
+            keyed |= {
+                (t.name.lower(), fk["column"].lower())
+                for t in tables_info
+                for fk in t.foreign_keys or []
+            }
+            inferred += [
+                rel
+                for rel in extra_relationships
+                if (rel.source_table.lower(), rel.column.lower()) not in keyed
+            ]
         self._inferred_fk_columns = {
             (rel.source_table.lower(), rel.column.lower()) for rel in inferred
         }
@@ -1580,16 +1598,27 @@ class OntologyGenerator:
         source_table_uri = self.base_uri[self._clean_name(inferred_rel.source_table)]
         target_table_uri = self.base_uri[self._clean_name(inferred_rel.target_table)]
 
-        # Create relationship name
-        rel_name = (
-            f"{self._clean_name(inferred_rel.source_table)}_has_"
-            f"{self._clean_name(inferred_rel.target_table)}"
-        )
-        prop_uri = self.base_uri[rel_name]
-
-        # Check if relationship already exists
+        # Named after the two tables; a second key between them -- cust beside
+        # customer_id, both to customers -- after its column too, as declared
+        # keys are. It was dropped. Only the same key again is skipped.
+        via: str | None = None
+        prop_uri = self.base_uri[
+            relationship_local_name(
+                inferred_rel.source_table, inferred_rel.target_table
+            )
+        ]
         if (prop_uri, RDF.type, OWL.ObjectProperty) in self.graph:
-            return  # Already exists, skip
+            existing = self.graph.value(prop_uri, self.oba_ns.foreignKeyColumn)
+            if str(existing or "").lower() == inferred_rel.column.lower():
+                return
+            via = inferred_rel.column
+            prop_uri = self.base_uri[
+                relationship_local_name(
+                    inferred_rel.source_table, inferred_rel.target_table, via
+                )
+            ]
+            if (prop_uri, RDF.type, OWL.ObjectProperty) in self.graph:
+                return
 
         self.graph.add((prop_uri, RDF.type, OWL.ObjectProperty))
         # Many-to-one: each source row references at most one target row
@@ -1651,11 +1680,11 @@ class OntologyGenerator:
         self.graph.add((source_table_uri, self.oba_ns.joinsTo, target_table_uri))
 
         # Add inverse relationship
-        inverse_rel_name = (
-            f"{self._clean_name(inferred_rel.target_table)}_referenced_by_"
-            f"{self._clean_name(inferred_rel.source_table)}"
-        )
-        inverse_prop_uri = self.base_uri[inverse_rel_name]
+        inverse_prop_uri = self.base_uri[
+            inverse_relationship_local_name(
+                inferred_rel.source_table, inferred_rel.target_table, via
+            )
+        ]
 
         if (inverse_prop_uri, RDF.type, OWL.ObjectProperty) not in self.graph:
             self.graph.add((inverse_prop_uri, RDF.type, OWL.ObjectProperty))

@@ -302,17 +302,28 @@ async def _auto_generate_ontology_background(
         base_uri = config.ontology_base_uri
 
         ontology_generator = OntologyGenerator(base_uri=base_uri)
-        from .ontology_generation import _views_for_ontology
+        from ..join_discovery import as_inferred
+        from .ontology_generation import _discover_joins, _views_for_ontology
 
-        ontology_ttl = await asyncio.to_thread(
-            partial(
-                ontology_generator.generate_from_schema,
-                tables_info,
-                views_info=_views_for_ontology(
-                    session, schema_name, views=views, db_type=db_type
-                ),
-            )
+        # Opt-in (OBA_DISCOVER_JOINS_BY_DATA), as in generate_ontology: only
+        # while the session is still on the connection this work belongs to.
+        db_manager = getattr(session, "db_manager", None)
+        found_joins = (
+            await _discover_joins(db_manager, tables_info, schema_name)
+            if session.connection_id == connection_id
+            else None
         )
+        generate = partial(
+            ontology_generator.generate_from_schema,
+            tables_info,
+            views_info=_views_for_ontology(
+                session, schema_name, views=views, db_type=db_type
+            ),
+        )
+        found = as_inferred(found_joins)
+        if found:
+            generate = partial(generate, extra_relationships=found)
+        ontology_ttl = await asyncio.to_thread(generate)
         from .ontology_validation import (
             auto_validation_enabled,
             reapply_recorded,

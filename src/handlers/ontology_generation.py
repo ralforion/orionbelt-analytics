@@ -14,6 +14,10 @@ from ..constants import DB_SQLGLOT_DIALECTS
 from ..database_manager import ColumnInfo, TableInfo
 from ..graphrag.manager import _annotate_view_sources
 from ..handler_context import HandlerContext
+from ..join_discovery import Discovery, as_inferred
+from ..join_discovery import enabled as join_discovery_enabled
+from ..join_discovery import note as found_joins_note
+from ..join_discovery import run as discover_joins_in_data
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import (
     get_active_version_number,
@@ -185,6 +189,30 @@ def _relationship_checks_note(checks: dict[str, Any] | None) -> str:
             + ". Retry one with validate_relationship()."
         )
     return note
+
+
+async def _discover_joins(
+    db_manager: Any, tables: list[Any], schema_name: str | None
+) -> Discovery | None:
+    """Joins found in the data, when OBA_DISCOVER_JOINS_BY_DATA is on.
+
+    Never fails generation: without a connection, or when the lookups fail,
+    the ontology is built from names and declared keys alone.
+    """
+    if not join_discovery_enabled() or db_manager is None:
+        return None
+    try:
+        if not db_manager.has_engine():
+            return None
+        found = await run_db(discover_joins_in_data, db_manager, tables, schema_name)
+    except Exception as e:
+        logger.warning(f"Join discovery skipped: {e}")
+        return None
+    logger.info(
+        f"Join discovery: {len(found.found)} found, {len(found.ambiguous)} "
+        f"ambiguous, {found.skipped_checks} lookups skipped"
+    )
+    return found
 
 
 async def generate_ontology(
@@ -388,11 +416,26 @@ async def generate_ontology(
 
     generator = services.server_state.get_ontology_generator(base_uri=base_uri)
     views_info = _views_for_ontology(session, schema_name)
+    # Opt-in (OBA_DISCOVER_JOINS_BY_DATA): joins names do not say, found by
+    # which key holds a column's values.
+    # Only while the session is on the connection this generation is pinned
+    # to: its tables are that database's.
+    found_joins = (
+        await _discover_joins(
+            services.get_session_db_manager(ctx), tables_info, schema_name
+        )
+        if still_connected(services.get_session_data(ctx), pinned)
+        else None
+    )
     # rdflib work is CPU-bound (~876 ms per 2.65 MB of Turtle); off the loop
     # so it does not freeze every concurrent session.
-    ontology_ttl = await asyncio.to_thread(
-        partial(generator.generate_from_schema, tables_info, views_info=views_info)
+    generate = partial(
+        generator.generate_from_schema, tables_info, views_info=views_info
     )
+    found = as_inferred(found_joins)
+    if found:
+        generate = partial(generate, extra_relationships=found)
+    ontology_ttl = await asyncio.to_thread(generate)
     # Relationships checked with validate_relationship keep their verdicts.
     ontology_ttl = await asyncio.to_thread(
         reapply_recorded, generator, pinned.connection_id, schema_name, ontology_ttl
@@ -692,7 +735,11 @@ To improve ontology for business users:
 2. Review suggestions and provide alternatives
 3. Call apply_semantic_names() with your suggestions"""
 
-                    return result + _relationship_checks_note(relationship_checks)
+                    return (
+                        result
+                        + found_joins_note(found_joins)
+                        + _relationship_checks_note(relationship_checks)
+                    )
             except Exception as e:
                 logger.warning(
                     f"Auto-persist to Oxigraph failed: {e}, falling back to full TTL return"
@@ -712,7 +759,11 @@ To improve ontology for business users:
             )
             result += "\n3. Call apply_semantic_names() with your suggestions"
 
-        return result + _relationship_checks_note(relationship_checks)
+        return (
+            result
+            + found_joins_note(found_joins)
+            + _relationship_checks_note(relationship_checks)
+        )
 
     except Exception as e:
         logger.warning(f"Failed to save ontology to file: {e}")

@@ -292,7 +292,14 @@ Generate an RDF/OWL ontology from the database schema with `oba:` (OrionBelt Ana
 - Auto-persists to Oxigraph RDF store for SPARQL querying (when `auto_persist` is true)
 - Analyzes generated names and reports how many may need semantic review
 - With `AUTO_VALIDATE_RELATIONSHIPS=true`, checks every relationship inferred from column names against the data, as `validate_relationship` does, and reports the verdicts; confirmed ones then block fan-traps like declared keys. Relationships that already have a verdict are not measured again. This also covers a cached ontology (it is returned with the verdicts added) and one generated in the background with `AUTO_ONTOLOGY`
+- With `OBA_DISCOVER_JOINS_BY_DATA=true`, looks in the data for joins that column names do not say (see [Joins found in the data](#joins-found-in-the-data)), and reports what it found
 - Saves ontology as `.ttl` (Turtle) file in connection-scoped output directory
+
+#### Joins found in the data
+
+Relationships are inferred from names: `customer_id` names `customers`. `orders.cust`, `tickets.owner_ref` or `payments.acct_no` name no table, and nothing linked them. With `OBA_DISCOVER_JOINS_BY_DATA=true`, `generate_ontology` checks each column that looks like a reference -- ending in a key word (`_id`, `_ref`, `_no`, `_code`, `_key`, ...) or named like a table (`cust` for `customers`) -- and is linked by no declared key or name, against the one-column keys of the other tables (a primary key, or an `id` without one) of the same kind of type. It samples up to 1,000 rows of each table with a candidate (up to 100 distinct values per column) and asks each candidate key how many of them it holds, one small lookup per key, at most 300 per run.
+
+A key that holds nine in ten of the values links them, if it is the only one. Values alone are weak evidence: small numbers and dense surrogate ids coincide with every key. So a column whose values are all shorter than three characters is not checked; when several keys hold the values, a key named like the column decides (`supplier_ref` and `suppliers`), and otherwise the column stays unlinked and the result says so; and a table's own key is never a match. What is found is an inferred relationship like one from names, marked `oba:inferencePattern "data_containment"` (`high` confidence when also named like its table, `medium` otherwise): OBQC warns on a fan-trap resting on it rather than blocking, until `AUTO_VALIDATE_RELATIONSHIPS` or `validate_relationship` confirms it on all rows. It runs when an ontology is built, also in the background, not on one returned from cache. On BigQuery the samples are billed for the columns scanned. The idea follows NVIDIA Auto Ontology, which asks a model to pick among the keys that hold a column's values; here only a unique match, or a name, does.
 
 ---
 

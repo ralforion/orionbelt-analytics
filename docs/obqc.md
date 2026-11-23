@@ -337,7 +337,7 @@ Fan-out needs to know which side of a join is the "one" side, and that comes fro
 | Relationship | Fan-trap finding resting on it |
 |---|---|
 | Declared by the database, or inferred and `confirmed` / `partial` by `validate_relationship` | Blocks, as above |
-| Inferred, never checked (or `no_data`) | WARNING, never blocks; the message names the relationship and says it is a guess |
+| Inferred, never checked (or `no_data`), from names or from the data (`OBA_DISCOVER_JOINS_BY_DATA`) | WARNING, never blocks; the message names the relationship and says it is a guess |
 | `target_not_unique` | Fans out from **both** ends: the lookup `orders JOIN customers` multiplies orders too, and blocks |
 | `refuted` | Ignored: it is no relationship to join on, and the join is reported as not matching one |
 

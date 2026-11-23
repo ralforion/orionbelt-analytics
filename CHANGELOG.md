@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Joins found in the data** (opt-in, `OBA_DISCOVER_JOINS_BY_DATA`):
+  `generate_ontology` checks columns that look like references but name no
+  table -- `orders.cust`, `tickets.owner_ref` -- against other tables' keys,
+  from a sampled set of their values, and links a column when exactly one key
+  holds nine in ten of them, or a key named like it among several. Small
+  values, a table's own key and keys that cannot be told apart link nothing.
+  Recorded as inferred relationships (`data_containment`), which
+  `AUTO_VALIDATE_RELATIONSHIPS` then checks on all rows. The idea follows
+  NVIDIA Auto Ontology.
 - **Bridge tables**: tables that only link others, many to many --
   `student_courses(student_id, course_id)` -- are named by `discover_schema`
   and recorded in the ontology as `oba:bridgeBetween`. The fan-trap
@@ -109,6 +118,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the read-only check.
 
 ### Fixed
+- A second inferred relationship between the same two tables was dropped:
+  `orders.billing_customer_id` and `orders.shipping_customer_id` were both
+  named `orders_has_customers`, and only the first was kept. The second is
+  now named after its column, as declared keys are.
 - OBQC blocked every query grouped by position or with `GROUP BY ALL`:
   `SELECT user_id, COUNT(*) FROM orders GROUP BY 1` was rejected because
   `user_id` was "not in GROUP BY clause". A position now groups by the output
