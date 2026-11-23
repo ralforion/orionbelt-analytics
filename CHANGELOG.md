@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Bridge tables**: tables that only link others, many to many --
+  `student_courses(student_id, course_id)` -- are named by `discover_schema`
+  and recorded in the ontology as `oba:bridgeBetween`. The fan-trap
+  suggestion for a total across one names the bridge's column to group by.
+  The idea follows NVIDIA Auto Ontology's bridge tables.
 - **Personal data**: columns whose names say they hold personal data --
   `email`, `customer_phone`, `date_of_birth`, `billing_address`, a `name` in
   a table of people -- are tagged with their kind. `discover_schema` lists
@@ -71,6 +76,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scans both tables.
 
 ### Changed
+- **A total grouped so that nothing repeats is no fan-trap**: OBQC blocked
+  every measure taken across a one-to-many join, including credits summed
+  per student across a bridge to courses, which counts each course once per
+  student. A measured table's rows now count as kept once per group when its
+  key and the grouping keys fix one row of every joined table, by declared
+  primary keys and join equalities; `GROUP BY s.full_name`, `ROLLUP` and
+  ungrouped totals are still blocked.
+- **Relationships are inferred for columns of a composite key**: inference
+  skipped every primary-key column, so a link table keyed by its two foreign
+  keys (`student_courses`) got no inferred joins. Only a lone key column is
+  skipped now.
 - **Snowflake gets no application name**: the driver no longer sends
   `application=orionbelt-analytics`, since Snowflake keeps that setting for its
   registered partners; the connector's own default goes instead, as in
@@ -93,6 +109,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the read-only check.
 
 ### Fixed
+- DuckDB tables had no primary keys: duckdb_engine reflects none, so no
+  DuckDB ontology carried `oba:primaryKey`. They are now read from DuckDB's
+  own catalog.
 - **BigQuery connects again**: the driver passed a `timeout` that
   google-cloud-bigquery's DB-API does not take, so every BigQuery
   connection failed with a `TypeError` before running a query.

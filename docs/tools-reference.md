@@ -187,6 +187,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 - `fan_trap_warnings` -- tables with multiple FK relationships (potential data multiplication risk)
 - `near_copies` -- pairs of tables with nearly the same columns, such as a current table and its archive, with the columns only one side has and the row counts when known (see [Near-copies](#near-copies)); closest first, at most 25, with `near_copies_omitted` counting the rest
 - `table_families` -- copies of the schema kept under table-name prefixes (`OLD_`/`NEW_`, `EU_`/`US_`): each family's tables and the names copied between them, at most 10 families per group with `more_families` counting the rest, and `table_families_note` (see [Table families](#table-families))
+- `bridge_tables` -- tables that only link others, many to many (`student_courses` between `students` and `courses`), each with the tables it connects and whether each pair of linked rows appears at most once (`pairs_unique`: its primary key is exactly the columns of its two foreign keys); at most 25, with `more_bridge_tables` counting the rest, and `bridge_tables_note` (see [Bridge tables](#bridge-tables))
 - `personal_data` -- the columns whose names say they hold personal data, by table, each with its kind (`{"customers": {"email": "email", "name": "name"}}`); at most 25 tables, with `more_personal_data_tables` counting the rest, and `personal_data_note` (see [Personal data](#personal-data))
 - `schema_file` -- path to saved schema JSON (full mode)
 - `r2rml_file` -- path to generated R2RML mapping (full mode)
@@ -204,6 +205,7 @@ Analyze database schema and return table metadata with relationships. Automatica
 - Names near-copies among the tables it found and every table discovered earlier on the connection, so a copy in another schema (staging beside production) is found too
 - Groups prefixed copies of the schema into table families (see [Table families](#table-families))
 - Tags columns whose names say they hold personal data (see [Personal data](#personal-data))
+- Names bridge tables (see [Bridge tables](#bridge-tables))
 
 #### Near-copies
 
@@ -212,6 +214,12 @@ Warehouses keep several tables of one shape: a current table and its archive, ye
 Two tables are near-copies when, comparing column names without case and leaving out bookkeeping columns -- generic ids (`id`, `uuid`), audit and load stamps (`created_at`, `updated_by`, `last_modified`, `_loaded_at`, `etl_*`), versions and tenancy (`tenant_id`) -- they share at least 3 columns, and either half of all their columns or four fifths of the narrower table's while the wider has at most twice as many. Unrelated tables share bookkeeping columns as much as copies do, so they are no evidence; a table with fewer than 3 other columns is nobody's near-copy. Neither is a lookup table whose few columns were copied into a wide fact table. `shared_columns` counts every column both have. Names only: no query runs.
 
 Closest first means the larger share of the compared columns, then more of them, then by name. A date-sharded export (`events_20240101`, `events_20240102`, ...) is thousands of tables of one shape and millions of pairs: `discover_schema` counts them all in `near_copies_omitted` but builds only the 25 it lists.
+
+#### Bridge tables
+
+`student_courses(student_id, course_id)` holds nothing of its own: it says which students take which courses. A table is a *bridge* when it has at least two foreign keys and every column belongs to one of them, apart from a surrogate key and bookkeeping columns (`id`, `created_at`, `etl_batch_id`). One linking a table to itself counts (`also_bought(product_id, also_product_id)`); one holding something of its own (`enrollments` with a `grade`) does not. `discover_schema` lists them by declared keys; the ontology records each one's linked tables as `oba:bridgeBetween`, by declared keys and those inferred from column names.
+
+A join through a bridge repeats each row of either side once per row it is linked to, so a total over one side is right per key of the other side and inflated without it. OBQC allows the first (see [Grouped so that nothing repeats](obqc.md#fan-trap-detection-error--warning)) and, for the second, names the bridge's own column to group by (`GROUP BY student_courses.course_id`, right however `courses` is joined) -- or, when no grouping helps, says to aggregate first: when the bridge's key is not exactly the pair (no primary key, a surrogate `id`, a key longer than the pair such as `(student_id, course_id, version)`, or a third table's key beside it), or the join does not compare the measured table's key to it in full (another key to the same table, an `OR`). The idea follows NVIDIA Auto Ontology's bridge tables, which ask a model to write the join; here the join is the foreign keys.
 
 #### Personal data
 

@@ -19,6 +19,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
+from .group_grain import Keyed, kept_once
 from .personal_data import enabled as personal_data_enabled
 from .relationship_validation import (
     STATUS_CONFIRMED,
@@ -391,6 +392,9 @@ class TableSchema:
     # The table-name prefix of the copy of a schema this table belongs to
     # (OLD for OLD_ROOMS beside NEW_ROOMS), from oba:tableFamily.
     family: str | None = None
+    # The tables it links many to many, when it is a bridge table, from
+    # oba:bridgeBetween.
+    bridge_between: tuple[str, ...] = ()
 
 
 # Column-to-column equalities of a join condition: pairs of (table, column).
@@ -771,6 +775,14 @@ class OBQCValidator:
                     schema_name=declared_schema or "public",
                     schema_declared=bool(declared_schema),
                     family=self._get_literal(subject, self._oba_ns.tableFamily),
+                    bridge_between=tuple(
+                        sorted(
+                            str(o)
+                            for o in self._graph.objects(
+                                subject, self._oba_ns.bridgeBetween
+                            )
+                        )
+                    ),
                 )
 
                 # Get primary keys
@@ -1540,6 +1552,13 @@ class OBQCValidator:
             # Tables a constant-valued conditional aggregate counts by. Judged
             # separately: those are ambiguous rather than provably wrong.
             counted_tables = self._counted_tables(select, alias_map)
+            # Tables whose rows this SELECT's GROUP BY keeps once per group:
+            # a fan-out join cannot inflate what is taken from them.
+            grain_kept = (
+                self._kept_once(select, cte_refs)
+                if scope_aggregates and select.args.get("joins")
+                else set()
+            )
 
             for join in select.args.get("joins") or []:
                 join_info: dict[str, Any] = {
@@ -1569,6 +1588,7 @@ class OBQCValidator:
                     # Tables this SELECT sums or averages over, lower-cased.
                     "measure_tables": measure_tables,
                     "counted_tables": counted_tables,
+                    "kept_once": grain_kept,
                 }
 
                 # How to name this join in a message. A joined subquery has
@@ -1721,6 +1741,111 @@ class OBQCValidator:
             if pair not in pairs:
                 pairs.append(pair)
         return pairs
+
+    def _bridge_suggestion(
+        self, measure: str, fanning: str, via: frozenset[str] | None = None
+    ) -> str | None:
+        """How to sum *measure* across *fanning*, when that is a bridge table.
+
+        Grouped by the bridge's own key to the other side, each measured row
+        counts once -- when the bridge's primary key is exactly that key and
+        the one the query joins the measured table by (*via*, which the join
+        must compare in full: :meth:`_pair_key`). The advice names the
+        bridge's column, so it holds however the other side is joined. In
+        every other case a pair may repeat -- (student_id, course_id,
+        club_id), a join by mentor_id, an OR in the join -- and only
+        aggregating first helps.
+        """
+        if self._schema_cache is None:
+            return None
+        bridge = self._schema_cache.tables.get(fanning.lower())
+        if bridge is None or not bridge.bridge_between:
+            return None
+        others = [t for t in bridge.bridge_between if t.lower() != measure.lower()]
+        candidates = others or list(bridge.bridge_between)
+        names = (
+            candidates[0]
+            if len(candidates) == 1
+            else f"{', '.join(candidates[:-1])} and {candidates[-1]}"
+        )
+        linked = (
+            f"{bridge.name} links {measure} to {names} many to many, so each "
+            f"{measure} row is repeated once per row it is linked to."
+        )
+        first = (
+            f"aggregate {measure} before joining {bridge.name}, or "
+            "COUNT(DISTINCT ...) its key"
+        )
+        for other in candidates:
+            columns = self._pair_key(bridge, measure, other, via)
+            if not columns:
+                continue
+            key = ", ".join(f"{bridge.name}.{column}" for column in columns)
+            return (
+                f"{linked} Grouped by its key to {other} (GROUP BY {key}), each "
+                f"{measure} row counts once per {other}; for a total over "
+                f"{measure}, {first}."
+            )
+        return (
+            f"{linked} No grouping keeps each {measure} row once through this "
+            f"join, so {first}."
+        )
+
+    def _pair_key(
+        self,
+        bridge: TableSchema,
+        one: str,
+        other: str,
+        via: frozenset[str] | None,
+    ) -> tuple[str, ...]:
+        """*bridge*'s columns of its key to *other*, if they pair with *via*.
+
+        *via* is the bridge's columns of the key the query joins *one* by.
+        Together the two keys must be exactly the bridge's primary key: then a
+        row of *one* and a value of the key to *other* match one bridge row at
+        most. Empty when the join compares no key in full, or no key to
+        *other* completes the pair (a key over more, or another key).
+        """
+        if self._schema_cache is None or not bridge.primary_keys or via is None:
+            return ()
+        keys = [
+            (rel.to_table.lower(), [child for child, _ in rel.pairs])
+            for rel in self._schema_cache.relationships.values()
+            if rel.from_table.lower() == bridge.name.lower()
+        ]
+        if not any(
+            to == one.lower() and {c.lower() for c in cols} == via for to, cols in keys
+        ):
+            return ()
+        primary = {k.lower() for k in bridge.primary_keys}
+        for to, columns in keys:
+            lowered = {c.lower() for c in columns}
+            if to == other.lower() and lowered != via and via | lowered == primary:
+                return tuple(columns)
+        return ()
+
+    def _kept_once(self, select: exp.Select, cte_refs: set[int]) -> set[str]:
+        """Tables of *select* whose rows its GROUP BY keeps once per group.
+
+        See :mod:`src.group_grain`: credits summed per student across a bridge
+        to courses count each course once per student.
+        """
+        if self._schema_cache is None:
+            return set()
+        tables = self._schema_cache.tables
+
+        def catalog(node: exp.Table) -> Keyed | None:
+            if self._is_cte_reference(node, cte_refs):
+                return None
+            table = tables.get(node.name.lower())
+            if table is None:
+                return None
+            return Keyed(
+                tuple(k.lower() for k in table.primary_keys),
+                tuple(table.columns),
+            )
+
+        return kept_once(select, catalog)
 
     @staticmethod
     def _column_comparisons(
@@ -3766,6 +3891,9 @@ class OBQCValidator:
                 ):
                     if measure_table.lower() not in measures:
                         continue
+                    # Grouped so that each of its rows stays one per group.
+                    if measure_table.lower() in (join_info.get("kept_once") or ()):
+                        continue
                     rel = self._fan_out_relationship(
                         other,
                         measure_table,
@@ -3779,6 +3907,17 @@ class OBQCValidator:
                         findings[pair]["assumed"] and not rel.assumed
                     ):
                         continue
+                    # The fan-out table's columns of the key the join compares,
+                    # when it compares one in full: which key a bridge with two
+                    # to the same table is joined by. Not part of the finding.
+                    compared = self._used_relationships(
+                        [rel], join_info.get("on_comparisons", frozenset())
+                    )
+                    via = (
+                        frozenset(child.lower() for child, _ in rel.pairs)
+                        if compared and rel.from_table.lower() == other.lower()
+                        else None
+                    )
                     findings[pair] = {
                         "kind": kind,
                         "measure_table": measure_table,
@@ -3787,6 +3926,7 @@ class OBQCValidator:
                         "relationship": self._describe(rel),
                         # Only naming backs it: reported, never blocking.
                         "assumed": rel.assumed,
+                        "_via": via,
                     }
 
         return list(findings.values())
@@ -3861,6 +4001,7 @@ class OBQCValidator:
         inflated = self._inflated_measures(result)
         if inflated:
             for finding in inflated:
+                via = finding.pop("_via", None)
                 assumed = finding["assumed"]
                 record(finding, blocks=not assumed)
                 measure = anchor = finding["measure_table"]
@@ -3877,7 +4018,8 @@ class OBQCValidator:
                             + (assumption(finding["relationship"]) if assumed else "")
                         ),
                         location="Query structure",
-                        suggestion=(
+                        suggestion=self._bridge_suggestion(measure, fanning, via)
+                        or (
                             f"Pre-aggregate {fanning} in a CTE and join the one row per "
                             f"{anchor} that produces, or aggregate each fact separately "
                             "and combine with UNION ALL (Composite Fact Layer). "
@@ -3959,6 +4101,11 @@ class OBQCValidator:
             join_table = join_info.get("table")
             if not join_table:
                 continue
+            # Every measure grouped so that its rows stay one per group: the
+            # joins repeat nothing it adds up.
+            measures = join_info.get("measure_tables") or set()
+            if measures and measures <= (join_info.get("kept_once") or set()):
+                continue
 
             anchors = [
                 t
@@ -3988,6 +4135,7 @@ class OBQCValidator:
             result, key="counted_tables", kind=KIND_CONDITIONAL_ROW_COUNT
         )
         for finding in counts:
+            finding.pop("_via", None)
             result.fan_trap_risk = True
             result.fan_trap_findings.append(finding)
             counted, fanning = finding["measure_table"], finding["fan_out_table"]
