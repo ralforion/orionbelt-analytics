@@ -3342,6 +3342,12 @@ class OBQCValidator:
 
             expressions = select.args.get("expressions", [])
 
+            # GROUP BY ALL (DuckDB, Snowflake, Databricks, BigQuery, ClickHouse)
+            # groups by every output outside an aggregate: none is ungrouped.
+            group = select.args.get("group")
+            if group is not None and group.args.get("all") and not group.expressions:
+                continue
+
             # Aliases declared by this select, mapped to the column they stand
             # for. GROUP BY may name either, and the two must be treated as the
             # same key: "SELECT user_id AS uid ... GROUP BY uid" groups by
@@ -3364,6 +3370,7 @@ class OBQCValidator:
             group_by_cols: set[str] = set()
             if select.args.get("group"):
                 for group_expr in self._group_by_keys(select.args["group"]):
+                    group_expr = self._grouped_output(group_expr, expressions)
                     if isinstance(group_expr, exp.Column):
                         gb_col_name = group_expr.name.lower()
                         if group_expr.table:
@@ -3432,6 +3439,24 @@ class OBQCValidator:
                                         suggestion=f"Add '{col_name}' to GROUP BY or use aggregate",
                                     )
                                 )
+
+    @staticmethod
+    def _grouped_output(
+        key: exp.Expression, expressions: list[exp.Expression]
+    ) -> exp.Expression:
+        """What a positional grouping key stands for: ``GROUP BY 2``, the second output.
+
+        Every dialect OBQC serves reads an integer there as a position, not a
+        constant. Read as nothing, it left every selected column ungrouped,
+        and ``SELECT id, COUNT(*) ... GROUP BY 1`` was blocked as an error.
+        Anything else, and a position past the outputs, is returned as it is.
+        """
+        if not (isinstance(key, exp.Literal) and not key.is_string):
+            return key
+        if not key.name.isdigit() or not 1 <= int(key.name) <= len(expressions):
+            return key
+        projection = expressions[int(key.name) - 1]
+        return projection.this if isinstance(projection, exp.Alias) else projection
 
     def _is_inside_aggregate(self, expr: exp.Expression, select: exp.Select) -> bool:
         """Check if expression is inside an aggregate function of this SELECT.

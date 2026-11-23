@@ -221,7 +221,7 @@ A warning, not a refusal: the question may need the data, and the person asking 
 
 ### Aggregation correctness (ERROR)
 
-When aggregate functions (`SUM`, `COUNT`, `AVG`, `MIN`, `MAX`) are used, OBQC checks that all non-aggregated columns in `SELECT` appear in `GROUP BY`. Grouping by an alias satisfies the check on the column it stands for.
+When aggregate functions (`SUM`, `COUNT`, `AVG`, `MIN`, `MAX`) are used, OBQC checks that all non-aggregated columns in `SELECT` appear in `GROUP BY`. Grouping by an alias satisfies the check on the column it stands for, and so does grouping by position: `GROUP BY 1` groups by the first output. `GROUP BY ALL` (DuckDB, Snowflake, Databricks, BigQuery, ClickHouse) groups by every output outside an aggregate, so nothing is ungrouped.
 
 Evaluated per `SELECT`: an aggregate inside a subquery belongs to that subquery, so `SELECT name FROM users WHERE id = (SELECT MAX(user_id) FROM orders)` needs no `GROUP BY` in the outer query.
 

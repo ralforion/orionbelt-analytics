@@ -93,6 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the read-only check.
 
 ### Fixed
+- OBQC blocked every query grouped by position or with `GROUP BY ALL`:
+  `SELECT user_id, COUNT(*) FROM orders GROUP BY 1` was rejected because
+  `user_id` was "not in GROUP BY clause". A position now groups by the output
+  it names, and `GROUP BY ALL` by every output outside an aggregate.
 - **BigQuery connects again**: the driver passed a `timeout` that
   google-cloud-bigquery's DB-API does not take, so every BigQuery
   connection failed with a `TypeError` before running a query.
