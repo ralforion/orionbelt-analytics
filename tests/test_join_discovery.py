@@ -33,6 +33,7 @@ from src.join_discovery import (
     Names,
     abbreviates,
     as_inferred,
+    expansions,
     candidates,
     held_query,
     kind,
@@ -92,6 +93,29 @@ def test_words_and_abbreviations_come_from_the_schema() -> None:
     assert _named("vendor") == {}
 
 
+def test_a_word_expands_to_the_english_words_it_may_stand_for() -> None:
+    # From wordfreq, most frequent first: the word itself when it is one,
+    # then the words it abbreviates, three-letter ones in order included.
+    assert expansions("vendor")[:2] == ("vendor", "vendors")
+    assert expansions("vndr")[0] == "vendor"
+    assert "payment" in expansions("pmt")
+    assert "manager" in expansions("mgr")
+    assert len(expansions("pmt")) <= join_discovery.MAX_EXPANSIONS
+
+
+def test_an_expansion_that_is_a_table_word_names_the_table_without_a_model() -> None:
+    names = Names(["managers", "payments", "orders"])
+    assert {t: (m.how, m.via) for t, m in names("mgr_id").items()} == {
+        "managers": (ABBREVIATION, "manager")
+    }
+    assert {t: (m.how, m.via) for t, m in names("pmt_ref").items()} == {
+        "payments": (ABBREVIATION, "payment")
+    }
+    # Three letters against the table's own words are not enough: pmt keeps
+    # payment's letters in order, but only the dictionary vouches for it.
+    assert not abbreviates("pmt", "payment")
+
+
 def _embedding(similar: dict[str, dict[str, float]]) -> Any:
     """A model whose vectors give exactly the cosines in *similar*.
 
@@ -126,6 +150,8 @@ def test_a_synonym_is_the_models_clear_favourite() -> None:
         }
     )
     assert _named("vendor", model) == {"suppliers": (SYNONYM, 0.73)}
+    # An abbreviation of it reaches the same table through its expansion.
+    assert _named("vndr", model) == {"suppliers": (SYNONYM, 0.73)}
     # No clear lead, or too far from every table: no synonym.
     assert _named("buyer_id", model) == {}
     assert _named("owner_ref", model) == {}

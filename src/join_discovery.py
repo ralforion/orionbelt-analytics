@@ -8,16 +8,22 @@ sampled distinct values, nine in ten at least.
 
 **Names choose what to check, and rank; they never link.** A column is
 checked when it ends in a key word (``_id``, ``_ref``, ``_no``, ...) or a word
-of it names another table, in two steps:
+of it names another table, in three steps:
 
-1. Abbreviations, from the schema's own table words: ``cust`` is the start of
+1. Abbreviations of the schema's own table words: ``cust`` is the start of
    ``customer``, ``cstmr`` and ``acct`` keep the letters of ``customer`` and
-   ``account`` in order. No fixed list.
-2. Synonyms, for a word no table word expands, with the embedding model
-   GraphRAG already runs when it is loaded: ``vendor`` is ``suppliers``,
-   ``client`` is ``customers`` -- only with a clear lead over every other
-   table. Short abbreviations it scores badly (``cust`` lands nearer
-   ``products``), which is why it comes second.
+   ``account`` in order.
+2. Otherwise, the English words it may stand for, from wordfreq's list
+   (shipped already): the word itself when it is one (``vendor``), then up to
+   five words it abbreviates, most frequent first (``vndr``: vendor; ``mgr``:
+   manager; ``pmt``: parliament, payment, ...). One that is a table's own word
+   names that table.
+3. Otherwise, what those words mean, with the embedding model GraphRAG
+   already runs when it is loaded: ``vndr`` read as vendor means
+   ``suppliers``, ``cust`` read as customer means ``clients`` -- only with a
+   clear lead over every other table. Asked about the abbreviation itself the
+   model guesses (``cust`` lands nearer ``products`` than ``customers``):
+   it knows meaning, not spelling, so it is asked about the words.
 
 **The data links.** A key that alone holds the values is checked on all rows,
 as ``validate_relationship`` does, and linked only when that confirms it:
@@ -46,6 +52,7 @@ import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -133,20 +140,64 @@ def _singular(word: str) -> str:
     return word
 
 
-def abbreviates(short: str, word: str) -> bool:
+def abbreviates(short: str, word: str, in_order_from: int = 4) -> bool:
     """Whether *short* abbreviates *word*.
 
-    Its start (``cust``, ``emp``, ``ord``), from three letters; or, from four,
-    its letters in order from the same first letter (``cstmr``, ``acct``).
+    Its start (``cust``, ``emp``, ``ord``), from three letters; or its letters
+    in order from the same first letter (``cstmr``, ``acct``), from
+    *in_order_from* letters -- four against table words, where ``cat`` would
+    otherwise abbreviate ``contract``; three against the dictionary, whose
+    expansions the model then weighs (``mgr``, ``pmt``).
     """
     if len(short) < 3 or len(short) >= len(word) or short[0] != word[0]:
         return False
     if word.startswith(short):
         return True
-    if len(short) < 4:
+    if len(short) < in_order_from:
         return False
     letters = iter(word)
     return all(letter in letters for letter in short)
+
+
+#: English words a column word may abbreviate, most frequent first.
+DICTIONARY_WORDS = 40_000
+#: Expansions of a word weighed, most frequent first.
+MAX_EXPANSIONS = 5
+#: How much less each later expansion counts: the likelier reading first.
+EXPANSION_DISCOUNT = 0.05
+
+
+@lru_cache(maxsize=1)
+def _dictionary() -> tuple[tuple[str, ...], frozenset[str]]:
+    """English words, most frequent first, from wordfreq (shipped already)."""
+    try:
+        from wordfreq import top_n_list
+
+        words = tuple(
+            w for w in top_n_list("en", DICTIONARY_WORDS) if w.isalpha() and len(w) >= 3
+        )
+    except Exception as e:  # never stop discovery for want of a word list
+        logger.debug(f"No dictionary for abbreviations: {e}")
+        words = ()
+    return words, frozenset(words)
+
+
+@lru_cache(maxsize=4096)
+def expansions(word: str) -> tuple[str, ...]:
+    """The English words *word* most likely stands for, most frequent first.
+
+    The word itself when it is one (``vendor``), then the words it
+    abbreviates (``vndr``: vendor; ``pmt``: parliament, payment, ...), up to
+    MAX_EXPANSIONS. Which of them a column means is for the model to weigh.
+    """
+    words, known = _dictionary()
+    found = [word] if word in known else []
+    for candidate in words:
+        if len(found) >= MAX_EXPANSIONS:
+            break
+        if candidate != word and abbreviates(word, candidate, in_order_from=3):
+            found.append(candidate)
+    return tuple(found)
 
 
 @dataclass(frozen=True)
@@ -156,6 +207,8 @@ class NameMatch:
     how: str  # WORD, ABBREVIATION or SYNONYM
     #: 1.0 for a word or an abbreviation; the model's similarity for a synonym.
     score: float
+    #: The English word it was read as, when that is not the column's own.
+    via: str = ""
 
     def rank(self) -> tuple[int, float]:
         return _STRENGTH[self.how], self.score
@@ -189,33 +242,62 @@ class Names:
             if not hits and len(word) >= 3:
                 unresolved.append(word)
         for word in unresolved:
-            synonym = self._synonym(word, tables)
+            # Step 2: the English words it may stand for. One that is a table's
+            # own word names that table, model or not (mgr: manager).
+            readings = expansions(word)
+            named = False
+            for reading in readings:
+                for table in tables:
+                    if reading in self._words[table] or (
+                        _singular(reading) in self._words[table]
+                    ):
+                        match = NameMatch(ABBREVIATION, 1.0, via=reading)
+                        found[table] = _stronger(found.get(table), match)
+                        named = True
+            if named:
+                continue
+            # Step 3: what those words mean, with the model.
+            synonym = self._synonym(readings or (word,), tables)
             if synonym is not None:
-                table, score = synonym
-                found[table] = _stronger(found.get(table), NameMatch(SYNONYM, score))
+                table, score, via = synonym
+                match = NameMatch(SYNONYM, score, via=via)
+                found[table] = _stronger(found.get(table), match)
         return found
 
-    def _synonym(self, word: str, tables: list[str]) -> tuple[str, float] | None:
-        """The one table *word* means by the model, with a clear lead."""
-        if self._embed is None or len(tables) < 1:
+    def _synonym(
+        self, readings: Sequence[str], tables: list[str]
+    ) -> tuple[str, float, str] | None:
+        """The one table the readings mean by the model, with a clear lead.
+
+        Each table's score is its best over the readings, a later (rarer)
+        reading discounted; the best table must reach MIN_SYNONYM and lead the
+        next by SYNONYM_LEAD.
+        """
+        if self._embed is None or not tables:
             return None
         try:
             vectors = self._table_vectors()
-            (vector,) = self._embed([word])
+            mine = [np.asarray(v, dtype=float) for v in self._embed(list(readings))]
         except Exception as e:
             logger.debug(f"Synonym lookup unavailable: {e}")
             self._embed = None
             return None
-        mine = np.asarray(vector, dtype=float)
-        scores = sorted(
-            ((_cosine(mine, vectors[t]), t) for t in tables if t in vectors),
-            reverse=True,
-        )
+        best: dict[str, tuple[float, str]] = {}
+        for rank, (reading, vector) in enumerate(zip(readings, mine, strict=True)):
+            weight = 1.0 - EXPANSION_DISCOUNT * rank
+            for table in tables:
+                if table not in vectors:
+                    continue
+                score = _cosine(vector, vectors[table]) * weight
+                if score > best.get(table, (float("-inf"), ""))[0]:
+                    best[table] = (score, reading)
+        scores = sorted(((s, t, r) for t, (s, r) in best.items()), reverse=True)
         if not scores or scores[0][0] < MIN_SYNONYM:
             return None
         if len(scores) > 1 and scores[0][0] - scores[1][0] < SYNONYM_LEAD:
             return None
-        return scores[0][1], round(scores[0][0], 3)
+        score, table, reading = scores[0]
+        return table, round(score, 3), reading
 
     def _table_vectors(self) -> dict[str, np.ndarray]:
         if self._vectors is None:
@@ -669,6 +751,8 @@ def _held(key: HeldBy) -> str:
     how = ""
     if key.name is not None:
         how = f", named by {key.name.how}"
+        if key.name.via:
+            how += f" via {key.name.via}"
         if key.name.how == SYNONYM:
             how += f" {key.name.score:.2f}"
     return f"{key.table}.{key.column} ({key.containment:.0%}{how})"

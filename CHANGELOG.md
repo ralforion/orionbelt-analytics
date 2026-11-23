@@ -12,9 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `generate_ontology` checks columns that look like references but name no
   table -- `orders.cust`, `purchases.vendor` -- against other tables' keys,
   from a sample of their values. Names choose what is checked: key words,
-  abbreviations of the schema's own table words (`cust`, `cstmr`), and
-  synonyms by GraphRAG's loaded embedding model (`vendor`, `client`); they
-  never link. A key that alone holds the values is checked on all rows and
+  abbreviations of the schema's own table words (`cust`, `cstmr`), else of
+  English words from wordfreq (`vndr`: vendor, `mgr`: manager), whose
+  meaning GraphRAG's loaded embedding model then reads (`vendor` means
+  `suppliers`); they never link. A key that alone holds the values is checked on all rows and
   linked only when confirmed (numbers only when the column also names the
   table). What the data cannot settle is listed with its keys, likeliest
   first, for the new `confirm_join` tool, which links a join once all rows
