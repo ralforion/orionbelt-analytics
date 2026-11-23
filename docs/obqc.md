@@ -289,6 +289,24 @@ FROM orders o JOIN order_items oi ON oi.order_id = o.id GROUP BY o.id;
 
 Aggregates that duplication cannot change are left alone entirely -- `MIN`, `MAX` and `COUNT(DISTINCT ...)` read the same answer off repeated rows, so no join shape makes them wrong and none of the rules fires on a query that uses only those.
 
+**Grouped so that nothing repeats.** A fan-out repeats a measure's rows across the whole result, but a `GROUP BY` can put each repeat in a group of its own. Across a [bridge table](tools-reference.md#bridge-tables) that is the usual question:
+
+```sql
+-- OK: student_courses' key is (student_id, course_id), so per student each course
+--     appears once
+SELECT s.id, SUM(c.credits)
+FROM students s
+JOIN student_courses sc ON sc.student_id = s.id
+JOIN courses c ON c.id = sc.course_id
+GROUP BY s.id;
+
+-- ERROR: two students may share a name, and a course then counts once per student.
+--        Suggested: ... Per students (GROUP BY students.id) each courses row counts once
+SELECT s.full_name, SUM(c.credits) FROM ... GROUP BY s.full_name;
+```
+
+A measured table's rows stay one per group when its key and the grouping keys together fix one row of every table the `SELECT` joins: a column equal to a known one is known (join and `WHERE` equalities, a column equal to a constant), and a table whose whole declared primary key is known is known entirely. Only what is certain counts -- declared primary keys, equalities every row satisfies (not one alternative of an `OR`), across an outer join only from the side it keeps to the side it may fill with NULLs, plain tables of the schema (not a CTE, a derived table or `UNNEST`), and plain grouping keys, by name, position or output alias. `ROLLUP`, `CUBE`, `GROUPING SETS` and `GROUP BY ALL` change what a group is, and a `USING` or `NATURAL` join folds columns without saying whose, so none of them is judged this way. Grouping at the many side's grain works the same way: `GROUP BY oi.id` sums each order once per item.
+
 `COUNT(*)` is a middle case. It names no table, so it never triggers this rule -- counting the joined rows is usually the intent. But it does count rows, so across *two* fan-out joins it returns the product of the two children and rules 2 and 3 below still apply.
 
 The comma form is judged identically: `FROM orders o, order_items i WHERE i.order_id = o.id` states the same join as the `ON` spelling and inflates the same way.

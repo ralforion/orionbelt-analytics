@@ -9,6 +9,7 @@ from typing import Any
 from fastmcp import Context
 
 from ..async_utils import run_db
+from ..bridge_tables import find_bridges, listed_bridges
 from ..graphrag.identity import qualified
 from ..graphrag.near_copies import NEAR_COPIES_NOTE, CopyIndex, listed
 from ..handler_context import HandlerContext
@@ -211,6 +212,15 @@ def _personal_data_section(tables: list[Any]) -> dict[str, Any]:
     if len(names) > MAX_LISTED_PERSONAL_TABLES:
         section["more_personal_data_tables"] = len(names) - MAX_LISTED_PERSONAL_TABLES
     return section
+
+
+async def _bridge_tables(tables: list[Any]) -> dict[str, Any]:
+    """The bridge tables among *tables*, by declared keys; never fails discovery."""
+    try:
+        return await asyncio.to_thread(lambda: listed_bridges(find_bridges(tables)))
+    except Exception as e:
+        logger.warning(f"Bridge-table detection skipped: {e}")
+        return {}
 
 
 async def _personal_data(tables: list[Any]) -> dict[str, Any]:
@@ -629,6 +639,7 @@ async def discover_schema(
         lightweight_result.update(await _near_copies(session, table_info_objects))
         lightweight_result.update(await _table_families(table_info_objects))
         lightweight_result.update(await _personal_data(table_info_objects))
+        lightweight_result.update(await _bridge_tables(table_info_objects))
 
         # Auto-initialize GraphRAG in background
         auto_graphrag = os.getenv("AUTO_GRAPHRAG", "true").lower()
@@ -784,6 +795,7 @@ async def discover_schema(
         schema_result.update(await _near_copies(session, table_info_objects))
         schema_result.update(await _table_families(table_info_objects))
         schema_result.update(await _personal_data(table_info_objects))
+        schema_result.update(await _bridge_tables(table_info_objects))
 
         # Generate R2RML mapping
         if table_info_objects:

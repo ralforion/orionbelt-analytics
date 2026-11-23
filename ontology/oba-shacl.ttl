@@ -91,6 +91,12 @@ oba:TableShape a sh:NodeShape ;
         sh:name "table family" ;
         sh:message "oba:tableFamily, when present, is one table-name prefix (xsd:string)."
     ] ;
+    sh:property [
+        sh:path oba:bridgeBetween ;
+        sh:datatype xsd:string ;
+        sh:name "bridge between" ;
+        sh:message "oba:bridgeBetween names a table a bridge links (xsd:string)."
+    ] ;
 
     # Semantic enrichment (optional)
     sh:property [

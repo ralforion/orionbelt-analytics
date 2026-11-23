@@ -90,6 +90,46 @@ class TestDuckDBTablesAndViews(DuckDBDriverTestCase):
         self.assertEqual({c.name for c in info.columns}, {"id", "clientid", "amount"})
 
 
+class TestDuckDBPrimaryKeys(DuckDBDriverTestCase):
+    """duckdb_engine reflects no primary key; the catalog says what they are."""
+
+    def setUp(self):
+        super().setUp()
+        self._exec("CREATE TABLE students (id INTEGER PRIMARY KEY, name TEXT)")
+        self._exec("CREATE TABLE courses (id INTEGER PRIMARY KEY)")
+        self._exec(
+            "CREATE TABLE student_courses (student_id INTEGER, course_id INTEGER, "
+            "PRIMARY KEY (student_id, course_id))"
+        )
+        self._exec("CREATE TABLE notes (body TEXT)")
+
+    def test_one_table_at_a_time(self):
+        info = self.driver.analyze_table("students", "main")
+        self.assertEqual(info.primary_keys, ["id"])
+        self.assertEqual(
+            {c.name: c.is_primary_key for c in info.columns},
+            {"id": True, "name": False},
+        )
+        pair = self.driver.analyze_table("student_courses", "main")
+        self.assertEqual(pair.primary_keys, ["student_id", "course_id"])
+        self.assertTrue(all(c.is_primary_key for c in pair.columns))
+        self.assertEqual(self.driver.analyze_table("notes", "main").primary_keys, [])
+
+    def test_the_whole_schema_at_once(self):
+        analyzed = self.driver.analyze_tables(
+            ["students", "courses", "student_courses", "notes"], "main"
+        )
+        self.assertEqual(
+            {name: info.primary_keys for name, info in analyzed.items()},
+            {
+                "students": ["id"],
+                "courses": ["id"],
+                "student_courses": ["student_id", "course_id"],
+                "notes": [],
+            },
+        )
+
+
 class TestDuckDBQuerying(DuckDBDriverTestCase):
     def setUp(self):
         super().setUp()

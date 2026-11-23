@@ -10,6 +10,7 @@ from rdflib.collection import Collection
 from rdflib.namespace import OWL, RDF, RDFS, XSD
 from wordfreq import word_frequency
 
+from .bridge_tables import find_bridges
 from .constants import (
     DEFAULT_BASE_URI,
     OBA_NAMESPACE,
@@ -560,6 +561,15 @@ class OntologyGenerator:
         # Add all tables and their columns/relationships
         for table_info in tables_info:
             self._add_table_to_ontology(table_info)
+
+        # Tables that only link others, many to many, by declared keys and
+        # the ones inferred above.
+        for bridge in find_bridges(
+            tables_info, [(r.source_table, r.column, r.target_table) for r in inferred]
+        ):
+            bridge_uri = self.base_uri[class_local_name(bridge.table)]
+            for linked in bridge.connects:
+                self.graph.add((bridge_uri, self.oba_ns.bridgeBetween, Literal(linked)))
 
         # Views are added after the tables so oba:derivedFrom can point at
         # classes that already exist, and before nothing else: every step
@@ -1324,8 +1334,10 @@ class OntologyGenerator:
                 if (table.name.lower(), col.name.lower()) in existing_fks:
                     continue
 
-                # Skip primary key columns (they reference themselves)
-                if col.is_primary_key:
+                # Skip a table's own key: a lone key column identifies the row.
+                # A column of a composite key usually references another table
+                # (student_courses' student_id and course_id).
+                if col.is_primary_key and len(table.primary_keys) <= 1:
                     continue
 
                 col_lower = col.name.lower()
