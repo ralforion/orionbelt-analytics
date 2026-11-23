@@ -385,6 +385,42 @@ def test_the_ontology_records_each_columns_place() -> None:
             "SELECT segment AS unused, email AS addr FROM customers) u",
             [],
         ),
+        # A branch BY NAME adds a field: the others keep their own columns.
+        (
+            "WITH u AS (SELECT id FROM customers UNION ALL BY NAME "
+            "SELECT id, email FROM customers) SELECT id FROM u",
+            [],
+        ),
+        (
+            "WITH u AS (SELECT id FROM customers UNION ALL BY NAME "
+            "SELECT id, email FROM customers) SELECT email FROM u",
+            ["email"],
+        ),
+        # A repeated output, as DuckDB names it when read: email, email_1, ...
+        (
+            "WITH c AS (SELECT segment AS email, email FROM customers) "
+            "SELECT email_1 FROM c",
+            ["email"],
+        ),
+        (
+            "WITH c AS (SELECT segment AS email, email FROM customers) "
+            "SELECT email FROM c",
+            [],
+        ),
+        (
+            "SELECT d.email_1 FROM (SELECT segment AS email, email FROM customers) d",
+            ["email"],
+        ),
+        (
+            "WITH c AS (SELECT segment AS email, segment AS email, name AS email "
+            "FROM customers) SELECT email_2 FROM c",
+            ["name"],
+        ),
+        (
+            "WITH c AS (SELECT segment AS email, email, name AS email_1 "
+            "FROM customers) SELECT email_1_1 FROM c",
+            ["name"],
+        ),
         # EXCEPT returns its first branch's rows only.
         ("SELECT segment FROM customers EXCEPT SELECT email FROM customers", []),
         # A recursive CTE, to a fixed point: email reaches c in the third round.

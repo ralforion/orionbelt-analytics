@@ -107,8 +107,54 @@ def _grown(before: _Outputs, after: _Outputs) -> _Outputs:
             ),
             after.ordered,
         )
-    return _spread(
-        before.names() + after.names(), before.everything() | after.everything()
+    names = before.names() + after.names()
+    if len(set(before.names())) == len(before.items) and len(set(after.names())) == len(
+        after.items
+    ):
+        # Named once each, as BY NAME has them: grown name by name.
+        return _Outputs(
+            tuple(
+                (
+                    name,
+                    (before.named(name) or frozenset())
+                    | (after.named(name) or frozenset()),
+                )
+                for name in dict.fromkeys(names)
+            ),
+            ordered=False,
+        )
+    return _spread(names, before.everything() | after.everything())
+
+
+def _as_read(outputs: _Outputs) -> _Outputs:
+    """*outputs* as a query reading them sees them: each name once.
+
+    DuckDB renames a repeated output -- ``SELECT segment AS email, email``
+    reads as ``email`` and ``email_1``, a third as ``email_2``, and one already
+    named ``email_1`` as ``email_1_1`` -- and ``email`` means the first. Other
+    databases refuse the repeat, so its names are no other reading's.
+    """
+    used: set[str] = set()
+    named: list[_Item] = []
+    for name, found in outputs.items:
+        unique, suffix = name, 0
+        while unique in used:
+            suffix += 1
+            unique = f"{name}_{suffix}"
+        used.add(unique)
+        named.append((unique, found))
+    if outputs.ordered or len(used) == len(set(outputs.names())):
+        return _Outputs(tuple(named), outputs.ordered)
+    # Which repeat came first is open: each of a name's repeats may be any.
+    of_name: dict[str, frozenset[Column]] = {}
+    for name, found in outputs.items:
+        of_name[name] = of_name.get(name, frozenset()) | found
+    return _Outputs(
+        tuple(
+            (unique, of_name[name])
+            for (name, _), (unique, _) in zip(outputs.items, named, strict=True)
+        ),
+        ordered=False,
     )
 
 
@@ -162,10 +208,13 @@ class _Lineage:
         for _ in range(_MAX_ROUNDS):
             self._reread.discard(key)
             known = set(self._done)
-            result = _grown(
-                self._partial[key], self._declared(scope, self._compute(scope))
-            )
-            if key not in self._reread or result == self._partial[key]:
+            computed = self._declared(scope, self._compute(scope))
+            if key not in self._reread:
+                # Not recursive: what the query says, and no more.
+                result = computed
+                break
+            result = _grown(self._partial[key], computed)
+            if result == self._partial[key]:
                 break
             # Another round: what was worked out from the last guess is redone.
             self._partial[key] = result
@@ -436,7 +485,7 @@ class _Lineage:
             parent = source.expression.parent
             if isinstance(parent, exp.Subquery):
                 alias = parent.args.get("alias")
-        return _renamed(outputs, alias)
+        return _as_read(_renamed(outputs, alias))
 
     def _table(self, table: exp.Table) -> _Outputs:
         key = id(table)
