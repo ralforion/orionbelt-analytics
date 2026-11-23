@@ -70,7 +70,7 @@ A key differentiator of OrionBelt is **OBQC** (Ontology-Based Query Check), a de
 | **Type compatibility**      | WHERE/ON comparisons between incompatible types (e.g. string vs. integer)                         |
 | **Personal data**           | Results that return columns whose names say they hold personal data (`email`, `date_of_birth`)    |
 | **Aggregation correctness** | SELECT columns missing from GROUP BY when aggregates are used                                     |
-| **Fan-trap detection**      | Aggregations across multiple one-to-many joins that silently multiply results                     |
+| **Fan-trap detection**      | Aggregations across one-to-many joins that silently multiply results, unless the GROUP BY keeps each row once (credits per student across a bridge table) |
 
 **How it works:**
 

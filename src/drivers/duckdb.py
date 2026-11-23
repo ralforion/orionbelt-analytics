@@ -435,6 +435,52 @@ class DuckDBDriver(DatabaseDriver):
             logger.error(f"Failed to get DuckDB views: {e}")
             return {}
 
+    def _primary_keys(self, schema: str) -> dict[str, list[str]]:
+        """Each table's primary key in *schema*, from DuckDB's own catalog.
+
+        duckdb_engine reflects none (``get_pk_constraint`` comes back empty),
+        so every DuckDB table looked keyless: no ``oba:primaryKey``, and no key
+        to tell a bridge's pair is unique. The current database's only, as
+        reflection reads: an attached database may hold a table of the same
+        name keyed otherwise. Empty when the catalog cannot be read.
+        """
+        if self.engine is None:
+            return {}
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(
+                    text("""
+                        SELECT table_name, constraint_column_names
+                        FROM duckdb_constraints()
+                        WHERE schema_name = :schema_name
+                          AND database_name = current_database()
+                          AND constraint_type = 'PRIMARY KEY'
+                    """),
+                    {"schema_name": schema},
+                ).fetchall()
+        except SQLAlchemyError as e:
+            logger.debug(f"DuckDB primary keys of {schema} unavailable: {e}")
+            return {}
+        return {str(row[0]): [str(c) for c in row[1] or []] for row in rows}
+
+    def _with_primary_keys(
+        self, tables: dict[str, TableInfo], schema: str
+    ) -> dict[str, TableInfo]:
+        """*tables*, each given the primary key reflection left out."""
+        keyless = [t for t in tables.values() if t is not None and not t.primary_keys]
+        if not keyless:
+            return tables
+        keys = self._primary_keys(schema)
+        for table in keyless:
+            primary = keys.get(table.name)
+            if not primary:
+                continue
+            table.primary_keys = list(primary)
+            upper = {k.upper() for k in primary}
+            for column in table.columns:
+                column.is_primary_key = column.name.upper() in upper
+        return tables
+
     def analyze_tables(
         self, table_names: list[str], schema_name: str | None = None
     ) -> dict[str, TableInfo]:
@@ -450,15 +496,15 @@ class DuckDBDriver(DatabaseDriver):
         """
         if not table_names or self.engine is None:
             return super().analyze_tables(table_names, schema_name)
+        schema = schema_name or "main"
         try:
-            return reflect_tables(
-                self.engine, table_names, schema_name, schema_name or "main"
-            )
+            analyzed = reflect_tables(self.engine, table_names, schema_name, schema)
         except Exception as e:
             logger.warning(
                 f"Schema-wide reflection failed ({e}); reflecting one table at a time"
             )
             return super().analyze_tables(table_names, schema_name)
+        return self._with_primary_keys(analyzed, schema)
 
     def analyze_table(
         self, table_name: str, schema_name: str | None = None
@@ -518,7 +564,7 @@ class DuckDBDriver(DatabaseDriver):
                         )
                     )
 
-                return TableInfo(
+                table_info = TableInfo(
                     name=table_name,
                     schema=schema,
                     columns=columns,
@@ -528,6 +574,7 @@ class DuckDBDriver(DatabaseDriver):
                     row_count=None,
                     sample_data=None,
                 )
+            return self._with_primary_keys({table_name: table_info}, schema)[table_name]
 
         except SQLAlchemyError as e:
             logger.error(f"Failed to analyze DuckDB table {table_name}: {e}")

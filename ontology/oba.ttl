@@ -349,6 +349,11 @@ oba:dateFormat a owl:AnnotationProperty ;
     rdfs:comment "How a text or integer column writes the dates it holds, as a strftime format (e.g. '%Y%m%d' for '20150601'). Inferred from sampled values and recorded only when every sampled value reads in it unambiguously. A query has to compare against this form: '2015-06-01' never equals '20150601'. Absent on native DATE/TIMESTAMP columns and wherever no single format was found." ;
     rdfs:range xsd:string .
 
+oba:bridgeBetween a owl:AnnotationProperty ;
+    rdfs:label "bridge between" ;
+    rdfs:comment "On a bridge table's class, one of the tables it links many to many (student_courses: students, courses). A bridge has at least two foreign keys, declared or inferred from column names, and every column belongs to one of them, apart from a surrogate key and bookkeeping columns. A join through it repeats each row of either side once per row it is linked to: a total over one side is right per key of the other. OBQC names the key to group by when such a total is inflated." ;
+    rdfs:range xsd:string .
+
 oba:columnOrdinal a owl:AnnotationProperty ;
     rdfs:label "column ordinal" ;
     rdfs:comment "The column's place in its table, from 1, as the database lists it and SELECT * returns it. An ontology keeps no order of its own, so this is what says which column a star puts where: OBQC reads a UNION or a column alias list by it. Where a table's ordinals are absent or do not run from 1 without gaps, the places are taken as unknown." ;
