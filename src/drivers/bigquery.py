@@ -5,14 +5,14 @@ import logging
 import re
 from typing import Any
 
-from sqlalchemy import MetaData, create_engine, inspect, text
+from sqlalchemy import MetaData, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import NullPool
 
+from ..client_name import CLIENT_NAME
 from ..constants import (
     BIGQUERY_SYSTEM_SCHEMAS,
-    CONNECTION_TIMEOUT,
     DEFAULT_SAMPLE_LIMIT,
     MAX_SAMPLE_LIMIT,
     MIN_SAMPLE_LIMIT,
@@ -37,6 +37,22 @@ from ..sql_build import (
 from .base import DatabaseDriver
 
 logger = logging.getLogger(__name__)
+
+
+def _name_client(
+    dialect: Any, conn_rec: Any, cargs: Any, cparams: dict[str, Any]
+) -> None:
+    """Put CLIENT_NAME at the start of the User-Agent of a connection's client.
+
+    BigQuery shows it in Cloud Audit Logs as ``callerSuppliedUserAgent``.
+    sqlalchemy-bigquery builds the client itself and takes no client info, so
+    the name goes on the client it hands each connection, through the
+    ``user_agent`` setter of the client's (private) ``_connection``; the
+    tests read the header it sends. Setting it again changes nothing.
+    """
+    client = cparams.get("client")
+    if client is not None:
+        client._connection.user_agent = CLIENT_NAME
 
 
 #: What BigQuery accepts as a dataset name: letters, digits and underscores, at
@@ -136,11 +152,13 @@ class BigQueryDriver(DatabaseDriver):
                 connection_string,
                 poolclass=NullPool,
                 echo=False,
-                connect_args={
-                    "timeout": CONNECTION_TIMEOUT,
-                },
+                # No connect_args "timeout": google.cloud.bigquery.dbapi.connect()
+                # takes only client, bqstorage_client and
+                # prefer_bqstorage_client, so it failed every connection with
+                # a TypeError.
                 **engine_kwargs,
             )
+            event.listen(self.engine, "do_connect", _name_client)
             self.metadata = MetaData()
 
             # Initialize encryption

@@ -13,6 +13,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import QueuePool
 
+from ..client_name import CLIENT_NAME
 from ..constants import (
     CONNECTION_TIMEOUT,
     DEFAULT_SAMPLE_LIMIT,
@@ -95,6 +96,9 @@ class MySQLDriver(DatabaseDriver):
                 echo=False,
                 connect_args={
                     "connect_timeout": CONNECTION_TIMEOUT,
+                    # A connection attribute, shown in
+                    # performance_schema.session_connect_attrs.
+                    "program_name": CLIENT_NAME,
                 },
             )
             self.metadata = MetaData()
