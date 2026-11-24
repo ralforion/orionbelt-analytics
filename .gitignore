@@ -20,6 +20,9 @@ scripts/*
 # Tracked: the performance numbers in this repository's history were taken
 # with it, and a claim nobody can re-measure is worth little.
 !scripts/bench_runtime.py
+# Tracked: the fan-trap numbers in docs/fan-trap-prevention.md come from it,
+# and tests/test_fan_trap_benchmark.py runs it to pin them.
+!scripts/bench_fan_traps.py
 build/
 dist/
 wheels/
