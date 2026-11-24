@@ -731,6 +731,54 @@ async def validate_relationship(
         )
 
 
+@mcp.tool(annotations=_WRITES)
+@_connection_aware()
+async def confirm_join(
+    ctx: Context,
+    table: _Identifier,
+    column: _Identifier,
+    target_table: _Identifier,
+    target_column: _Identifier | None = None,
+    schema_name: _Identifier | None = None,
+) -> dict[str, Any]:
+    """Link a column to another table's key in the ontology, once the data confirms it.
+
+    Use it for a column generate_ontology lists under JOINS TO CONFIRM --
+    several keys hold its values, so the data cannot choose and you (or the
+    user) pick the table the column means -- or for any reference the
+    ontology misses. The join is checked on all rows first, as
+    validate_relationship checks one: only a confirmed join is added, with
+    its verdict, so execute_sql_query treats it like a checked key. The
+    ontology is saved as a new version and the join kept when it is
+    regenerated. A join the data does not confirm is reported, not added.
+
+    Args:
+        table: Table holding the column, e.g. 'orders'
+        column: The column, e.g. 'buyer_id'
+        target_table: The table it references, e.g. 'customers'
+        target_column: The referenced column; by default the target's
+            one-column primary key, or its id
+        schema_name: The tables' schema; needed only if two schemas hold them
+
+    Returns:
+        Whether it was linked, the verdict and the counts behind it
+    """
+    async with _writer_lock(ctx):
+        return _with_next_steps(
+            ctx,
+            "confirm_join",
+            await _h_validation.confirm_join(
+                ctx,
+                table,
+                column,
+                target_table,
+                services=_services(),
+                target_column=target_column,
+                schema_name=schema_name,
+            ),
+        )
+
+
 @mcp.tool(annotations=_DESTRUCTIVE)
 @_connection_aware()
 async def load_my_ontology(
