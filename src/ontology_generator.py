@@ -2516,7 +2516,7 @@ class OntologyGenerator:
 
             # Analyze if name looks cryptic
             name = class_info["current_label"] or class_info["local_name"]
-            class_info["needs_review"] = self._analyze_name_quality(name)
+            class_info["needs_review"] = self._name_review(subject, name)
 
             classes.append(class_info)
 
@@ -2556,7 +2556,7 @@ class OntologyGenerator:
 
             # Analyze if name looks cryptic
             name = prop_info["current_label"] or prop_info["local_name"]
-            prop_info["needs_review"] = self._analyze_name_quality(name)
+            prop_info["needs_review"] = self._name_review(subject, name)
 
             properties.append(prop_info)
 
@@ -2590,7 +2590,7 @@ class OntologyGenerator:
 
             # Analyze if name looks cryptic
             name = rel_info["current_label"] or rel_info["local_name"]
-            rel_info["needs_review"] = self._analyze_name_quality(name)
+            rel_info["needs_review"] = self._name_review(subject, name)
 
             relationships.append(rel_info)
 
@@ -2793,6 +2793,8 @@ class OntologyGenerator:
         # ontology rejected -- indexing a typo'd target into schema search would
         # invent an element that does not exist.
         self._applied_semantic_names = []
+        # Elements a person reviewed keep their names (oba:reviewStatus).
+        self._skipped_reviewed_names: list[str] = []
 
         # Apply class name suggestions
         if "classes" in name_suggestions:
@@ -2808,6 +2810,8 @@ class OntologyGenerator:
                 class_uri = self.base_uri[self._clean_name(original)]
 
                 # Check if this class exists
+                if self._skip_reviewed(class_uri, original):
+                    continue
                 if (class_uri, RDF.type, OWL.Class) in self.graph:
                     if suggested or description:
                         self._applied_semantic_names.append(
@@ -2864,6 +2868,8 @@ class OntologyGenerator:
 
                 prop_uri = self.base_uri[prop_name]
 
+                if self._skip_reviewed(prop_uri, original):
+                    continue
                 # Check if this property exists (as data or object property)
                 if (prop_uri, RDF.type, OWL.DatatypeProperty) in self.graph or (
                     prop_uri,
@@ -2974,6 +2980,8 @@ class OntologyGenerator:
                 rel_uri = self.base_uri[self._clean_name(original)]
 
                 # Check if this relationship exists
+                if self._skip_reviewed(rel_uri, original):
+                    continue
                 if (rel_uri, RDF.type, OWL.ObjectProperty) in self.graph:
                     if suggested or description:
                         # A relationship is identified by the pair of tables it
@@ -3043,6 +3051,28 @@ class OntologyGenerator:
             return ""
         value = self.graph.value(uri, self.oba_ns.columnName)
         return str(value) if value is not None else ""
+
+    def _reviewed(self, node: Any) -> bool:
+        """Whether a person reviewed *node* and kept it (oba:reviewStatus)."""
+        return str(self.graph.value(node, self.oba_ns.reviewStatus) or "") == "reviewed"
+
+    def _name_review(self, node: Any, name: str) -> dict[str, Any]:
+        """Whether *node*'s name needs review: never once a person reviewed it."""
+        verdict = self._analyze_name_quality(name)
+        if self._reviewed(node):
+            return {**verdict, "is_cryptic": False, "reviewed": True}
+        return verdict
+
+    def _skip_reviewed(self, node: Any, original: str) -> bool:
+        """Whether a suggestion targets a reviewed element, which keeps its name."""
+        if self._reviewed(node):
+            self._skipped_reviewed_names.append(original)
+            return True
+        return False
+
+    def skipped_reviewed_names(self) -> list[str]:
+        """Suggestions the last apply_semantic_names left out: reviewed elements."""
+        return list(getattr(self, "_skipped_reviewed_names", []))
 
     def applied_semantic_names(self) -> list[dict[str, str]]:
         """Return the suggestions the last apply actually matched.

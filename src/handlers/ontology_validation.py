@@ -1,6 +1,7 @@
 """validate_relationship: check a relationship against the data and record it."""
 
 import asyncio
+import json
 import logging
 import os
 from collections import Counter
@@ -20,6 +21,12 @@ from ..join_discovery import CONFIRMED_PATTERN
 from ..lifecycle.artifacts import artifact_family_lock, prune_superseded_artifacts
 from ..lifecycle.metadata import VersionMetadataManager, mutate_workspace_metadata
 from ..ontology_generator import InferredRelationship, OntologyGenerator
+from ..ontology_review import DRAFT, REVIEWED
+from ..ontology_review import STATUSES as REVIEW_STATUSES
+from ..ontology_review import Review
+from ..ontology_review import inventory as review_inventory
+from ..ontology_review import reapply as reapply_review_records
+from ..ontology_review import record as record_review
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..relationship_validation import (
@@ -995,3 +1002,169 @@ async def confirm_join(
         persisted_to_rdf=saved["persisted"],
     )
     return result
+
+
+# Workspace metadata section of the reviews, per schema, so a regenerated
+# ontology gets them back.
+REVIEWS_SECTION = "reviews"
+
+
+def recorded_reviews(
+    connection_id: str | None, schema_name: str | None
+) -> dict[str, dict[str, Any]]:
+    """The reviews kept for *schema_name*, by element. File access; off the loop."""
+    if not connection_id:
+        return {}
+    try:
+        manager = VersionMetadataManager(connection_id, OUTPUT_DIR)
+        schema_ws = manager.get_workspace_schema(schema_name or "default") or {}
+    except Exception as e:
+        logger.debug(f"No recorded reviews: {e}")
+        return {}
+    section = schema_ws.get(REVIEWS_SECTION) or {}
+    return section if isinstance(section, dict) else {}
+
+
+def reapply_reviews(
+    generator: OntologyGenerator,
+    connection_id: str | None,
+    schema_name: str | None,
+    ontology_ttl: str,
+) -> str:
+    """A freshly generated ontology with the reviews kept for its schema.
+
+    CPU-bound; call it off the event loop.
+    """
+    reviews = recorded_reviews(connection_id, schema_name)
+    if not reviews or not reapply_review_records(generator.graph, reviews):
+        return ontology_ttl
+    return generator.serialize_ontology()
+
+
+async def _remember_reviews(
+    connection_id: str | None, schema_name: str, reviews: list[Review]
+) -> None:
+    """Keep *reviews* in the workspace; a draft removes the element's review."""
+    if not connection_id or not reviews:
+        return
+
+    def _record(manager: VersionMetadataManager) -> None:
+        schema_ws = manager.get_workspace_schema(schema_name) or {}
+        kept = dict(schema_ws.get(REVIEWS_SECTION) or {})
+        for review in reviews:
+            if review.status == DRAFT:
+                kept.pop(review.key(), None)
+            else:
+                kept[review.key()] = review.as_dict()
+        manager.update_workspace(schema_name, REVIEWS_SECTION, kept)
+
+    try:
+        await mutate_workspace_metadata(connection_id, OUTPUT_DIR, _record)
+    except Exception as e:
+        logger.warning(f"Failed to record the reviews: {e}")
+
+
+async def review_ontology(
+    ctx: Context,
+    items: list[dict[str, Any]] | None,
+    services: "HandlerContext",
+    reviewer: str | None = None,
+) -> dict[str, Any]:
+    """Mark tables, columns and relationships as reviewed, rejected or draft.
+
+    Without items, what there is to review: every relationship with where it
+    comes from, its latest check on the data and its review status, and how
+    many tables, columns and relationships are reviewed.
+
+    Args:
+        ctx: FastMCP request context.
+        items: Each a ``table``, optional ``column`` and ``to_table`` (for a
+            relationship), ``status`` and optional ``note``.
+        services: Request-scoped services.
+        reviewer: Who reviewed them, as given; stored as oba:reviewedBy.
+
+    Returns:
+        What was marked, what was not found, and the counts.
+    """
+    session = services.get_session_data(ctx)
+    if session.ontology_file is None and session.loaded_ontology is None:
+        err: dict[str, Any] = services.create_error_response(
+            "No ontology is active. Call generate_ontology() or load_my_ontology() "
+            "first: review_ontology marks elements of it.",
+            "ontology_not_found",
+        )
+        return err
+    pinned = pin_connection(session)
+    try:
+        generator, is_upload = await _active_ontology(ctx, session, services)
+    except Exception as e:
+        err = services.create_error_response(
+            f"Could not load the active ontology: {e!s}", "ontology_error"
+        )
+        return err
+    graph = generator.graph
+    if not items:
+        listing = await asyncio.to_thread(review_inventory, graph)
+        return {"success": True, **listing}
+
+    at = utc_now().isoformat()
+    applied: list[Review] = []
+    missing: list[str] = []
+    invalid: list[str] = []
+    for item in items:
+        table = str(item.get("table") or "").strip()
+        column = str(item.get("column") or "").strip() or None
+        to_table = str(item.get("to_table") or "").strip() or None
+        status = str(item.get("status") or REVIEWED).strip().lower()
+        note = str(item.get("note") or "").strip() or None
+        if not table or status not in REVIEW_STATUSES or (to_table and not column):
+            invalid.append(json.dumps(item, default=str)[:200])
+            continue
+        review = Review(
+            table=table,
+            column=column,
+            to_table=to_table,
+            status=status,
+            note=note,
+            reviewer=(reviewer or "").strip() or None,
+            at="" if status == DRAFT else at,
+        )
+        if record_review(graph, review):
+            applied.append(review)
+        else:
+            missing.append(review.label())
+    if not applied:
+        err = services.create_error_response(
+            "Nothing was marked: "
+            + (f"not in the ontology: {', '.join(missing[:10])}. " if missing else "")
+            + (f"invalid: {'; '.join(invalid[:5])}." if invalid else ""),
+            "element_not_found" if missing else "parameter_error",
+        )
+        err["not_found"] = missing
+        err["invalid"] = invalid
+        return err
+
+    saved = await _save_active_ontology(
+        ctx, services, session, pinned, generator, is_upload, []
+    )
+    if saved is None:
+        return connection_changed_response(
+            services, "the reviews were being recorded", "review_ontology()"
+        )
+    schema_ws = (
+        session.current_schema or session.get_last_analyzed_schema() or "default"
+    )
+    await _remember_reviews(pinned.connection_id, schema_ws, applied)
+    counts = (await asyncio.to_thread(review_inventory, graph))["counts"]
+    await notify_client(ctx, f"Recorded {len(applied)} review(s)")
+    return {
+        "success": True,
+        "marked": [
+            {"element": r.label(), "kind": r.kind, "status": r.status} for r in applied
+        ],
+        "not_found": missing,
+        "invalid": invalid,
+        "counts": counts,
+        "ontology_file": saved["filename"],
+        "persisted_to_rdf": saved["persisted"],
+    }

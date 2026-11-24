@@ -45,6 +45,7 @@ from .ontology_validation import (
     auto_validation_enabled,
     confirmed_joins,
     reapply_recorded,
+    reapply_reviews,
     validate_cached_ontology,
     validate_inferred_relationships,
 )
@@ -296,9 +297,13 @@ async def generate_with_joins(
     # rdflib work is CPU-bound (~876 ms per 2.65 MB of Turtle); off the loop
     # so it does not freeze every concurrent session.
     ontology_ttl = await asyncio.to_thread(generate)
-    # Relationships checked with validate_relationship keep their verdicts.
+    # Relationships checked with validate_relationship keep their verdicts,
+    # and what a person reviewed keeps its review.
     ontology_ttl = await asyncio.to_thread(
         reapply_recorded, generator, connection_id, schema_name, ontology_ttl
+    )
+    ontology_ttl = await asyncio.to_thread(
+        reapply_reviews, generator, connection_id, schema_name, ontology_ttl
     )
     checks = join_records(found)
     if checks:
