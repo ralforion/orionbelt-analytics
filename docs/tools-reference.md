@@ -62,7 +62,7 @@ Successful results of the main tools name the most likely next call, read from t
 | `generate_ontology`, `load_my_ontology`, `apply_semantic_names` | `graphrag_query_context` once GraphRAG is ready (otherwise `get_table_details`), then `execute_sql_query`; optionally `suggest_semantic_names` (generated ontology, not yet enriched) and `validate_relationship` |
 | `suggest_semantic_names` | `apply_semantic_names` |
 | `validate_relationship` | questions; or `graphrag_find_join_path` when refuted |
-| `confirm_join` | questions |
+| `confirm_join`, `review_ontology` | questions |
 | `graphrag_query_context`, `graphrag_find_join_path`, `plan_composite_query`, `reachable_from`, `measurable_from` | `execute_sql_query` |
 | `execute_sql_query` | `generate_chart` (optional) |
 
@@ -467,7 +467,32 @@ Link a column to another table's key in the ontology, once the data confirms it.
 
 ---
 
-### 13. download_artifact
+### 13. review_ontology
+
+Record what a person checked. A generated ontology is a draft: its tables, columns and relationships come from the catalog and from inference. Mark an element `reviewed` (checked and kept) or `rejected` (wrong), or `draft` to take a review back.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `items` | list | No | Each `{table, column?, to_table?, to_column?, schema_name?, to_schema?, status?, note?}`: a table is `{table}`, a column `{table, column}`, a relationship `{table, column, to_table}`. A composite key names all its columns, comma-separated, and `to_column` the columns they reference in the same order; `to_column`, `schema_name` and `to_schema` choose when several elements match. `status` is `reviewed` (default), `rejected` or `draft`. Up to 500 |
+| `reviewer` | string | No | Who reviewed them, stored as given |
+
+Without `items` it lists what there is to review: every relationship (`schema_name`, `table`, `column`, `to_schema`, `to_table`, `to_column`, ready to pass back as an item) with where it comes from (declared, or inferred and how), its latest check on the data (`validate_relationship`) and its review status, unreviewed ones first, and how many tables, columns and relationships are reviewed, rejected or still drafts.
+
+**What it changes:**
+- `execute_sql_query` treats a reviewed relationship as a firm key, like a declared one: a fan-trap across it blocks rather than warns (see [OBQC](obqc.md#declared-checked-or-guessed-relationships)). A rejected relationship is no join, as a refuted one is.
+- `suggest_semantic_names` no longer flags a reviewed element's name, and `apply_semantic_names` leaves it as it is, saying so.
+- Reviews are recorded in the ontology as `oba:reviewStatus`, `oba:reviewedAt`, `oba:reviewNote` and `oba:reviewedBy` (a new version, refreshed in the RDF store), and kept in the workspace, so a regenerated ontology gets them back -- each on the element it was given for. A relationship is its schema-qualified tables and each pair of key column and referenced column: reviewing `orders.customer_id -> main.customers.id` says nothing about `customer_id` guessed onto `customers.legacy_id`, a key moved to `archive.customers`, or a composite key whose columns are paired the other way round.
+- A reviewed element keeps the name and description it had when reviewed, also when regenerated: a name applied with `apply_semantic_names` and then reviewed comes back with the review. Set it to `draft` to rename it.
+
+**Returns:** `marked` (each element, its kind and status), `not_found`, `ambiguous` (an item matching several elements, with them -- nothing is marked for it), `invalid`, the counts per status, and the new ontology file.
+
+The idea follows NVIDIA Auto Ontology's certification, where experts mark elements as reviewed.
+
+---
+
+### 14. download_artifact
 
 Download a generated artifact -- the ontology or the R2RML mapping -- as a Turtle (`.ttl`) file with its full content.
 
@@ -496,7 +521,7 @@ Download a generated artifact -- the ontology or the R2RML mapping -- as a Turtl
 
 ---
 
-### 14. sample_table_data
+### 15. sample_table_data
 
 Safely sample rows from a specific table for data exploration and quality assessment.
 
@@ -518,7 +543,7 @@ Safely sample rows from a specific table for data exploration and quality assess
 
 ---
 
-### 15. execute_sql_query
+### 16. execute_sql_query
 
 Execute a SQL query with built-in validation, fan-trap protection, and automatic GraphRAG context enrichment.
 
@@ -556,7 +581,7 @@ Execute a SQL query with built-in validation, fan-trap protection, and automatic
 
 ---
 
-### 16. generate_chart
+### 17. generate_chart
 
 Generate interactive Plotly charts rendered via MCP Apps, or export as static PNG images.
 
@@ -589,7 +614,7 @@ Generate interactive Plotly charts rendered via MCP Apps, or export as static PN
 
 ---
 
-### 17. cleanup_workspace
+### 18. cleanup_workspace
 
 Delete all workspace files for the current database connection and clear session state. The database connection remains active.
 
@@ -607,7 +632,7 @@ Delete all workspace files for the current database connection and clear session
 
 ---
 
-### 18. save_semantic_model
+### 19. save_semantic_model
 
 Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse across sessions.
 
@@ -629,7 +654,7 @@ Save a semantic model definition (e.g., OBML YAML) to the workspace for reuse ac
 
 ---
 
-### 19. get_semantic_model
+### 20. get_semantic_model
 
 Retrieve a stored semantic model YAML by name.
 
@@ -647,7 +672,7 @@ Retrieve a stored semantic model YAML by name.
 
 ---
 
-### 20. list_semantic_models
+### 21. list_semantic_models
 
 List all stored semantic models for the current database connection.
 
@@ -657,7 +682,7 @@ List all stored semantic models for the current database connection.
 
 ---
 
-### 21. graphrag_search
+### 22. graphrag_search
 
 Search the schema using natural language via GraphRAG semantic search, or return a schema overview. GraphRAG is auto-initialized by `discover_schema`.
 
@@ -681,7 +706,7 @@ Search the schema using natural language via GraphRAG semantic search, or return
 
 ---
 
-### 22. graphrag_query_context
+### 23. graphrag_query_context
 
 Get an optimized, minimal schema context for SQL generation, selecting only the tables and columns relevant to a natural-language query.
 
@@ -706,7 +731,7 @@ Get an optimized, minimal schema context for SQL generation, selecting only the 
 
 ---
 
-### 23. graphrag_find_join_path
+### 24. graphrag_find_join_path
 
 Discover a join path between two tables using GraphRAG graph traversal.
 
@@ -732,7 +757,7 @@ Discover a join path between two tables using GraphRAG graph traversal.
 
 ---
 
-### 24. store_ontology_in_rdf
+### 25. store_ontology_in_rdf
 
 Persist the current session's ontology in the Oxigraph RDF store so it can be queried with SPARQL. Usually unnecessary -- `generate_ontology` auto-persists by default -- but useful after loading or editing an ontology with auto-persist disabled.
 
@@ -752,7 +777,7 @@ Persist the current session's ontology in the Oxigraph RDF store so it can be qu
 
 ---
 
-### 25. query_sparql
+### 26. query_sparql
 
 Execute a SPARQL query against the RDF ontology store to explore classes, properties, relationships, and semantic metadata.
 
@@ -776,7 +801,7 @@ Execute a SPARQL query against the RDF ontology store to explore classes, proper
 
 ---
 
-### 26. add_rdf_knowledge
+### 27. add_rdf_knowledge
 
 Add a custom triple (subject-predicate-object) to the RDF store to enrich the ontology with bespoke metadata.
 
@@ -798,7 +823,7 @@ Add a custom triple (subject-predicate-object) to the RDF store to enrich the on
 
 ---
 
-### 27. cleanup_old_versions
+### 28. cleanup_old_versions
 
 Prune old ontology and GraphRAG versions for one schema according to the retention policy. Unlike `cleanup_workspace`, this keeps the current generation and recent history -- it deletes only *archived* versions that have aged out.
 

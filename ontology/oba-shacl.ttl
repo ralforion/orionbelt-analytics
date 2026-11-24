@@ -737,3 +737,36 @@ oba:ViewColumnShape a sh:NodeShape ;
         sh:name "domain" ;
         sh:message "A view column's rdfs:domain must be the IRI of its view."
     ] .
+
+# -----------------------------------------------------------------------------
+# Review: what a person decided about a table, column or relationship
+# (review_ontology). Absent on drafts.
+# -----------------------------------------------------------------------------
+oba:ReviewShape a sh:NodeShape ;
+    sh:targetSubjectsOf oba:reviewStatus ;
+    sh:property [
+        sh:path oba:reviewStatus ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:in ( "reviewed" "rejected" ) ;
+        sh:name "review status" ;
+        sh:message "oba:reviewStatus is one of 'reviewed' or 'rejected'."
+    ] ;
+    sh:property [
+        sh:path oba:reviewedAt ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:dateTime ;
+        sh:name "reviewed at"
+    ] ;
+    sh:property [
+        sh:path oba:reviewNote ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "review note"
+    ] ;
+    sh:property [
+        sh:path oba:reviewedBy ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:name "reviewed by"
+    ] .

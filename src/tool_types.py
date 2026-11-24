@@ -8,7 +8,7 @@ a published-schema hint for hosts; handlers keep their own runtime validation.
 
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from .constants import SUPPORTED_DB_TYPES
 
@@ -31,3 +31,44 @@ _QueryBody = Annotated[str, Field(max_length=100_000)]
 _DocBody = Annotated[str, Field(max_length=5_000_000)]
 # URIs.
 _Uri = Annotated[str, Field(max_length=2048)]
+
+
+class ReviewItem(BaseModel):
+    """One table, column or relationship a person reviewed (review_ontology)."""
+
+    table: _Identifier = Field(description="The table, e.g. 'orders'")
+    column: _Identifier | None = Field(
+        default=None,
+        description=(
+            "A column of it; with to_table, the key column(s) of a "
+            "relationship, comma-separated"
+        ),
+    )
+    to_table: _Identifier | None = Field(
+        default=None,
+        description="For a relationship: the table the column references",
+    )
+    schema_name: _Identifier | None = Field(
+        default=None,
+        description="The table's schema, when several schemas have the table",
+    )
+    to_schema: _Identifier | None = Field(
+        default=None,
+        description="For a relationship: the referenced table's schema",
+    )
+    to_column: _Identifier | None = Field(
+        default=None,
+        description=(
+            "For a relationship: the referenced column(s), comma-separated "
+            "in the order of column -- a composite key names all of its "
+            "columns in both, as review_ontology lists them"
+        ),
+    )
+    status: Literal["reviewed", "rejected", "draft"] = Field(
+        default="reviewed",
+        description=(
+            "reviewed: checked and kept; rejected: wrong (a rejected "
+            "relationship is no join); draft: remove an earlier review"
+        ),
+    )
+    note: _ShortText | None = Field(default=None, description="Why, optionally")

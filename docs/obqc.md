@@ -336,10 +336,10 @@ Fan-out needs to know which side of a join is the "one" side, and that comes fro
 
 | Relationship | Fan-trap finding resting on it |
 |---|---|
-| Declared by the database, or inferred and `confirmed` / `partial` by `validate_relationship`; found in the data (`OBA_DISCOVER_JOINS_BY_DATA`) or linked with `confirm_join`, both confirmed on all rows | Blocks, as above |
+| Declared by the database, or inferred and `confirmed` / `partial` by `validate_relationship`; found in the data (`OBA_DISCOVER_JOINS_BY_DATA`) or linked with `confirm_join`, both confirmed on all rows; or marked `reviewed` by a person with `review_ontology` | Blocks, as above |
 | Inferred, never checked (or `no_data`) | WARNING, never blocks; the message names the relationship and says it is a guess |
 | `target_not_unique` | Fans out from **both** ends: the lookup `orders JOIN customers` multiplies orders too, and blocks |
-| `refuted` | Ignored: it is no relationship to join on, and the join is reported as not matching one |
+| `refuted`, or `rejected` with `review_ontology` | Ignored: it is no relationship to join on, and the join is reported as not matching one |
 
 The dangerous case in a warehouse is the one no finding can see: a history or snapshot table with several rows per `id`, joined as if it were a lookup. When an aggregating query crosses to the "one" side of a relationship that is only guessed, OBQC adds an INFO note -- "Assumes `customers.id` is unique ..." -- naming the `validate_relationship` call that settles it. The verdict is recorded in the ontology, so the note disappears once the key is confirmed, and a `target_not_unique` verdict turns the same query into a blocking finding.
 

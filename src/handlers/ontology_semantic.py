@@ -877,6 +877,14 @@ async def apply_semantic_names(
         result += f"- Classes updated: {classes_updated}\n"
         result += f"- Properties updated: {properties_updated}\n"
         result += f"- Relationships updated: {relationships_updated}\n"
+        # Reviewed elements keep the names a person checked (review_ontology).
+        skipped_reviewed = generator.skipped_reviewed_names()
+        if skipped_reviewed:
+            result += (
+                f"- Left as reviewed: {', '.join(skipped_reviewed[:20])}"
+                f"{' ...' if len(skipped_reviewed) > 20 else ''} (marked reviewed "
+                "with review_ontology; set them to draft first to rename)\n"
+            )
         # Reported independently: an error after some successes is a *partial*
         # index, and collapsing that into the count alone would present a
         # half-finished job as a finished one.

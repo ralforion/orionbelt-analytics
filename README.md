@@ -181,6 +181,7 @@ OrionBelt exposes 26 MCP tools. Here is a summary by category:
 | `load_my_ontology`       | Load a custom `.ttl` ontology file from an import folder              |
 | `validate_relationship`  | Check a relationship against the data and record the verdict in the ontology |
 | `confirm_join`           | Link a column to another table's key once the data confirms it on all rows |
+| `review_ontology`        | Mark tables, columns and relationships reviewed or rejected by a person |
 | `download_artifact`      | Download ontology or R2RML mapping as a Turtle file                   |
 
 ### Query & Visualization

@@ -26,6 +26,7 @@ from .relationship_validation import (
     STATUS_PARTIAL,
     STATUS_REFUTED,
     STATUS_TARGET_NOT_UNIQUE,
+    column_pairs,
     is_composite_key,
     why_not_checkable,
 )
@@ -420,6 +421,8 @@ class RelationshipInfo:
     inferred: bool = False
     # The latest validate_relationship verdict, if it was ever checked.
     validation_status: str | None = None
+    # A person reviewed it and kept it (oba:reviewStatus "reviewed").
+    reviewed: bool = False
     # (key column, referenced column) for every column of a composite key.
     # Empty for a single-column key, which from_column / to_column describe.
     column_pairs: tuple[tuple[str, str], ...] = ()
@@ -431,8 +434,12 @@ class RelationshipInfo:
 
     @property
     def assumed(self) -> bool:
-        """Whether only naming backs it: inferred, and not checked on the data."""
-        return self.inferred and self.validation_status not in _CHECKED_STATUSES
+        """Whether only naming backs it: inferred, unchecked and unreviewed."""
+        return (
+            self.inferred
+            and not self.reviewed
+            and self.validation_status not in _CHECKED_STATUSES
+        )
 
     @property
     def target_not_unique(self) -> bool:
@@ -850,6 +857,8 @@ class OBQCValidator:
             ref_column = self._get_literal(subject, self._oba_ns.referencedColumn)
             rel_type = self._get_literal(subject, self._oba_ns.relationshipType)
             status = self._get_literal(subject, self._oba_ns.validationStatus)
+            # What a person decided outranks inference and sampling alike.
+            review = self._get_literal(subject, self._oba_ns.reviewStatus)
             if not (fk_column and ref_table):
                 continue
             from_table = None
@@ -868,8 +877,9 @@ class OBQCValidator:
                 # shared by separate keys it cannot say which key it is about
                 # -- refuting shipping must not remove billing.
                 status = None
-            if status == STATUS_REFUTED:
-                # The data contradicts it: no join may lean on it.
+            if status == STATUS_REFUTED or review == "rejected":
+                # The data contradicts it, or a reviewer rejected it: no join
+                # may lean on it.
                 schema.refuted_links.add((from_table.lower(), ref_table.lower()))
                 continue
 
@@ -904,6 +914,7 @@ class OBQCValidator:
                         subject, self._oba_ns.isInferredRelationship, False
                     ),
                     validation_status=status,
+                    reviewed=review == "reviewed",
                     column_pairs=tuple(group) if len(group) > 1 else (),
                 )
 
@@ -940,41 +951,14 @@ class OBQCValidator:
             The pairs, sorted; empty when the key columns cannot be paired,
             and the caller falls back to one of them.
         """
-        if self._graph is None or self._oba_ns is None:
+        if self._graph is None:
             return []
-        fk_columns = [
-            str(o) for o in self._graph.objects(subject, self._oba_ns.foreignKeyColumn)
-        ]
-        ref_columns = [
-            str(o) for o in self._graph.objects(subject, self._oba_ns.referencedColumn)
-        ]
-        if len(fk_columns) == 1:
-            # One key column onto each referenced column the property names:
-            # an older ontology may hold customer_ref -> id and -> legacy_id
-            # on one property, and both joins are relationships.
-            targets = sorted({c.lower(): c for c in ref_columns}.values()) or ["id"]
-            return [(fk_columns[0], target) for target in targets]
-        wanted = {c.lower() for c in fk_columns}
-        pairs: dict[str, tuple[str, str]] = {}
-        for cond in self._graph.objects(subject, self._oba_ns.sqlJoinCondition):
-            sides = str(cond).split("=")
-            if len(sides) != 2:
-                continue
-            refs = [side.strip().rsplit(".", 1) for side in sides]
-            if any(len(ref) != 2 for ref in refs):
-                continue
-            (left_table, left), (right_table, right) = refs
-            # Written key side first; accept either order from other authors.
-            if left_table.lower() == from_table.lower() and left.lower() in wanted:
-                pairs[left.lower()] = (left, right)
-            elif right_table.lower() == from_table.lower() and right.lower() in wanted:
-                pairs[right.lower()] = (right, left)
-        if len(pairs) != len(wanted):
+        pairs = column_pairs(self._graph, subject, from_table)
+        if not pairs:
             logger.debug(
                 "Cannot pair the key columns of %s; using one of them", subject
             )
-            return []
-        return sorted(pairs.values())
+        return pairs
 
     def _extract_disjoint_pairs(self) -> set[frozenset]:
         """Read owl:disjointWith axioms as pairs of lower-cased table names.

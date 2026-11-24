@@ -236,6 +236,50 @@ def _literal(graph: Graph, subject: Any, predicate: URIRef) -> str | None:
     return str(value) if value is not None else None
 
 
+def column_pairs(graph: Graph, prop: Node, from_table: str) -> list[tuple[str, str]]:
+    """Every (key column, referenced column) of a relationship, sorted.
+
+    A composite key is one property holding several ``oba:foreignKeyColumn``
+    and ``oba:referencedColumn`` values, which say nothing about which goes
+    with which; its ``oba:sqlJoinCondition`` values, one equality per
+    column, do. A single-column key needs no pairing.
+
+    Args:
+        graph: The ontology.
+        prop: The relationship's object property.
+        from_table: Its key table.
+
+    Returns:
+        The pairs; empty when the key columns cannot be paired.
+    """
+    fk_columns = [str(o) for o in graph.objects(prop, OBA.foreignKeyColumn)]
+    ref_columns = [str(o) for o in graph.objects(prop, OBA.referencedColumn)]
+    if len(fk_columns) == 1:
+        # One key column onto each referenced column the property names:
+        # an older ontology may hold customer_ref -> id and -> legacy_id
+        # on one property, and both joins are relationships.
+        targets = sorted({c.lower(): c for c in ref_columns}.values()) or ["id"]
+        return [(fk_columns[0], target) for target in targets]
+    wanted = {c.lower() for c in fk_columns}
+    pairs: dict[str, tuple[str, str]] = {}
+    for cond in graph.objects(prop, OBA.sqlJoinCondition):
+        sides = str(cond).split("=")
+        if len(sides) != 2:
+            continue
+        refs = [side.strip().rsplit(".", 1) for side in sides]
+        if any(len(ref) != 2 for ref in refs):
+            continue
+        (left_table, left), (right_table, right) = refs
+        # Written key side first; accept either order from other authors.
+        if left_table.lower() == from_table.lower() and left.lower() in wanted:
+            pairs[left.lower()] = (left, right)
+        elif right_table.lower() == from_table.lower() and right.lower() in wanted:
+            pairs[right.lower()] = (right, left)
+    if len(pairs) != len(wanted):
+        return []
+    return sorted(pairs.values())
+
+
 def is_composite_key(graph: Graph, prop: Node) -> bool:
     """Whether a relationship is one key over several columns.
 

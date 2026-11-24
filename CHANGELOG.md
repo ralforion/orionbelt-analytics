@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Reviewed by a person**: the new `review_ontology` tool marks tables,
+  columns and relationships `reviewed` or `rejected`
+  (`oba:reviewStatus`, with when, who and why). OBQC treats a reviewed
+  relationship as a firm key -- a fan-trap across it blocks -- and a
+  rejected one as no join; semantic-name suggestions leave reviewed
+  elements alone, which keep the name and description they were reviewed
+  with. Reviews are kept in the workspace and come back with every
+  regenerated ontology, a relationship's only while it joins the same
+  columns between the same schema-qualified tables. Called without items, it lists each relationship with where it comes
+  from and its latest check on the data.
+  The idea follows NVIDIA Auto Ontology's certification.
 - **Joins found in the data** (opt-in, `OBA_DISCOVER_JOINS_BY_DATA`):
   `generate_ontology` checks columns that look like references but name no
   table -- `orders.cust`, `purchases.vendor` -- against other tables' keys,
