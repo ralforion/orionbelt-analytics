@@ -31,8 +31,12 @@ is certain counts:
   match rows otherwise;
 - plain tables of the schema only: a CTE, a derived table, UNNEST or a
   table function may hold any number of rows per key;
-- plain grouping keys: ROLLUP, CUBE, GROUP BY ALL add or change groups,
-  and an expression (``date_trunc(...)``) fixes no column;
+- plain grouping keys: ROLLUP and CUBE add groups, and an expression
+  (``date_trunc(...)``) fixes no column. A bare GROUP BY ALL groups by every
+  output holding no aggregate; of those, plain columns and plain stars
+  (``s.*``) are its keys -- leaving out an output only makes the groups
+  coarser, never finer than the database's. With anything after it
+  (``GROUP BY ALL ROLLUP (x)``) ALL is the set quantifier, not judged;
 - a table renamed by a column alias list (``AS oi(qty, order_id, id)``) is
   not judged: its key may now go by another column's name;
 - a window aggregate sums across the groups (``SUM(o.total) OVER ()``), so a
@@ -84,11 +88,17 @@ def kept_once(select: exp.Select, catalog: Catalog) -> set[str]:
         Lower-cased names of the tables whose every reference is kept once.
     """
     group = select.args.get("group")
-    if group is None or not group.expressions:
+    if group is None:
         return set()
-    if any(group.args.get(k) for k in ("all", "rollup", "cube", "grouping_sets")):
+    if any(group.args.get(k) for k in ("rollup", "cube", "grouping_sets")):
         return set()
-    if any(isinstance(key, _GROUPING_SETS) for key in group.expressions):
+    every_output = bool(group.args.get("all"))
+    if every_output and group.expressions:
+        return set()  # GROUP BY ALL x: the set quantifier
+    if not every_output and (
+        not group.expressions
+        or any(isinstance(key, _GROUPING_SETS) for key in group.expressions)
+    ):
         return set()
     tables = _tables(select, catalog)
     if tables is None:
@@ -96,9 +106,13 @@ def kept_once(select: exp.Select, catalog: Catalog) -> set[str]:
     edges, pinned = _equalities(select, tables)
     if edges is None:
         return set()
-    grouped = {
-        ref for key in group.expressions if (ref := _group_ref(key, select, tables))
-    }
+    grouped = (
+        _output_refs(select, tables)
+        if every_output
+        else {
+            ref for key in group.expressions if (ref := _group_ref(key, select, tables))
+        }
+    )
     known = pinned | grouped
     by_name: dict[str, list[str]] = {}
     for alias, (name, _) in tables.items():
@@ -110,6 +124,35 @@ def kept_once(select: exp.Select, catalog: Catalog) -> set[str]:
     }
     windowed = _windowed(select, tables)
     return set() if windowed is None else kept - windowed
+
+
+def _output_refs(select: exp.Select, tables: dict[str, tuple[str, Keyed]]) -> set[Ref]:
+    """The columns a bare GROUP BY ALL groups by: its unaggregated outputs.
+
+    Every dialect with GROUP BY ALL groups by each output holding no
+    aggregate. A plain column never holds one, and a plain star stands for
+    columns: ``s.*`` all of s's, ``*`` every table's. Expressions are left
+    out -- they fix no column -- and so are stars with EXCLUDE, REPLACE or
+    RENAME, which may drop or change a key.
+    """
+    refs: set[Ref] = set()
+    for projection in select.selects:
+        node = projection.this if isinstance(projection, exp.Alias) else projection
+        while isinstance(node, exp.Paren):
+            node = node.this
+        star = node.this if isinstance(node, exp.Column) else node
+        if isinstance(star, exp.Star):
+            if any(star.args.values()):
+                continue
+            aliases = [node.table.lower()] if isinstance(node, exp.Column) else tables
+            for alias in aliases:
+                if alias in tables:
+                    refs.update((alias, c) for c in tables[alias][1].columns)
+        elif isinstance(node, exp.Column):
+            ref = _group_ref(node, select, tables)
+            if ref is not None:
+                refs.add(ref)
+    return refs
 
 
 def _windowed(
