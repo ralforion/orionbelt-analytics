@@ -707,6 +707,68 @@ def test_a_name_that_is_also_an_alias_must_keep_rows_once_read_either_way(
     assert _blocked_on_clickhouse(school, sql)
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # A scalar WITH alias is read before the bridge's column: a constant.
+        "WITH 0 AS student_id SELECT student_id, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY ALL",
+        "WITH 0 AS student_id SELECT student_id, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY student_id",
+        # ... and reaches subqueries.
+        "WITH 0 AS student_id SELECT * FROM (SELECT student_id, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY ALL)",
+        # An equality over an alias's name compares the alias: 0 = 0 here.
+        "SELECT 0 AS student_id, SUM(c.credits) "
+        + THROUGH
+        + "WHERE student_id = 0 GROUP BY ALL",
+        "SELECT s.full_name AS student_id, SUM(c.credits) "
+        + THROUGH
+        + "WHERE student_id = 1 GROUP BY s.full_name",
+    ],
+)
+def test_scalar_aliases_and_equalities_read_names_both_ways(
+    school: OBQCValidator, sql: str
+) -> None:
+    inner = sqlglot.parse_one(sql, dialect="clickhouse")
+    (select,) = [s for s in inner.find_all(sqlglot.exp.Select) if s.args.get("group")]
+    assert "courses" not in kept_once(select, _catalog)
+    assert _blocked_on_clickhouse(school, sql)
+
+
+def test_a_row_generator_multiplies_rows_before_grouping(
+    school: OBQCValidator,
+) -> None:
+    # Every row twice, so each course twice per student: sums double.
+    sql = (
+        "SELECT s.id, SUM(c.credits) "
+        + THROUGH
+        + "WHERE arrayJoin([1, 2]) > 0 GROUP BY s.id"
+    )
+    assert _kept(sql, dialect="clickhouse") == set()
+    assert _blocked_on_clickhouse(school, sql)
+    # A generator inside a subquery multiplies that subquery's rows only.
+    sql = (
+        "SELECT s.id, SUM(c.credits) "
+        + THROUGH
+        + "WHERE s.id IN (SELECT arrayJoin([1, 2])) GROUP BY s.id"
+    )
+    assert "courses" in _kept(sql, dialect="clickhouse")
+
+
+def test_an_alias_naming_nothing_the_query_reads_changes_nothing() -> None:
+    for sql in (
+        "WITH 0 AS zero SELECT s.id, SUM(c.credits) " + THROUGH + "GROUP BY ALL",
+        "SELECT s.id, SUM(c.credits) AS credits_total "
+        + THROUGH
+        + "WHERE sc.student_id = 1 GROUP BY s.full_name",
+    ):
+        assert "courses" in _kept(sql, dialect="clickhouse"), sql
+
+
 def test_a_name_read_either_way_as_the_same_student_passes(
     school: OBQCValidator,
 ) -> None:
