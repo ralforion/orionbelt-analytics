@@ -661,6 +661,67 @@ def test_group_by_all_keys_are_its_plain_outputs() -> None:
         }
 
 
+def _blocked_on_clickhouse(validator: OBQCValidator, sql: str) -> bool:
+    result = validator.validate(sql, dialect="clickhouse")
+    return not result.is_valid and any(
+        i.issue_type == OBQCIssueType.FAN_TRAP_DETECTED for i in result.issues
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # ClickHouse's totals row sums over all students: Math counts twice.
+        "SELECT s.id, SUM(c.credits) " + THROUGH + "GROUP BY ALL WITH TOTALS",
+        "SELECT s.id, SUM(c.credits) " + THROUGH + "GROUP BY s.id WITH TOTALS",
+    ],
+)
+def test_with_totals_adds_a_row_over_every_group(
+    school: OBQCValidator, sql: str
+) -> None:
+    assert _kept(sql, dialect="clickhouse") == set()
+    assert _blocked_on_clickhouse(school, sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # ClickHouse reads student_id as the alias -- an aggregate, one group
+        # -- before the bridge's column.
+        "SELECT MAX(s.id) AS student_id, student_id AS sid, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY ALL",
+        "SELECT MAX(s.id) AS student_id, student_id, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY 2",
+        # Grouped by name there, by the bridge's column elsewhere.
+        "SELECT s.full_name AS student_id, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY student_id",
+    ],
+)
+def test_a_name_that_is_also_an_alias_must_keep_rows_once_read_either_way(
+    school: OBQCValidator, sql: str
+) -> None:
+    assert "courses" not in _kept(sql, dialect="clickhouse")
+    assert _blocked_on_clickhouse(school, sql)
+
+
+def test_a_name_read_either_way_as_the_same_student_passes(
+    school: OBQCValidator,
+) -> None:
+    # The bridge's student_id or s.id: equal by the join, one student either way.
+    for sql in (
+        "SELECT s.id AS student_id, SUM(c.credits) " + THROUGH + "GROUP BY student_id",
+        "SELECT s.id AS student_id, student_id AS sid, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY ALL",
+    ):
+        for dialect in ("clickhouse", "duckdb"):
+            assert "courses" in _kept(sql, dialect=dialect), (sql, dialect)
+        assert not _blocked_on_clickhouse(school, sql), sql
+
+
 def test_mysqls_with_rollup_adds_groups_too() -> None:
     sql = "SELECT s.id, SUM(c.credits) " + THROUGH + "GROUP BY s.id WITH ROLLUP"
     assert _kept(sql, dialect="mysql") == set()

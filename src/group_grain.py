@@ -37,6 +37,13 @@ is certain counts:
   (``s.*``) are its keys -- leaving out an output only makes the groups
   coarser, never finer than the database's. With anything after it
   (``GROUP BY ALL ROLLUP (x)``) ALL is the set quantifier, not judged;
+- a grouping modifier changes the groups: ROLLUP, CUBE, GROUPING SETS,
+  ClickHouse's WITH TOTALS (a row over all rows) -- only plain keys and a
+  bare GROUP BY ALL are judged;
+- a name may be read two ways: ClickHouse takes ``student_id`` for an alias
+  of the same SELECT before a column of that name, other databases the
+  column. A grouping key or output read either way has to keep a table once
+  under each reading;
 - a table renamed by a column alias list (``AS oi(qty, order_id, id)``) is
   not judged: its key may now go by another column's name;
 - a window aggregate sums across the groups (``SUM(o.total) OVER ()``), so a
@@ -47,6 +54,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from itertools import product
+from math import prod
 
 from sqlglot import exp
 
@@ -54,6 +63,9 @@ from sqlglot import exp
 Ref = tuple[str, str]
 
 _GROUPING_SETS = (exp.Rollup, exp.Cube, exp.GroupingSets)
+
+#: Combinations of readings tried before ambiguous keys count for nothing.
+_MAX_READINGS = 64
 
 
 @dataclass(frozen=True)
@@ -90,7 +102,9 @@ def kept_once(select: exp.Select, catalog: Catalog) -> set[str]:
     group = select.args.get("group")
     if group is None:
         return set()
-    if any(group.args.get(k) for k in ("rollup", "cube", "grouping_sets")):
+    # Plain keys and a bare ALL only: ROLLUP, CUBE, GROUPING SETS and WITH
+    # TOTALS add rows over several groups -- and whatever sqlglot adds next.
+    if any(v for k, v in group.args.items() if k not in ("expressions", "all")):
         return set()
     every_output = bool(group.args.get("all"))
     if every_output and group.expressions:
@@ -106,38 +120,57 @@ def kept_once(select: exp.Select, catalog: Catalog) -> set[str]:
     edges, pinned = _equalities(select, tables)
     if edges is None:
         return set()
-    grouped = (
-        _output_refs(select, tables)
+    # What each key may stand for: one reading, or several when a name is
+    # both a column and an alias.
+    keys = (
+        _output_readings(select, tables)
         if every_output
-        else {
-            ref for key in group.expressions if (ref := _group_ref(key, select, tables))
-        }
+        else [_group_readings(key, select, tables) for key in group.expressions]
     )
-    known = pinned | grouped
     by_name: dict[str, list[str]] = {}
     for alias, (name, _) in tables.items():
         by_name.setdefault(name, []).append(alias)
-    kept = {
-        name
-        for name, aliases in by_name.items()
-        if all(_all_known(alias, tables, edges, known) for alias in aliases)
-    }
+
+    def kept_by(grouped: set[Ref]) -> set[str]:
+        known = pinned | grouped
+        return {
+            name
+            for name, aliases in by_name.items()
+            if all(_all_known(alias, tables, edges, known) for alias in aliases)
+        }
+
+    settled = {r for readings in keys if len(readings) == 1 for r in readings if r}
+    open_keys = [readings for readings in keys if len(readings) > 1]
+    if prod(len(readings) for readings in open_keys) > _MAX_READINGS:
+        open_keys = []  # too many to try: those keys fix nothing
+    kept: set[str] | None = None
+    for choice in product(*open_keys):
+        found = kept_by(settled | {r for r in choice if r})
+        kept = found if kept is None else kept & found
+    kept = kept or set()
     windowed = _windowed(select, tables)
     return set() if windowed is None else kept - windowed
 
 
-def _output_refs(select: exp.Select, tables: dict[str, tuple[str, Keyed]]) -> set[Ref]:
+def _output_readings(
+    select: exp.Select, tables: dict[str, tuple[str, Keyed]]
+) -> list[list[Ref | None]]:
     """The columns a bare GROUP BY ALL groups by: its unaggregated outputs.
 
     Every dialect with GROUP BY ALL groups by each output holding no
-    aggregate. A plain column never holds one, and a plain star stands for
-    columns: ``s.*`` all of s's, ``*`` every table's. Expressions are left
-    out -- they fix no column -- and so are stars with EXCLUDE, REPLACE or
-    RENAME, which may drop or change a key.
+    aggregate. A plain column never holds one -- unless its name is read as
+    an alias that does -- and a plain star stands for columns: ``s.*`` all
+    of s's, ``*`` every table's. Expressions are left out -- they fix no
+    column -- and so are stars with EXCLUDE, REPLACE or RENAME, which may
+    drop or change a key.
+
+    Returns:
+        Per output key, what it may stand for (see :func:`_readings`).
     """
-    refs: set[Ref] = set()
+    keys: list[list[Ref | None]] = []
     for projection in select.selects:
-        node = projection.this if isinstance(projection, exp.Alias) else projection
+        own = projection if isinstance(projection, exp.Alias) else None
+        node = projection.this if own is not None else projection
         while isinstance(node, exp.Paren):
             node = node.this
         star = node.this if isinstance(node, exp.Column) else node
@@ -147,12 +180,10 @@ def _output_refs(select: exp.Select, tables: dict[str, tuple[str, Keyed]]) -> se
             aliases = [node.table.lower()] if isinstance(node, exp.Column) else tables
             for alias in aliases:
                 if alias in tables:
-                    refs.update((alias, c) for c in tables[alias][1].columns)
+                    keys.extend([[(alias, c)] for c in tables[alias][1].columns])
         elif isinstance(node, exp.Column):
-            ref = _group_ref(node, select, tables)
-            if ref is not None:
-                refs.add(ref)
-    return refs
+            keys.append(_readings(node, select, tables, own))
+    return keys
 
 
 def _windowed(
@@ -333,32 +364,83 @@ def output_at(expressions: Sequence[exp.Expr], key: exp.Expr) -> exp.Expr | None
     return expressions[position - 1]
 
 
-def _group_ref(
+def _aliases(select: exp.Select) -> dict[str, list[exp.Alias]]:
+    """The aliases *select* defines, by name.
+
+    In its outputs and, as ClickHouse allows, anywhere else in it -- not in
+    its subqueries.
+    """
+    found: dict[str, list[exp.Alias]] = {}
+    for alias in select.find_all(exp.Alias):
+        if alias.alias and alias.find_ancestor(exp.Select) is select:
+            found.setdefault(alias.alias.lower(), []).append(alias)
+    return found
+
+
+def _readings(
+    column: exp.Column,
+    select: exp.Select,
+    tables: dict[str, tuple[str, Keyed]],
+    own: exp.Expr | None = None,
+) -> list[Ref | None]:
+    """What *column* may stand for: a table's column, or an alias by its name.
+
+    Unqualified, ``student_id`` is the bridge's column to most databases but,
+    to ClickHouse, ``MAX(s.id) AS student_id`` of the same SELECT. Each
+    reading is a column, or None where it fixes none (an aggregate, an
+    expression, an alias read through another alias). *own* is the output
+    whose value *column* is: its alias names it, it is no reading of it.
+    """
+    ref = _ref(column, tables)
+    if column.table:
+        return [ref]
+    aliases = _aliases(select)
+    others = [a for a in aliases.get(column.name.lower(), []) if a is not own]
+    if not others:
+        return [ref]
+    readings: list[Ref | None] = [] if ref is None else [ref]
+    for alias in others:
+        target = alias.this
+        while isinstance(target, exp.Paren):
+            target = target.this
+        through_alias = (
+            isinstance(target, exp.Column)
+            and not target.table
+            and any(a is not alias for a in aliases.get(target.name.lower(), []))
+        )
+        readings.append(None if through_alias else _ref(target, tables))
+    return list(dict.fromkeys(readings))
+
+
+def _group_readings(
     key: exp.Expr, select: exp.Select, tables: dict[str, tuple[str, Keyed]]
-) -> Ref | None:
-    """The column a grouping key fixes: itself, or the output it names."""
+) -> list[Ref | None]:
+    """What a grouping key may stand for: itself, or the output it names."""
     key = key.unnest() if isinstance(key, exp.Paren) else key
-    projection: exp.Expr | None = None
     if isinstance(key, exp.Literal) and not key.is_string:
         # GROUP BY 2: the second output, if its place is certain.
         projection = output_at(select.selects, key)
-    elif isinstance(key, exp.Column):
-        ref = _ref(key, tables)
-        if ref is not None:
-            return ref
-        if not key.table:
-            # GROUP BY an output's alias, where the dialect allows it.
-            projection = next(
-                (
-                    p
-                    for p in select.selects
-                    if p.alias_or_name.lower() == key.name.lower()
-                ),
-                None,
-            )
-    if isinstance(projection, exp.Alias):
-        projection = projection.this
-    return _ref(projection, tables) if projection is not None else None
+        if projection is None:
+            return [None]
+        own = projection if isinstance(projection, exp.Alias) else None
+        node = projection.this if own is not None else projection
+        while isinstance(node, exp.Paren):
+            node = node.this
+        if isinstance(node, exp.Column):
+            return _readings(node, select, tables, own)
+        return [None]
+    if not isinstance(key, exp.Column):
+        return [None]
+    readings = _readings(key, select, tables)
+    if readings == [None] and not key.table:
+        # GROUP BY an output's name, where the dialect allows it.
+        projection = next(
+            (p for p in select.selects if p.alias_or_name.lower() == key.name.lower()),
+            None,
+        )
+        if isinstance(projection, exp.Column):
+            return _readings(projection, select, tables)
+    return readings
 
 
 def _all_known(
