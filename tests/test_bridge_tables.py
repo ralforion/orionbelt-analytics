@@ -739,6 +739,49 @@ def test_scalar_aliases_and_equalities_read_names_both_ways(
     assert _blocked_on_clickhouse(school, sql)
 
 
+def test_a_scalar_alias_is_seen_only_where_its_with_reaches() -> None:
+    # Inside the subquery's WITH only: the outer student_id is the bridge's.
+    outer = (
+        "SELECT student_id, SUM(c.credits) "
+        + THROUGH
+        + "WHERE s.id IN (WITH 1 AS student_id SELECT student_id FROM student_courses) "
+        "GROUP BY student_id"
+    )
+    assert "courses" in _kept(outer, dialect="clickhouse")
+    # A WITH reaches its own query, the queries inside it, and a CTE's body.
+    for sql in (
+        "SELECT * FROM (WITH 0 AS student_id SELECT student_id, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY ALL)",
+        "WITH 0 AS student_id, t AS (SELECT student_id, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY ALL) SELECT * FROM t",
+        "WITH 0 AS student_id SELECT student_id, SUM(c.credits) "
+        + THROUGH
+        + "GROUP BY ALL UNION ALL SELECT 1, 2",
+    ):
+        select = next(
+            s
+            for s in sqlglot.parse_one(sql, dialect="clickhouse").find_all(
+                sqlglot.exp.Select
+            )
+            if s.args.get("group")
+        )
+        assert "courses" not in kept_once(select, _catalog), sql
+
+
+def test_the_query_around_a_subquery_with_its_own_with_passes(
+    school: OBQCValidator,
+) -> None:
+    sql = (
+        "SELECT student_id, SUM(c.credits) "
+        + THROUGH
+        + "WHERE s.id IN (WITH 1 AS student_id SELECT student_id FROM student_courses) "
+        "GROUP BY student_id"
+    )
+    assert not _blocked_on_clickhouse(school, sql)
+
+
 def test_a_row_generator_multiplies_rows_before_grouping(
     school: OBQCValidator,
 ) -> None:

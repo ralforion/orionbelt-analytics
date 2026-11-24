@@ -383,8 +383,9 @@ class _Names:
 
     ClickHouse reads a name as an alias before a column: one of the SELECT's
     own, defined anywhere in it (``MAX(s.id) AS student_id``, also in
-    WHERE), or a scalar ``WITH 0 AS student_id``, which reaches subqueries
-    too. Other databases read the column. Both readings are kept.
+    WHERE), or a scalar ``WITH 0 AS student_id`` of it or of a query it is
+    inside -- a WITH reaches subqueries, not the query around them. Other
+    databases read the column. Both readings are kept.
     """
 
     def __init__(self, select: exp.Select, tables: dict[str, tuple[str, Keyed]]):
@@ -395,9 +396,16 @@ class _Names:
         for alias in select.find_all(exp.Alias):
             if alias.alias and alias.find_ancestor(exp.Select) is select:
                 self.aliases.setdefault(alias.alias.lower(), []).append(alias)
-        for cte in select.root().find_all(exp.CTE):
-            if cte.args.get("scalar") and cte.alias:
-                self.aliases.setdefault(cte.alias.lower(), []).append(cte)
+        # A WITH is seen by its own query and those inside it -- not by the
+        # query a subquery sits in.
+        node: exp.Expr | None = select
+        while node is not None:
+            with_ = node.args.get("with_") or node.args.get("with")
+            if isinstance(with_, exp.With):
+                for cte in with_.expressions:
+                    if cte.args.get("scalar") and cte.alias:
+                        self.aliases.setdefault(cte.alias.lower(), []).append(cte)
+            node = node.parent
 
     def readings(
         self, column: exp.Column, own: exp.Expr | None = None
