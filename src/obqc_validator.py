@@ -26,6 +26,7 @@ from .relationship_validation import (
     STATUS_PARTIAL,
     STATUS_REFUTED,
     STATUS_TARGET_NOT_UNIQUE,
+    column_pairs,
     is_composite_key,
     why_not_checkable,
 )
@@ -950,41 +951,14 @@ class OBQCValidator:
             The pairs, sorted; empty when the key columns cannot be paired,
             and the caller falls back to one of them.
         """
-        if self._graph is None or self._oba_ns is None:
+        if self._graph is None:
             return []
-        fk_columns = [
-            str(o) for o in self._graph.objects(subject, self._oba_ns.foreignKeyColumn)
-        ]
-        ref_columns = [
-            str(o) for o in self._graph.objects(subject, self._oba_ns.referencedColumn)
-        ]
-        if len(fk_columns) == 1:
-            # One key column onto each referenced column the property names:
-            # an older ontology may hold customer_ref -> id and -> legacy_id
-            # on one property, and both joins are relationships.
-            targets = sorted({c.lower(): c for c in ref_columns}.values()) or ["id"]
-            return [(fk_columns[0], target) for target in targets]
-        wanted = {c.lower() for c in fk_columns}
-        pairs: dict[str, tuple[str, str]] = {}
-        for cond in self._graph.objects(subject, self._oba_ns.sqlJoinCondition):
-            sides = str(cond).split("=")
-            if len(sides) != 2:
-                continue
-            refs = [side.strip().rsplit(".", 1) for side in sides]
-            if any(len(ref) != 2 for ref in refs):
-                continue
-            (left_table, left), (right_table, right) = refs
-            # Written key side first; accept either order from other authors.
-            if left_table.lower() == from_table.lower() and left.lower() in wanted:
-                pairs[left.lower()] = (left, right)
-            elif right_table.lower() == from_table.lower() and right.lower() in wanted:
-                pairs[right.lower()] = (right, left)
-        if len(pairs) != len(wanted):
+        pairs = column_pairs(self._graph, subject, from_table)
+        if not pairs:
             logger.debug(
                 "Cannot pair the key columns of %s; using one of them", subject
             )
-            return []
-        return sorted(pairs.values())
+        return pairs
 
     def _extract_disjoint_pairs(self) -> set[frozenset]:
         """Read owl:disjointWith axioms as pairs of lower-cased table names.

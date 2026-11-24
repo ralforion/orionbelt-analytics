@@ -115,7 +115,7 @@ def _stored(reviews: list[Review]) -> dict[str, dict[str, Any]]:
 
 
 def test_reviews_are_reapplied_by_element() -> None:
-    marked, missing = mark(
+    result = mark(
         _generator().graph,
         [
             _review(table="customers"),
@@ -128,10 +128,12 @@ def test_reviews_are_reapplied_by_element() -> None:
             _review(table="gone"),
         ],
     )
-    assert missing == ["gone"]
-    # The relationship is recorded with the key it references.
-    assert [r.to_column for r in marked if r.to_table] == ["id"]
-    kept = _stored(marked)
+    assert result.missing == ["gone"]
+    # The relationship is recorded with the key it references, and schemas.
+    assert [
+        (r.schema, r.to_schema, r.to_column) for r in result.recorded if r.to_table
+    ] == [("main", "main", "id")]
+    kept = _stored(result.recorded)
     kept['["gone", "", "", ""]'] = _review(table="gone").as_dict()  # dropped since
     regenerated = _generator().graph
     assert reapply(regenerated, kept) == 2
@@ -140,10 +142,10 @@ def test_reviews_are_reapplied_by_element() -> None:
 
 
 def test_a_relationship_review_is_for_its_referenced_key() -> None:
-    marked, _ = mark(
+    marked = mark(
         _generator().graph,
         [_review(table="orders", column="customer_id", to_table="customers")],
-    )
+    ).recorded
     # customers keyed by legacy_id: customer_id is now guessed to reference
     # that -- another join, which nobody reviewed.
     rekeyed = OntologyGenerator(base_uri=BASE)
@@ -161,7 +163,7 @@ def test_a_relationship_review_is_for_its_referenced_key() -> None:
     assert reapply(graph, _stored(marked)) == 0
     assert not list(graph.subjects(OBA.reviewStatus, None))
     # Named with a key the column does not reference, nothing is marked.
-    assert mark(
+    wrong_key = mark(
         _generator().graph,
         [
             _review(
@@ -171,7 +173,9 @@ def test_a_relationship_review_is_for_its_referenced_key() -> None:
                 to_column="legacy_id",
             )
         ],
-    ) == ([], ["orders.customer_id -> customers.legacy_id"])
+    )
+    assert wrong_key.recorded == []
+    assert wrong_key.missing == ["orders.customer_id -> customers.legacy_id"]
     # A record without its key cannot say which join it is for.
     unkeyed = _review(table="orders", column="customer_id", to_table="customers")
     assert reapply(_generator().graph, _stored([unkeyed])) == 0
@@ -191,7 +195,7 @@ def test_a_reviewed_element_keeps_the_name_it_was_reviewed_with() -> None:
             ]
         }
     )
-    marked, _ = mark(generator.graph, [_review(table="customers", column="nm")])
+    marked = mark(generator.graph, [_review(table="customers", column="nm")]).recorded
     ((nm, kept),) = [
         (r.column, (r.name, r.semantic_name, r.description)) for r in marked
     ]
@@ -203,11 +207,168 @@ def test_a_reviewed_element_keeps_the_name_it_was_reviewed_with() -> None:
     assert str(regenerated.value(node, OBA.semanticName)) == "Customer Name"
     assert str(regenerated.value(node, RDFS.comment)) == "Full name"
     # A rejected element keeps no name: rejecting approves nothing.
-    rejected, _ = mark(
+    rejected = mark(
         _generator().graph,
         [_review(table="customers", column="nm", status=REJECTED)],
-    )
+    ).recorded
     assert [r.name for r in rejected] == [None]
+
+
+def _shop(referenced_schema: str) -> OntologyGenerator:
+    """SHOP, with orders.customer_id declared onto customers in a schema."""
+    orders = TableInfo(
+        "orders",
+        "main",
+        SHOP[1].columns,
+        ["id"],
+        [
+            {
+                "column": "customer_id",
+                "referenced_table": "customers",
+                "referenced_column": "id",
+                "referenced_schema": referenced_schema,
+            }
+        ],
+    )
+    generator = OntologyGenerator(base_uri=BASE)
+    generator.generate_from_schema([SHOP[0], orders])
+    return generator
+
+
+def test_a_relationship_review_is_for_its_referenced_schema() -> None:
+    rejected = mark(
+        _shop("main").graph,
+        [
+            _review(
+                table="orders",
+                column="customer_id",
+                to_table="customers",
+                status=REJECTED,
+            )
+        ],
+    ).recorded
+    assert [r.label() for r in rejected] == [
+        "main.orders.customer_id -> main.customers.id"
+    ]
+    # The key now references archive.customers: another join, unreviewed.
+    moved = _shop("archive")
+    assert reapply(moved.graph, _stored(rejected)) == 0
+    validator = OBQCValidator()
+    validator.load_ontology(moved.graph, BASE)
+    assert validator._schema_cache is not None
+    assert validator._schema_cache.relationships
+    assert not validator._schema_cache.refuted_links
+    # The schema chooses, when given.
+    assert (
+        mark(
+            _shop("main").graph,
+            [
+                _review(
+                    table="orders",
+                    column="customer_id",
+                    to_table="customers",
+                    to_schema="archive",
+                )
+            ],
+        ).recorded
+        == []
+    )
+
+
+def _shipments(order_id_onto: str, line_no_onto: str) -> OntologyGenerator:
+    """shipments' composite key onto order_lines, its columns paired as given."""
+    columns = ("order_id", "line_no")
+    generator = OntologyGenerator(base_uri=BASE)
+    generator.generate_from_schema(
+        [
+            TableInfo(
+                "order_lines",
+                "main",
+                [ColumnInfo(c, "INTEGER", False, True, False) for c in columns],
+                list(columns),
+                [],
+            ),
+            TableInfo(
+                "shipments",
+                "main",
+                [
+                    ColumnInfo(c, "INTEGER", False, c == "id", False)
+                    for c in ("id", *columns)
+                ],
+                ["id"],
+                [
+                    {
+                        "column": column,
+                        "referenced_table": "order_lines",
+                        "referenced_column": onto,
+                        "constraint_name": "fk_shipment_line",
+                    }
+                    for column, onto in zip(columns, (order_id_onto, line_no_onto))
+                ],
+            ),
+        ]
+    )
+    return generator
+
+
+def test_a_composite_key_is_reviewed_as_listed_and_by_its_pairs() -> None:
+    graph = _shipments("order_id", "line_no").graph
+    (listed,) = inventory(graph)["relationships"]
+    assert (listed["column"], listed["to_column"]) == (
+        "line_no,order_id",
+        "line_no,order_id",
+    )
+    # What the listing gives can be passed back.
+    identity = {
+        k: listed[k] for k in ("table", "column", "to_table", "to_column", "to_schema")
+    }
+    result = mark(graph, [_review(**identity, schema=listed["schema_name"])])
+    assert result.missing == []
+    assert inventory(graph)["counts"]["relationships"][REVIEWED] == 1
+    # Named by its columns alone, too -- in any order.
+    assert mark(
+        _shipments("order_id", "line_no").graph,
+        [_review(table="shipments", column="order_id,line_no", to_table="order_lines")],
+    ).recorded
+    # One of its columns names no relationship: the key is named whole.
+    assert not mark(
+        _shipments("order_id", "line_no").graph,
+        [_review(table="shipments", column="order_id", to_table="order_lines")],
+    ).recorded
+    # Its columns paired the other way round: another join, unreviewed.
+    swapped = _shipments("line_no", "order_id").graph
+    assert reapply(swapped, _stored(result.recorded)) == 0
+    assert not list(swapped.subjects(OBA.reviewStatus, None))
+    # Listed paired as the ontology pairs them.
+    (listed,) = inventory(swapped)["relationships"]
+    assert (listed["column"], listed["to_column"]) == (
+        "line_no,order_id",
+        "order_id,line_no",
+    )
+
+
+def test_a_request_naming_several_elements_marks_none() -> None:
+    graph = _generator().graph
+    duplicate = OntologyGenerator(base_uri="http://example.com/archive/")
+    duplicate.generate_from_schema(
+        [
+            TableInfo(
+                "customers",
+                "archive",
+                SHOP[0].columns,
+                ["id"],
+                [],
+            )
+        ]
+    )
+    graph += duplicate.graph  # main.customers and archive.customers
+    result = mark(graph, [_review(table="customers")])
+    assert result.recorded == []
+    assert result.ambiguous == [
+        {"item": "customers", "matches": ["archive.customers", "main.customers"]}
+    ]
+    chosen = mark(graph, [_review(table="customers", schema="archive")])
+    assert [r.label() for r in chosen.recorded] == ["archive.customers"]
 
 
 def test_the_inventory_lists_relationships_with_their_evidence() -> None:
@@ -215,9 +376,11 @@ def test_the_inventory_lists_relationships_with_their_evidence() -> None:
     listing = inventory(graph)
     (rel,) = listing["relationships"]
     assert rel == {
-        "relationship": "orders.customer_id -> customers.id",
+        "relationship": "main.orders.customer_id -> main.customers.id",
+        "schema_name": "main",
         "table": "orders",
         "column": "customer_id",
+        "to_schema": "main",
         "to_table": "customers",
         "to_column": "id",
         "source": "inferred (embedded_table_name)",
@@ -403,7 +566,7 @@ async def test_through_the_tools(shop_db: Path) -> None:
 
         listing = _data(await client.call_tool("review_ontology", on))
         assert listing["relationships"][0]["relationship"] == (
-            "orders.customer_id -> customers.id"
+            "main.orders.customer_id -> main.customers.id"
         )
         marked = _data(
             await client.call_tool(
@@ -426,6 +589,7 @@ async def test_through_the_tools(shop_db: Path) -> None:
         )
         assert [m["kind"] for m in marked["marked"]] == ["relationship", "table"]
         assert marked["not_found"] == ["nowhere"]
+        assert marked["ambiguous"] == []
         assert marked["counts"]["relationships"]["reviewed"] == 1
 
         blocked = await run(fan_trap)

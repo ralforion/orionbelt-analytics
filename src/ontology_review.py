@@ -14,9 +14,10 @@ What it changes:
 - ``suggest_semantic_names`` leaves reviewed tables, columns and
   relationships alone, and ``apply_semantic_names`` does not rename them.
 - Reviews are kept in the workspace and applied again to every regenerated
-  ontology, each to the element it was given for: a relationship is its key
-  column *and* the key it references, so the same column guessed to reference
-  another key is another, unreviewed join. A reviewed element keeps the name
+  ontology, each to the element it was given for: a relationship is its
+  schema-qualified tables and each (key column, referenced column) pair, so
+  the same column guessed onto another key, a key moved to another schema or
+  a composite key paired differently is another, unreviewed join. A reviewed element keeps the name
   and description it had when reviewed -- one a person approved through
   ``apply_semantic_names`` comes back with it.
 
@@ -35,6 +36,7 @@ from rdflib import Graph, Literal, Namespace, URIRef
 from rdflib.namespace import OWL, RDF, RDFS, XSD
 
 from .constants import OBA_NAMESPACE
+from .relationship_validation import column_pairs
 
 OBA = Namespace(OBA_NAMESPACE)
 
@@ -51,12 +53,30 @@ REVIEW_PROPERTIES = (
 )
 
 
+def _split(names: str | None) -> list[str]:
+    """Comma-separated column names as a list."""
+    return [n.strip() for n in (names or "").split(",") if n.strip()]
+
+
+def _qualified(schema: str | None, table: str) -> str:
+    return f"{schema}.{table}" if schema else table
+
+
+def _columns(table: str, names: str | None) -> str:
+    columns = _split(names)
+    return (
+        f"{table}.{columns[0]}"
+        if len(columns) == 1
+        else (f"{table}.({','.join(columns)})")
+    )
+
+
 @dataclass(frozen=True)
 class Review:
     """A person's verdict on one table, column or relationship."""
 
     table: str
-    #: The column; with *to_table*, the key column of a relationship.
+    #: The column; for a relationship its key column(s), comma-separated.
     column: str | None
     #: The table a relationship references; None for a table or a column.
     to_table: str | None
@@ -64,10 +84,15 @@ class Review:
     note: str | None = None
     reviewer: str | None = None
     at: str = ""
-    #: The column(s) a relationship references, comma-separated: part of its
-    #: identity -- customer_id onto customers.legacy_id is another join than
-    #: onto customers.id. Optional in a request, always set once recorded.
+    #: The column(s) a relationship references, comma-separated in the order
+    #: of *column*: the pairs are its identity -- customer_id onto
+    #: customers.legacy_id is another join than onto customers.id. Optional
+    #: in a request, always set once recorded.
     to_column: str | None = None
+    #: The table's schema, and the referenced table's: optional in a
+    #: request, set once recorded where the ontology names them.
+    schema: str | None = None
+    to_schema: str | None = None
     #: The label, semantic name and description the element had when
     #: reviewed: a reviewed element keeps them, also when regenerated.
     name: str | None = None
@@ -81,25 +106,35 @@ class Review:
         return "column" if self.column else "table"
 
     def key(self) -> str:
-        """Identity of the element, independent of name case."""
+        """Identity of the element, independent of name case and pair order."""
+        schema = (self.schema or "").lower()
+        if not self.to_table:
+            return json.dumps([schema, self.table.lower(), (self.column or "").lower()])
+        columns = [c.lower() for c in _split(self.column)]
+        refs = [r.lower() for r in _split(self.to_column)]
+        pairs = (
+            sorted(f"{c}={r}" for c, r in zip(columns, refs))
+            if len(columns) == len(refs)
+            else [*sorted(columns), "->", *sorted(refs)]
+        )
         return json.dumps(
             [
+                schema,
                 self.table.lower(),
-                (self.column or "").lower(),
-                (self.to_table or "").lower(),
-                (self.to_column or "").lower(),
+                pairs,
+                (self.to_schema or "").lower(),
+                self.to_table.lower(),
             ]
         )
 
     def label(self) -> str:
+        source = _qualified(self.schema, self.table)
         if self.to_table:
-            target = (
-                f"{self.to_table}.{self.to_column}"
-                if self.to_column
-                else (self.to_table)
-            )
-            return f"{self.table}.{self.column} -> {target}"
-        return f"{self.table}.{self.column}" if self.column else self.table
+            target = _qualified(self.to_schema, self.to_table)
+            if self.to_column:
+                target = _columns(target, self.to_column)
+            return f"{_columns(source, self.column)} -> {target}"
+        return f"{source}.{self.column}" if self.column else source
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -110,15 +145,28 @@ def _literal(graph: Graph, subject: Any, predicate: URIRef) -> str | None:
     return str(value) if value is not None else None
 
 
+def _same(given: str | None, found: str | None) -> bool:
+    """Whether *found* is the name *given*, case aside; any when not given."""
+    return given is None or (found or "").lower() == given.lower()
+
+
 @dataclass(frozen=True)
 class _Relationship:
     node: URIRef
+    schema: str | None
     table: str
-    columns: tuple[str, ...]
+    to_schema: str | None
     to_table: str
-    #: The referenced column(s), comma-separated in a stable order.
-    to_column: str
+    #: Key columns and the columns they reference, in the same order -- by
+    #: key column when the ontology pairs them, else each sorted.
+    columns: tuple[str, ...]
+    to_columns: tuple[str, ...]
+    #: Whether the ontology says which key column references which.
+    paired: bool
     inferred: bool
+
+    def pairs(self) -> set[tuple[str, str]]:
+        return {(c.lower(), r.lower()) for c, r in zip(self.columns, self.to_columns)}
 
 
 @dataclass
@@ -129,8 +177,10 @@ class Index:
     scanning the graph per review.
     """
 
-    tables: dict[str, list[URIRef]] = field(default_factory=dict)
-    columns: dict[tuple[str, str], list[URIRef]] = field(default_factory=dict)
+    tables: dict[str, list[tuple[str | None, URIRef]]] = field(default_factory=dict)
+    columns: dict[tuple[str, str], list[tuple[str | None, URIRef]]] = field(
+        default_factory=dict
+    )
     relationships: list[_Relationship] = field(default_factory=list)
     by_key_column: dict[tuple[str, str], list[_Relationship]] = field(
         default_factory=dict
@@ -139,17 +189,23 @@ class Index:
 
 def index(graph: Graph) -> Index:
     """Index *graph*'s elements by table, column and key column."""
-    tables: dict[str, list[URIRef]] = defaultdict(list)
+    tables: dict[str, list[tuple[str | None, URIRef]]] = defaultdict(list)
     for cls in set(graph.subjects(RDF.type, OWL.Class)):
         name = _literal(graph, cls, OBA.tableName)
         if name:
-            tables[name.lower()].append(URIRef(str(cls)))
-    columns: dict[tuple[str, str], list[URIRef]] = defaultdict(list)
+            tables[name.lower()].append(
+                (_literal(graph, cls, OBA.schemaName), URIRef(str(cls)))
+            )
+    columns: dict[tuple[str, str], list[tuple[str | None, URIRef]]] = defaultdict(list)
     for prop in set(graph.subjects(RDF.type, OWL.DatatypeProperty)):
         table = _literal(graph, prop, OBA.tableName)
         column = _literal(graph, prop, OBA.columnName)
         if table and column:
-            columns[(table.lower(), column.lower())].append(URIRef(str(prop)))
+            domain = graph.value(prop, RDFS.domain)
+            schema = _literal(graph, prop, OBA.schemaName) or (
+                _literal(graph, domain, OBA.schemaName) if domain else None
+            )
+            columns[(table.lower(), column.lower())].append((schema, URIRef(str(prop))))
     relationships: list[_Relationship] = []
     by_key_column: dict[tuple[str, str], list[_Relationship]] = defaultdict(list)
     for prop in set(graph.subjects(RDF.type, OWL.ObjectProperty)):
@@ -161,50 +217,114 @@ def index(graph: Graph) -> Index:
         table = _literal(graph, domain, OBA.tableName) if domain else None
         if not (to_table and key_columns and table):
             continue
-        referenced = sorted(
-            {str(c) for c in graph.objects(prop, OBA.referencedColumn)}, key=str.lower
+        schema = _literal(graph, domain, OBA.schemaName)
+        # Where the target lives, as find_relationships reads it: the
+        # relationship's own statement first.
+        range_class = graph.value(prop, RDFS.range)
+        to_schema = (
+            _literal(graph, prop, OBA.referencedSchema)
+            or (_literal(graph, range_class, OBA.schemaName) if range_class else None)
+            or schema
         )
+        pairs = column_pairs(graph, prop, table)
+        if pairs:
+            fk_columns = tuple(c for c, _ in pairs)
+            ref_columns = tuple(r for _, r in pairs)
+        else:
+            fk_columns = tuple(key_columns)
+            ref_columns = tuple(
+                sorted(
+                    {str(c) for c in graph.objects(prop, OBA.referencedColumn)},
+                    key=str.lower,
+                )
+            )
         rel = _Relationship(
             node=URIRef(str(prop)),
+            schema=schema,
             table=table,
-            columns=tuple(key_columns),
+            to_schema=to_schema,
             to_table=to_table,
-            to_column=",".join(referenced) or "id",
+            columns=fk_columns,
+            to_columns=ref_columns,
+            paired=bool(pairs),
             inferred=(_literal(graph, prop, OBA.isInferredRelationship) or "").lower()
             == "true",
         )
         relationships.append(rel)
-        for column in key_columns:
-            by_key_column[(table.lower(), column.lower())].append(rel)
+        for column in {c.lower() for c in key_columns}:
+            by_key_column[(table.lower(), column)].append(rel)
     return Index(dict(tables), dict(columns), relationships, dict(by_key_column))
 
 
 def _matches(review: Review, idx: Index) -> list[_Relationship]:
-    """The relationships *review* names: key column, table and, if given, key."""
-    if not (review.column and review.to_table):
+    """The relationships *review* names.
+
+    All of its key columns (a composite key is named whole), the referenced
+    table, and -- where given -- the schemas and the columns referenced, as
+    pairs in the order of the key columns.
+    """
+    columns = _split(review.column)
+    if not (columns and review.to_table):
         return []
+    wanted = {c.lower() for c in columns}
+    refs = _split(review.to_column)
+    found = []
+    for rel in idx.by_key_column.get((review.table.lower(), columns[0].lower()), []):
+        if not (
+            rel.to_table.lower() == review.to_table.lower()
+            and {c.lower() for c in rel.columns} == wanted
+            and _same(review.schema, rel.schema)
+            and _same(review.to_schema, rel.to_schema)
+        ):
+            continue
+        if review.to_column is not None:
+            if rel.paired:
+                if (
+                    len(refs) != len(columns)
+                    or {(c.lower(), r.lower()) for c, r in zip(columns, refs)}
+                    != rel.pairs()
+                ):
+                    continue
+            elif {r.lower() for r in refs} != {r.lower() for r in rel.to_columns}:
+                continue
+        found.append(rel)
+    return found
+
+
+def _resolved(review: Review, idx: Index) -> list[tuple[URIRef, Review]]:
+    """The elements *review* names, each with *review* at its full identity."""
+    if review.to_table:
+        return [
+            (
+                rel.node,
+                replace(
+                    review,
+                    schema=rel.schema,
+                    table=rel.table,
+                    column=",".join(rel.columns),
+                    to_schema=rel.to_schema,
+                    to_table=rel.to_table,
+                    to_column=",".join(rel.to_columns),
+                ),
+            )
+            for rel in _matches(review, idx)
+        ]
+    table = review.table.lower()
+    found = (
+        idx.columns.get((table, review.column.lower()), [])
+        if review.column
+        else idx.tables.get(table, [])
+    )
     return [
-        rel
-        for rel in idx.by_key_column.get(
-            (review.table.lower(), review.column.lower()), []
-        )
-        if rel.to_table.lower() == review.to_table.lower()
-        and (
-            review.to_column is None
-            or rel.to_column.lower() == review.to_column.lower()
-        )
+        (node, replace(review, schema=schema))
+        for schema, node in found
+        if _same(review.schema, schema)
     ]
 
 
 def elements(graph: Graph, review: Review, idx: Index | None = None) -> list[URIRef]:
     """The nodes *review* is about: a table's class, a column, or a relationship."""
-    idx = idx or index(graph)
-    if review.to_table:
-        return [rel.node for rel in _matches(review, idx)]
-    table = review.table.lower()
-    if review.column:
-        return list(idx.columns.get((table, review.column.lower()), []))
-    return list(idx.tables.get(table, []))
+    return [node for node, _ in _resolved(review, idx or index(graph))]
 
 
 def _set(graph: Graph, node: URIRef, predicate: URIRef, value: str | None) -> None:
@@ -246,58 +366,62 @@ def record(graph: Graph, review: Review, idx: Index | None = None) -> int:
     return len(nodes)
 
 
-def _resolved(graph: Graph, request: Review, idx: Index) -> list[Review]:
-    """*request* as one review per element, each with its full identity.
+@dataclass
+class Marked:
+    """What a batch of review requests did."""
 
-    A relationship's referenced key is filled in from the ontology, and a
-    reviewed element's current name and description are kept with it.
-    """
-    if request.to_table:
-        targets = [
-            (rel.node, replace(request, to_column=rel.to_column))
-            for rel in _matches(request, idx)
-        ]
-    else:
-        targets = [(node, request) for node in elements(graph, request, idx)]
-    if request.status != REVIEWED:
-        return [review for _, review in targets]
-    return [
-        replace(
-            review,
-            name=_literal(graph, node, RDFS.label),
-            semantic_name=_literal(graph, node, OBA.semanticName),
-            description=_literal(graph, node, RDFS.comment),
-        )
-        for node, review in targets
-    ]
+    #: One review per element marked, at its full identity.
+    recorded: list[Review]
+    #: Requests naming nothing in the ontology.
+    missing: list[str]
+    #: Requests naming several elements, with them: nothing was marked; name
+    #: the schema, or the referenced columns, to choose.
+    ambiguous: list[dict[str, Any]]
 
 
-def mark(graph: Graph, requests: list[Review]) -> tuple[list[Review], list[str]]:
-    """Record each of *requests* in *graph*. CPU-bound; call it off the loop.
-
-    Returns:
-        The reviews recorded, one per element with its full identity, and
-        the requests naming nothing in the ontology.
-    """
+def mark(graph: Graph, requests: list[Review]) -> Marked:
+    """Record each of *requests* in *graph*. CPU-bound; call it off the loop."""
     idx = index(graph)
     recorded: dict[str, Review] = {}
     missing: list[str] = []
+    ambiguous: list[dict[str, Any]] = []
     for request in requests:
-        reviews = _resolved(graph, request, idx)
-        if not reviews:
+        targets = _resolved(request, idx)
+        if not targets:
             missing.append(request.label())
             continue
-        for review in reviews:
-            record(graph, review, idx)
-            recorded[review.key()] = review
-    return list(recorded.values()), missing
+        by_identity: dict[str, Review] = {}
+        for _, review in targets:
+            by_identity.setdefault(review.key(), review)
+        if len(by_identity) > 1:
+            ambiguous.append(
+                {
+                    "item": request.label(),
+                    "matches": sorted(r.label() for r in by_identity.values()),
+                }
+            )
+            continue
+        nodes = [node for node, _ in targets]
+        (review,) = by_identity.values()
+        if review.status == REVIEWED:
+            node = nodes[0]
+            review = replace(
+                review,
+                name=_literal(graph, node, RDFS.label),
+                semantic_name=_literal(graph, node, OBA.semanticName),
+                description=_literal(graph, node, RDFS.comment),
+            )
+        record(graph, review, idx)
+        recorded[review.key()] = review
+    return Marked(list(recorded.values()), missing, ambiguous)
 
 
 def reapply(graph: Graph, recorded: dict[str, dict[str, Any]]) -> int:
     """Apply the reviews kept in the workspace to a regenerated ontology.
 
     Each goes to the element with the identity it was recorded for: a
-    relationship review only to the same key column onto the same key.
+    relationship review only to the same pairs of columns between the same
+    schema-qualified tables.
 
     Returns:
         How many reviews found their element.
@@ -328,20 +452,31 @@ def inventory(graph: Graph) -> dict[str, Any]:
     """What a reviewer has to look at: each relationship, and the counts.
 
     Relationships first, since their review changes what OBQC blocks: each
-    with where it comes from -- declared, or inferred and how -- the latest
-    check on the data, and its review status.
+    with its identity -- the fields review_ontology takes back -- where it
+    comes from (declared, or inferred and how), the latest check on the data,
+    and its review status.
     """
     idx = index(graph)
     relationships = []
     for rel in idx.relationships:
-        column = ",".join(rel.columns)
+        identity = Review(
+            table=rel.table,
+            column=",".join(rel.columns),
+            to_table=rel.to_table,
+            status=DRAFT,
+            to_column=",".join(rel.to_columns),
+            schema=rel.schema,
+            to_schema=rel.to_schema,
+        )
         relationships.append(
             {
-                "relationship": f"{rel.table}.{column} -> {rel.to_table}.{rel.to_column}",
+                "relationship": identity.label(),
+                "schema_name": rel.schema,
                 "table": rel.table,
-                "column": column,
+                "column": identity.column,
+                "to_schema": rel.to_schema,
                 "to_table": rel.to_table,
-                "to_column": rel.to_column,
+                "to_column": identity.to_column,
                 "source": (
                     "inferred ("
                     f"{_literal(graph, rel.node, OBA.inferencePattern) or 'names'})"
@@ -355,8 +490,8 @@ def inventory(graph: Graph) -> dict[str, Any]:
     relationships.sort(key=lambda r: (r["review"] != DRAFT, r["relationship"]))
     counts: dict[str, dict[str, int]] = {}
     for kind, nodes in (
-        ("tables", [n for ns in idx.tables.values() for n in ns]),
-        ("columns", [n for ns in idx.columns.values() for n in ns]),
+        ("tables", [n for ns in idx.tables.values() for _, n in ns]),
+        ("columns", [n for ns in idx.columns.values() for _, n in ns]),
         ("relationships", [rel.node for rel in idx.relationships]),
     ):
         tally = {REVIEWED: 0, REJECTED: 0, DRAFT: 0}

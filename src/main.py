@@ -744,8 +744,10 @@ async def review_ontology(
     Generated ontologies are drafts. When the user has checked an element,
     record it: status 'reviewed' (checked and kept) or 'rejected' (wrong),
     or 'draft' to take a review back. A table is {table}; a column
-    {table, column}; a relationship {table, column, to_table}, plus
-    to_column when the column references that table by more than one key.
+    {table, column}; a relationship {table, column, to_table}. A composite
+    key names all its columns comma-separated, with to_column in the same
+    order. to_column, schema_name and to_schema choose when several elements
+    match; an item that still matches several is reported, not marked.
 
     What it changes: execute_sql_query treats a reviewed relationship as a
     firm key -- a fan-trap across it blocks -- and a rejected one as no
@@ -753,11 +755,13 @@ async def review_ontology(
     leave reviewed elements' names alone: a reviewed element keeps the name
     and description it was reviewed with. Reviews are saved in the ontology
     (oba:reviewStatus, a new version) and kept when it is regenerated -- a
-    relationship's only while it references the same key.
+    relationship's only while it joins the same columns between the same
+    schema-qualified tables.
 
     Call it without items to see what there is to review: every relationship
-    with where it comes from (declared, or inferred and how), its latest
-    check on the data and its review status, and the counts.
+    with its identity (the fields to pass back as an item), where it comes
+    from (declared, or inferred and how), its latest check on the data and
+    its review status, and the counts.
 
     Args:
         items: The elements and their status, e.g.

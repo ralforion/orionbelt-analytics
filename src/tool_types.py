@@ -39,17 +39,29 @@ class ReviewItem(BaseModel):
     table: _Identifier = Field(description="The table, e.g. 'orders'")
     column: _Identifier | None = Field(
         default=None,
-        description="A column of it; with to_table, the key of a relationship",
+        description=(
+            "A column of it; with to_table, the key column(s) of a "
+            "relationship, comma-separated"
+        ),
     )
     to_table: _Identifier | None = Field(
         default=None,
         description="For a relationship: the table the column references",
     )
+    schema_name: _Identifier | None = Field(
+        default=None,
+        description="The table's schema, when several schemas have the table",
+    )
+    to_schema: _Identifier | None = Field(
+        default=None,
+        description="For a relationship: the referenced table's schema",
+    )
     to_column: _Identifier | None = Field(
         default=None,
         description=(
-            "For a relationship: the referenced column, when the column "
-            "references the table by more than one key"
+            "For a relationship: the referenced column(s), comma-separated "
+            "in the order of column -- a composite key names all of its "
+            "columns in both, as review_ontology lists them"
         ),
     )
     status: Literal["reviewed", "rejected", "draft"] = Field(

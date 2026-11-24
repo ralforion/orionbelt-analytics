@@ -1115,13 +1115,15 @@ async def review_ontology(
         column = str(item.get("column") or "").strip() or None
         to_table = str(item.get("to_table") or "").strip() or None
         to_column = str(item.get("to_column") or "").strip() or None
+        schema = str(item.get("schema_name") or "").strip() or None
+        to_schema = str(item.get("to_schema") or "").strip() or None
         status = str(item.get("status") or REVIEWED).strip().lower()
         note = str(item.get("note") or "").strip() or None
         if (
             not table
             or status not in REVIEW_STATUSES
             or (to_table and not column)
-            or (to_column and not to_table)
+            or ((to_column or to_schema) and not to_table)
         ):
             invalid.append(json.dumps(item, default=str)[:200])
             continue
@@ -1131,6 +1133,8 @@ async def review_ontology(
                 column=column,
                 to_table=to_table,
                 to_column=to_column,
+                schema=schema,
+                to_schema=to_schema,
                 status=status,
                 note=note,
                 reviewer=(reviewer or "").strip() or None,
@@ -1139,15 +1143,28 @@ async def review_ontology(
         )
     # One pass over the graph for the whole batch, off the event loop: a
     # few hundred items on a large ontology must not stall other sessions.
-    applied, missing = await asyncio.to_thread(mark_reviews, graph, requests)
+    marked = await asyncio.to_thread(mark_reviews, graph, requests)
+    applied, missing, ambiguous = marked.recorded, marked.missing, marked.ambiguous
     if not applied:
         err = services.create_error_response(
             "Nothing was marked: "
             + (f"not in the ontology: {', '.join(missing[:10])}. " if missing else "")
+            + (
+                "several elements match "
+                + "; ".join(a["item"] for a in ambiguous[:5])
+                + " -- name the schema or the referenced columns to choose. "
+                if ambiguous
+                else ""
+            )
             + (f"invalid: {'; '.join(invalid[:5])}." if invalid else ""),
-            "element_not_found" if missing else "parameter_error",
+            (
+                "ambiguous_element"
+                if ambiguous
+                else "element_not_found" if missing else "parameter_error"
+            ),
         )
         err["not_found"] = missing
+        err["ambiguous"] = ambiguous
         err["invalid"] = invalid
         return err
 
@@ -1170,6 +1187,7 @@ async def review_ontology(
             {"element": r.label(), "kind": r.kind, "status": r.status} for r in applied
         ],
         "not_found": missing,
+        "ambiguous": ambiguous,
         "invalid": invalid,
         "counts": counts,
         "ontology_file": saved["filename"],
