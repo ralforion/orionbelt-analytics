@@ -340,6 +340,35 @@ Even with automatic detection, verify your results:
 
 ---
 
+## Benchmark
+
+`scripts/bench_fan_traps.py` measures how often OBQC stops a query that returns a wrong number. Its 29 cases (`benchmarks/fan_traps/cases.toml`) are questions over a small shop and school schema, each with a candidate query and a "truth" query that answers it correctly. Every candidate runs and names only real tables and columns. Whether it is wrong is not decided by hand: the benchmark runs both queries on the same data and calls the candidate wrong when its numbers differ -- 12 do, off by 9% to 300%. It then asks OBQC what it makes of each candidate, with the keys learned three ways:
+
+| Check | Wrong answers blocked | warned | let through | Right answers let through | warned | blocked |
+|---|---|---|---|---|---|---|
+| Names only (no ontology) | 0 | 0 | 12 | 17 | 0 | 0 |
+| OBQC, keys declared by the database | 10 | 0 | 2 | 16 | 0 | 1 |
+| OBQC, keys inferred from names | 0 | 10 | 2 | 16 | 1 | 0 |
+| OBQC, inferred keys checked on the data | 10 | 0 | 2 | 16 | 0 | 1 |
+
+- **Names only** is what a SQL check without an ontology can do: every table and column exists, so every wrong total passes.
+- **Inferred** keys are only guesses, so a fan-trap resting on one is a warning the model sees, not a refusal. Checked on the data (`validate_relationship`, or `AUTO_VALIDATE_RELATIONSHIPS=true`), all eight are confirmed and count like declared keys.
+
+What OBQC misses, and the one right answer it refuses:
+
+- `SUM(DISTINCT o.total)` across order items (9% off). A DISTINCT aggregate is immune to repeated rows, so OBQC lets it through -- but it also drops a second order of the same value.
+- `COUNT(*)` of orders per customer through their items (200% off): it counts items. OBQC leaves `COUNT(*)` alone, since counting joined rows is usually what it is for; `COUNT(o.id)` in the same query is blocked.
+- Order value and shipping cost per customer, through shipments: blocked, though right on this data, which has one shipment per order. The schema allows several, and the first order shipped in two parcels would double its value. OBQC judges the keys, not today's rows.
+
+```bash
+uv run python scripts/bench_fan_traps.py               # summary and every case
+uv run python scripts/bench_fan_traps.py --json out.json
+```
+
+It builds its own DuckDB files from seeded data in a temporary directory and needs no database; `tests/test_fan_trap_benchmark.py` pins the numbers above. The cases were written for this benchmark by the people who wrote OBQC, so read them as a floor for what it should catch, not as a sample of real queries -- additions are welcome, above all ones it gets wrong.
+
+---
+
 ## Quick Reference
 
 | Scenario | Risk Level | Recommended Pattern |
