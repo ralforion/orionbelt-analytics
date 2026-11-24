@@ -283,14 +283,16 @@ async def generate_with_joins(
         if db_manager is not None
         else None
     )
-    extra = as_inferred(found) + await asyncio.to_thread(
-        confirmed_joins, connection_id, schema_name
-    )
+    extra = as_inferred(found)
+    confirmed = await asyncio.to_thread(confirmed_joins, connection_id, schema_name)
     generate = partial(
         generator.generate_from_schema, tables_info, views_info=views_info
     )
     if extra:
         generate = partial(generate, extra_relationships=extra)
+    if confirmed:
+        # What a client confirmed outranks a guess from names.
+        generate = partial(generate, confirmed_relationships=confirmed)
     # rdflib work is CPU-bound (~876 ms per 2.65 MB of Turtle); off the loop
     # so it does not freeze every concurrent session.
     ontology_ttl = await asyncio.to_thread(generate)

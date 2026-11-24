@@ -516,6 +516,7 @@ class OntologyGenerator:
         annotate_denormalized: bool = True,
         views_info: list[Any] | None = None,
         extra_relationships: Sequence[InferredRelationship] = (),
+        confirmed_relationships: Sequence[InferredRelationship] = (),
     ) -> str:
         """Generate an ontology from a list of table information with quality enhancements.
 
@@ -531,6 +532,10 @@ class OntologyGenerator:
             extra_relationships: Relationships inferred elsewhere, such as in
                 the data (src/join_discovery.py), added beside the ones names
                 suggest -- never over a column those or a declared key link.
+            confirmed_relationships: Joins a client confirmed on all rows
+                (``confirm_join``). They replace the guess names make for the
+                same column -- buyer_id holding products' ids, beside a
+                buyers table -- and yield only to a declared key.
 
         Returns:
             Serialized ontology in Turtle format
@@ -561,12 +566,24 @@ class OntologyGenerator:
             else []
         )
         if include_inferred_relationships:
-            keyed = {(r.source_table.lower(), r.column.lower()) for r in inferred}
-            keyed |= {
+            declared = {
                 (t.name.lower(), fk["column"].lower())
                 for t in tables_info
                 for fk in t.foreign_keys or []
             }
+            # What the client confirmed on all rows outranks a guess from names.
+            confirmed: dict[tuple[str, str], InferredRelationship] = {}
+            for rel in confirmed_relationships:
+                key = (rel.source_table.lower(), rel.column.lower())
+                if key not in declared:
+                    confirmed.setdefault(key, rel)
+            inferred = [
+                rel
+                for rel in inferred
+                if (rel.source_table.lower(), rel.column.lower()) not in confirmed
+            ] + list(confirmed.values())
+            keyed = {(r.source_table.lower(), r.column.lower()) for r in inferred}
+            keyed |= declared
             inferred += [
                 rel
                 for rel in extra_relationships

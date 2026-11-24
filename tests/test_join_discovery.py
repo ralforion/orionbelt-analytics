@@ -446,6 +446,45 @@ def test_the_ontology_records_a_found_join_as_inferred() -> None:
     assert patterns["customer_id"][1] == "customers"
 
 
+def test_a_confirmed_join_yields_only_to_a_declared_key() -> None:
+    orders = _table(
+        "orders",
+        {"id": "INTEGER", "buyer_id": "INTEGER", "store_id": "INTEGER"},
+        fks=[
+            {
+                "column": "store_id",
+                "referenced_table": "stores",
+                "referenced_column": "id",
+            }
+        ],
+    )
+    tables = [
+        orders,
+        _table("buyers", {"id": "INTEGER"}),
+        _table("products", {"id": "INTEGER"}),
+        _table("stores", {"id": "INTEGER"}),
+    ]
+    confirmed = [
+        InferredRelationship(
+            "orders", "buyer_id", "products", "id", "high", CONFIRMED_PATTERN
+        ),
+        InferredRelationship(
+            "orders", "store_id", "products", "id", "high", CONFIRMED_PATTERN
+        ),
+    ]
+    generator = OntologyGenerator(base_uri="http://example.com/ontology/")
+    generator.generate_from_schema(tables, confirmed_relationships=confirmed)
+    graph = generator.graph
+    targets: dict[str, set[str]] = {}
+    for prop, column in graph.subject_objects(generator.oba_ns.foreignKeyColumn):
+        target = graph.value(prop, generator.oba_ns.referencedTable)
+        targets.setdefault(str(column), set()).add(str(target))
+    # Names guess buyers for buyer_id; the confirmed products replaces it.
+    assert targets["buyer_id"] == {"products"}
+    # The database declares store_id: that stays.
+    assert targets["store_id"] == {"stores"}
+
+
 def test_two_inferred_keys_to_one_table_are_two_relationships() -> None:
     # The second was dropped: both were named orders_has_customers.
     orders = _table(
@@ -764,3 +803,76 @@ async def test_confirm_join_keeps_an_uploads_own_classes(
         and r.to_table == "suppliers"
         for r in validator._schema_cache.relationships.values()
     )
+
+
+@pytest.fixture
+def buyers_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """orders.buyer_id names buyers, but holds products' ids."""
+    import duckdb
+
+    path = tmp_path / "buyers.duckdb"
+    con = duckdb.connect(str(path))
+    con.execute("""
+        CREATE TABLE products (id INTEGER PRIMARY KEY, label VARCHAR);
+        INSERT INTO products SELECT i, 'p' FROM range(100, 400) t(i);
+        CREATE TABLE buyers (id INTEGER PRIMARY KEY, name VARCHAR);
+        INSERT INTO buyers SELECT i, 'b' FROM range(1, 51) t(i);
+        CREATE TABLE orders (id INTEGER PRIMARY KEY, buyer_id INTEGER);
+        INSERT INTO orders SELECT i, 100 + (i % 250) FROM range(1, 501) t(i);
+        """)
+    con.close()
+    fresh = ServerState()
+    monkeypatch.setattr(state_module, "_server_state", fresh)
+    monkeypatch.setattr(main_module, "_server_state", fresh)
+    for module in ("src.paths", "src.handlers.ontology_validation"):
+        monkeypatch.setattr(f"{module}.OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(connection_handler, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(connection_handler, "detect_workspace", lambda _cid: None)
+    monkeypatch.setenv("AUTO_GRAPHRAG", "false")
+    monkeypatch.delenv("OBA_DATABASES", raising=False)
+    monkeypatch.delenv("MOTHERDUCK_TOKEN", raising=False)
+    monkeypatch.delenv(DISCOVER_VARIABLE, raising=False)
+    monkeypatch.setenv("DUCKDB_DATABASE_PATH", str(path))
+    yield path
+    fresh.cleanup()
+
+
+async def test_a_confirmed_join_outranks_a_guess_from_names(buyers_db: Path) -> None:
+    from rdflib import Graph
+
+    _, tables = _manager(buyers_db)
+    # An upload without relationships, so confirm_join may link buyer_id.
+    bare = OntologyGenerator(base_uri="http://example.com/ontology/")
+    ttl = bare.generate_from_schema(tables, include_inferred_relationships=False)
+    async with Client(mcp) as client:
+        on = await _connect(client)
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool("load_my_ontology", {**on, "ontology_content": ttl})
+        linked = _data(
+            await client.call_tool(
+                "confirm_join",
+                {
+                    **on,
+                    "table": "orders",
+                    "column": "buyer_id",
+                    "target_table": "products",
+                },
+            )
+        )
+        assert linked["linked"] is True, linked
+        # Regenerated: names would guess buyers; the confirmed products stays.
+        await client.call_tool("reset_cache", {**on, "cache_type": "all"})
+        await client.call_tool("discover_schema", {**on, "schema_name": "main"})
+        await client.call_tool("generate_ontology", {**on, "schema_name": "main"})
+    folder = buyers_db.parent
+    graph = Graph().parse(data=_ontologies(folder)[-1], format="turtle")
+    oba = OntologyGenerator().oba_ns
+    targets = {
+        str(graph.value(prop, oba.referencedTable)): (
+            str(graph.value(prop, oba.inferencePattern)),
+            str(graph.value(prop, oba.validationStatus)),
+        )
+        for prop, column in graph.subject_objects(oba.foreignKeyColumn)
+        if str(column) == "buyer_id"
+    }
+    assert targets == {"products": (CONFIRMED_PATTERN, "confirmed")}
