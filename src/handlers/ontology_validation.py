@@ -25,8 +25,8 @@ from ..ontology_review import DRAFT, REVIEWED
 from ..ontology_review import STATUSES as REVIEW_STATUSES
 from ..ontology_review import Review
 from ..ontology_review import inventory as review_inventory
+from ..ontology_review import mark as mark_reviews
 from ..ontology_review import reapply as reapply_review_records
-from ..ontology_review import record as record_review
 from ..oxigraph_store import OXIGRAPH_AVAILABLE, schema_graph_uri
 from ..paths import OUTPUT_DIR, ensure_output_dir, get_connection_dir
 from ..relationship_validation import (
@@ -1108,31 +1108,38 @@ async def review_ontology(
         return {"success": True, **listing}
 
     at = utc_now().isoformat()
-    applied: list[Review] = []
-    missing: list[str] = []
+    requests: list[Review] = []
     invalid: list[str] = []
     for item in items:
         table = str(item.get("table") or "").strip()
         column = str(item.get("column") or "").strip() or None
         to_table = str(item.get("to_table") or "").strip() or None
+        to_column = str(item.get("to_column") or "").strip() or None
         status = str(item.get("status") or REVIEWED).strip().lower()
         note = str(item.get("note") or "").strip() or None
-        if not table or status not in REVIEW_STATUSES or (to_table and not column):
+        if (
+            not table
+            or status not in REVIEW_STATUSES
+            or (to_table and not column)
+            or (to_column and not to_table)
+        ):
             invalid.append(json.dumps(item, default=str)[:200])
             continue
-        review = Review(
-            table=table,
-            column=column,
-            to_table=to_table,
-            status=status,
-            note=note,
-            reviewer=(reviewer or "").strip() or None,
-            at="" if status == DRAFT else at,
+        requests.append(
+            Review(
+                table=table,
+                column=column,
+                to_table=to_table,
+                to_column=to_column,
+                status=status,
+                note=note,
+                reviewer=(reviewer or "").strip() or None,
+                at="" if status == DRAFT else at,
+            )
         )
-        if record_review(graph, review):
-            applied.append(review)
-        else:
-            missing.append(review.label())
+    # One pass over the graph for the whole batch, off the event loop: a
+    # few hundred items on a large ontology must not stall other sessions.
+    applied, missing = await asyncio.to_thread(mark_reviews, graph, requests)
     if not applied:
         err = services.create_error_response(
             "Nothing was marked: "

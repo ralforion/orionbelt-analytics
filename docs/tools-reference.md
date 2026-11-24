@@ -475,15 +475,16 @@ Record what a person checked. A generated ontology is a draft: its tables, colum
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `items` | list | No | Each `{table, column?, to_table?, status?, note?}`: a table is `{table}`, a column `{table, column}`, a relationship `{table, column, to_table}`. `status` is `reviewed` (default), `rejected` or `draft`. Up to 500 |
+| `items` | list | No | Each `{table, column?, to_table?, to_column?, status?, note?}`: a table is `{table}`, a column `{table, column}`, a relationship `{table, column, to_table}`, with `to_column` when the column references that table by more than one key. `status` is `reviewed` (default), `rejected` or `draft`. Up to 500 |
 | `reviewer` | string | No | Who reviewed them, stored as given |
 
-Without `items` it lists what there is to review: every relationship with where it comes from (declared, or inferred and how), its latest check on the data (`validate_relationship`) and its review status, unreviewed ones first, and how many tables, columns and relationships are reviewed, rejected or still drafts.
+Without `items` it lists what there is to review: every relationship (`table`, `column`, `to_table`, `to_column`, ready to pass back as an item) with where it comes from (declared, or inferred and how), its latest check on the data (`validate_relationship`) and its review status, unreviewed ones first, and how many tables, columns and relationships are reviewed, rejected or still drafts.
 
 **What it changes:**
 - `execute_sql_query` treats a reviewed relationship as a firm key, like a declared one: a fan-trap across it blocks rather than warns (see [OBQC](obqc.md#declared-checked-or-guessed-relationships)). A rejected relationship is no join, as a refuted one is.
 - `suggest_semantic_names` no longer flags a reviewed element's name, and `apply_semantic_names` leaves it as it is, saying so.
-- Reviews are recorded in the ontology as `oba:reviewStatus`, `oba:reviewedAt`, `oba:reviewNote` and `oba:reviewedBy` (a new version, refreshed in the RDF store), and kept in the workspace, so a regenerated ontology gets them back.
+- Reviews are recorded in the ontology as `oba:reviewStatus`, `oba:reviewedAt`, `oba:reviewNote` and `oba:reviewedBy` (a new version, refreshed in the RDF store), and kept in the workspace, so a regenerated ontology gets them back -- each on the element it was given for. A relationship is its column *and* the key it references: reviewing `orders.customer_id -> customers.id` says nothing about `customer_id` guessed to reference `customers.legacy_id` after the schema changed.
+- A reviewed element keeps the name and description it had when reviewed, also when regenerated: a name applied with `apply_semantic_names` and then reviewed comes back with the review. Set it to `draft` to rename it.
 
 **Returns:** `marked` (each element, its kind and status), `not_found`, `invalid`, the counts per status, and the new ontology file.
 

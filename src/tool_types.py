@@ -45,6 +45,13 @@ class ReviewItem(BaseModel):
         default=None,
         description="For a relationship: the table the column references",
     )
+    to_column: _Identifier | None = Field(
+        default=None,
+        description=(
+            "For a relationship: the referenced column, when the column "
+            "references the table by more than one key"
+        ),
+    )
     status: Literal["reviewed", "rejected", "draft"] = Field(
         default="reviewed",
         description=(
