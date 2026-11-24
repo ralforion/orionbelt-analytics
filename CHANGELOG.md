@@ -105,7 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per student across a bridge to courses, which counts each course once per
   student. A measured table's rows now count as kept once per group when its
   key and the grouping keys fix one row of every joined table, by declared
-  primary keys and join equalities; `GROUP BY s.full_name`, `ROLLUP` and
+  primary keys and join equalities -- also under `GROUP BY ALL`, whose plain
+  columns and stars are its keys; `GROUP BY s.full_name`, `ROLLUP`,
+  `WITH TOTALS`, a name read as an alias that groups otherwise (also a
+  scalar `WITH` alias, and in `WHERE`), ClickHouse's `arrayJoin`, and
   ungrouped totals are still blocked.
 - **Relationships are inferred for columns of a composite key**: inference
   skipped every primary-key column, so a link table keyed by its two foreign
