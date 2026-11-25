@@ -23,6 +23,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+from sqlglot import exp
+from sqlglot.dialects.dialect import Dialect
+
 from .join_discovery import abbreviates, name_words, singular
 
 #: How close a name must be to be offered at all. ``price`` for
@@ -41,7 +44,8 @@ _NOT_ALPHANUMERIC = re.compile(r"[^0-9a-z]+")
 class Match:
     """A name the query may have meant."""
 
-    #: As the query should write it: ``customers`` or ``customers.name``.
+    #: As the query should write it, quoted where it must be and qualified
+    #: the way the query can: ``customers``, ``o.total``, ``o."order date"``.
     name: str
     #: The business name it was found by, when that, not the name, matched.
     label: str | None = None
@@ -126,6 +130,22 @@ def closest(
     return [m for m in ranked if m.score >= best - WINDOW][:limit]
 
 
+def sql_name(name: str, dialect: str, exact_case: bool = True) -> str:
+    """*name* as an identifier *dialect* reads back as that name.
+
+    Quoted when it must be: a space or other character a bare name cannot
+    hold, a reserved word, or -- when *exact_case* says the name is the
+    database's own -- a case the dialect would fold away (``OrderDate`` in
+    PostgreSQL, ``total`` in Snowflake). Names whose case was lost, as a
+    view's columns are, are not quoted for case: that would ask for a case
+    nobody knows.
+    """
+    unsafe = not exp.SAFE_IDENTIFIER_RE.match(name) or (
+        exact_case and Dialect.get_or_raise(dialect).case_sensitive(name)
+    )
+    return exp.to_identifier(name, quoted=unsafe).sql(dialect=dialect)
+
+
 def did_you_mean(matches: list[Match]) -> str | None:
     """``Did you mean orders or order_items?``, or None without matches."""
     if not matches:
@@ -136,8 +156,12 @@ def did_you_mean(matches: list[Match]) -> str | None:
 
 
 def listing(kind: str, names: Iterable[str], shown: int = 10) -> str:
-    """``Available tables: a, b, c (40 in all)``, sorted, the first *shown*."""
-    every = sorted(set(names), key=str.lower)
+    """``Available tables: a, b, c (40 in all)``, sorted, the first *shown*.
+
+    Sorted by name, not by how it is written: a quoted name sorts where its
+    name does.
+    """
+    every = sorted(set(names), key=lambda n: (n.strip('"`[]').lower(), n))
     head = ", ".join(every[:shown])
     more = f" ({len(every)} in all)" if len(every) > shown else ""
     return f"Available {kind}: {head}{more}"

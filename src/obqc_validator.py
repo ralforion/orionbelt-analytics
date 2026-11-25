@@ -7,6 +7,7 @@ and fan-trap patterns without using LLM.
 
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar
@@ -20,7 +21,7 @@ from sqlglot.errors import ParseError
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
 from .group_grain import Keyed, kept_once, output_at
-from .name_suggestions import LIMIT, Match, closest, did_you_mean, listing
+from .name_suggestions import LIMIT, Match, closest, did_you_mean, listing, sql_name
 from .personal_data import enabled as personal_data_enabled
 from .relationship_validation import (
     STATUS_CONFIRMED,
@@ -247,6 +248,18 @@ class OBQCIssue:
     did_you_mean: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _Written:
+    """How a column reference qualifies, and could qualify, each table."""
+
+    #: Its own qualifier as the query wrote it (``o``, ``public.orders``), or
+    #: None when it has none.
+    qualifier: str | None
+    #: ``(table, qualifier)`` of every table, not CTE, it could see, innermost
+    #: first: the alias when the query gave one, else the name as written.
+    sources: tuple[tuple[str, str], ...] = ()
+
+
 @dataclass
 class OBQCResult:
     """Complete OBQC validation result."""
@@ -272,9 +285,11 @@ class OBQCResult:
     # (column reference, tables it may resolve against) per occurrence. Name
     # resolution is scoped to the SELECT a column appears in plus its enclosing
     # ones, so a subquery's tables cannot answer for the outer query.
-    column_scopes: list[tuple[str, tuple[tuple[tuple[str, bool], ...], ...]]] = field(
-        default_factory=list
-    )
+    # Each also says how the reference qualifies the tables it could see, so a
+    # suggestion for it is written the way it can be.
+    column_scopes: list[
+        tuple[str, tuple[tuple[tuple[str, bool], ...], ...], _Written]
+    ] = field(default_factory=list)
     parsed_joins: list[dict[str, Any]] = field(default_factory=list)
     # Tables of each SELECT that applies an aggregate, in its own scope. Only
     # these can be multiplied by that SELECT's joins, so fan-trap rules judge
@@ -662,65 +677,83 @@ class OBQCValidator:
         table = self._schema_cache.tables.get(table_key)
         return table is not None and col_key in table.columns
 
-    def _columns_of(self, table_key: str) -> tuple[str, list[tuple[str, str | None]]]:
-        """A table's or view's name as written, and its columns with labels."""
+    def _columns_of(self, table_key: str) -> tuple[list[tuple[str, str | None]], bool]:
+        """A table's or view's columns with their business names.
+
+        Returns:
+            The ``(column, label)`` pairs, and whether the names keep the
+            database's case -- a view's were lower-cased when registered.
+        """
         if table_key in self._known_views:
-            return table_key, [(c, None) for c in sorted(self._known_views[table_key])]
+            return [(c, None) for c in sorted(self._known_views[table_key])], False
         table = self._schema_cache.tables.get(table_key) if self._schema_cache else None
         if table is None:
-            return table_key, []
-        return table.name, [(c.name, c.label) for c in table.columns.values()]
+            return [], True
+        return [(c.name, c.label) for c in table.columns.values()], True
 
-    def _qualified_columns(
-        self, tables: list[str]
+    def _written_columns(
+        self, sources: Iterable[tuple[str, str]], dialect: str
     ) -> list[tuple[str, str, str | None]]:
-        """``(column, table.column, label)`` of each of *tables*, once each."""
+        """``(column, qualifier.column, label)`` of each ``(table, qualifier)``."""
         found = []
-        for key in dict.fromkeys(t.lower() for t in tables):
-            table, columns = self._columns_of(key)
-            found += [(c, f"{table}.{c}", label) for c, label in columns]
+        for table, qualifier in dict.fromkeys(sources):
+            columns, exact = self._columns_of(table.lower())
+            found += [
+                (c, f"{qualifier}.{sql_name(c, dialect, exact)}", label)
+                for c, label in columns
+            ]
         return found
 
-    @staticmethod
-    def _visible(scope: tuple[tuple[tuple[str, bool], ...], ...]) -> list[str]:
-        """The tables, not CTEs, a reference in *scope* could see."""
-        return [name for level in scope for name, is_cte in level if not is_cte]
-
-    def _table_matches(self, wrong: str) -> list[Match]:
+    def _table_matches(self, wrong: str, dialect: str) -> list[Match]:
         """Tables and views a reference to *wrong* may have meant."""
         tables = self._schema_cache.tables.values() if self._schema_cache else []
         return closest(
             wrong,
-            [(t.name, t.name, t.label) for t in tables]
-            + [(v, v, None) for v in self._known_views],
+            [(t.name, sql_name(t.name, dialect), t.label) for t in tables]
+            + [
+                (v, sql_name(v, dialect, exact_case=False), None)
+                for v in self._known_views
+            ],
         )
 
     def _column_matches(
-        self, wrong: str, own: str | None, seen: list[str]
+        self, wrong: str, own: str | None, written: _Written, dialect: str
     ) -> list[Match]:
-        """Columns a reference to *wrong* may have meant, as table.column.
+        """Columns a reference to *wrong* may have meant, as it can write them.
+
+        Each is qualified the way the reference can: by the alias of a table
+        that has one -- its name is then out of sight -- and by the name as
+        written of one that has none.
 
         Args:
             wrong: The column name as written.
-            own: The table its qualifier names, or None when unqualified.
-            seen: The tables it could see, *own* among them.
+            own: The table its qualifier names, lower-cased, or None when the
+                reference is unqualified.
+            written: How the reference qualifies what it could see.
+            dialect: The sqlglot dialect, for quoting.
 
         Returns:
             Unqualified: the closest columns of every table it could see.
-            Qualified: the closest of *own*'s, and -- since a qualifier is
-            easily the wrong one -- the column itself in another table it
-            could see, after any of *own*'s that is as close.
+            Qualified: the closest of *own*'s, under the qualifier written,
+            and -- since a qualifier is easily the wrong one -- the column
+            itself in another table it could see, after any of *own*'s that
+            is as close.
         """
-        matches = closest(wrong, self._qualified_columns([own] if own else seen))
         if own is None:
-            return matches
+            return closest(wrong, self._written_columns(written.sources, dialect))
+        mine = closest(
+            wrong, self._written_columns([(own, written.qualifier or own)], dialect)
+        )
         elsewhere = [
-            Match(f"{self._columns_of(key)[0]}.{wrong}", None, 1.0)
-            for key in dict.fromkeys(t.lower() for t in seen)
-            if key != own.lower() and self._table_provides_column(key, wrong.lower())
+            Match(f"{qualifier}.{sql_name(c, dialect, exact)}", None, 1.0)
+            for table, qualifier in dict.fromkeys(written.sources)
+            if table.lower() != own
+            for columns, exact in [self._columns_of(table.lower())]
+            for c, _ in columns
+            if c.lower() == wrong.lower()
         ]
         ranked = sorted(
-            [(m, 0) for m in matches] + [(m, 1) for m in elsewhere],
+            [(m, 0) for m in mine] + [(m, 1) for m in elsewhere],
             key=lambda pair: (-pair[0].score, pair[1], pair[0].name),
         )
         return [m for m, _ in ranked][:LIMIT]
@@ -1179,8 +1212,8 @@ class OBQCValidator:
         self._extract_aggregations(parsed, result)
 
         # Run validation rules
-        self._validate_tables(result)
-        self._validate_columns(result)
+        self._validate_tables(result, sqlglot_dialect)
+        self._validate_columns(result, sqlglot_dialect)
         self._validate_joins(parsed, result, cte_refs)
         self._validate_table_families(result)
         self._validate_personal_data(parsed, result)
@@ -1371,6 +1404,8 @@ class OBQCValidator:
         """Extract column references, excluding legal SELECT-alias references."""
         alias_refs = self._select_alias_references(parsed, result, dialect)
         scope_cache: dict[int, tuple[tuple[tuple[str, bool], ...], ...]] = {}
+        source_cache: dict[int, tuple[tuple[str, str], ...]] = {}
+        sqlglot_dialect = self.DIALECT_MAP.get(dialect.lower(), "postgres")
 
         for column in parsed.find_all(exp.Column):
             # Alias references resolve to the select list, not to a table, so
@@ -1411,9 +1446,64 @@ class OBQCValidator:
             # quantity FROM users WHERE id IN (SELECT order_id FROM
             # order_items)" found quantity in order_items and reported nothing.
             scope = self._scope_tables(owner, scope_cache, cte_refs) if owner else ()
-            entry = (scoped_ref, scope)
+            written = _Written(
+                qualifier=(
+                    ".".join(
+                        part.sql(dialect=sqlglot_dialect)
+                        for part in (
+                            column.args.get("catalog"),
+                            column.args.get("db"),
+                            column.args.get("table"),
+                        )
+                        if part
+                    )
+                    if column.table
+                    else None
+                ),
+                sources=(
+                    self._scope_sources(owner, source_cache, cte_refs, sqlglot_dialect)
+                    if owner
+                    else ()
+                ),
+            )
+            entry = (scoped_ref, scope, written)
             if entry not in result.column_scopes:
                 result.column_scopes.append(entry)
+
+    def _scope_sources(
+        self,
+        select: exp.Select,
+        cache: dict[int, tuple[tuple[str, str], ...]],
+        cte_refs: set[int],
+        dialect: str,
+    ) -> tuple[tuple[str, str], ...]:
+        """How a reference in *select* may qualify each table it can see.
+
+        The same tables and order as :meth:`_scope_tables`, CTEs left out, as
+        ``(table name, qualifier)``: the alias when the query gave the table
+        one -- its name is then out of sight -- else its name as written.
+        """
+        cached = cache.get(id(select))
+        if cached is not None:
+            return cached
+        own = []
+        for table in select.find_all(exp.Table):
+            if not table.name or table.find_ancestor(exp.Select) is not select:
+                continue
+            if self._is_cte_reference(table, cte_refs):
+                continue
+            alias = table.args.get("alias")
+            name = alias.this if alias is not None and alias.this else table.this
+            own.append((table.name, name.sql(dialect=dialect)))
+        parent = None if self._is_cte_body(select) else select.parent_select
+        outer = (
+            self._scope_sources(parent, cache, cte_refs, dialect)
+            if parent is not None
+            else ()
+        )
+        sources = tuple(dict.fromkeys((*own, *outer)))
+        cache[id(select)] = sources
+        return sources
 
     def _scope_tables(
         self,
@@ -2349,7 +2439,7 @@ class OBQCValidator:
                 result.has_group_by = True
                 break
 
-    def _validate_tables(self, result: OBQCResult) -> None:
+    def _validate_tables(self, result: OBQCResult, dialect: str) -> None:
         """Rule: Check all referenced tables exist in ontology."""
         if self._schema_cache is None:
             return
@@ -2366,7 +2456,7 @@ class OBQCValidator:
             if table_name.lower() in self._known_views:
                 continue
             if table_name.lower() not in self._schema_cache.tables:
-                close = self._table_matches(table_name)
+                close = self._table_matches(table_name, dialect)
                 result.issues.append(
                     OBQCIssue(
                         issue_type=OBQCIssueType.TABLE_NOT_FOUND,
@@ -2376,19 +2466,22 @@ class OBQCValidator:
                         suggestion=did_you_mean(close)
                         or listing(
                             "tables",
-                            (t.name for t in self._schema_cache.tables.values()),
+                            (
+                                sql_name(t.name, dialect)
+                                for t in self._schema_cache.tables.values()
+                            ),
                         ),
                         related_entities=[table_name],
                         did_you_mean=[m.name for m in close],
                     )
                 )
 
-    def _validate_columns(self, result: OBQCResult) -> None:
+    def _validate_columns(self, result: OBQCResult, dialect: str) -> None:
         """Rule: Check all referenced columns exist in their respective tables."""
         if self._schema_cache is None:
             return
 
-        for col_ref, scope in result.column_scopes:
+        for col_ref, scope, written in result.column_scopes:
             if "." in col_ref:
                 parts = col_ref.split(".", 1)
                 table_name, col_name = parts[0], parts[1]
@@ -2402,7 +2495,7 @@ class OBQCValidator:
                     view_columns = self._known_views[table_key]
                     if view_columns and col_key not in view_columns:
                         close = self._column_matches(
-                            col_name, table_key, self._visible(scope)
+                            col_name, table_key, written, dialect
                         )
                         result.issues.append(
                             OBQCIssue(
@@ -2414,7 +2507,13 @@ class OBQCValidator:
                                 ),
                                 location="Column reference",
                                 suggestion=did_you_mean(close)
-                                or listing("columns", view_columns),
+                                or listing(
+                                    "columns",
+                                    (
+                                        sql_name(c, dialect, exact_case=False)
+                                        for c in view_columns
+                                    ),
+                                ),
                                 related_entities=[col_ref],
                                 did_you_mean=[m.name for m in close],
                             )
@@ -2428,7 +2527,7 @@ class OBQCValidator:
                     table_schema = self._schema_cache.tables[table_key]
                     if col_key not in table_schema.columns:
                         close = self._column_matches(
-                            col_name, table_key, self._visible(scope)
+                            col_name, table_key, written, dialect
                         )
                         result.issues.append(
                             OBQCIssue(
@@ -2439,7 +2538,10 @@ class OBQCValidator:
                                 suggestion=did_you_mean(close)
                                 or listing(
                                     "columns",
-                                    (c.name for c in table_schema.columns.values()),
+                                    (
+                                        sql_name(c.name, dialect)
+                                        for c in table_schema.columns.values()
+                                    ),
                                 ),
                                 related_entities=[col_ref],
                                 did_you_mean=[m.name for m in close],
@@ -2496,7 +2598,7 @@ class OBQCValidator:
                     and len(describable_tables) > 0
                     and all_tables_describable
                 ):
-                    close = self._column_matches(col_ref, None, describable_tables)
+                    close = self._column_matches(col_ref, None, written, dialect)
                     result.issues.append(
                         OBQCIssue(
                             issue_type=OBQCIssueType.COLUMN_NOT_FOUND,
@@ -2507,9 +2609,9 @@ class OBQCValidator:
                             or listing(
                                 "columns",
                                 (
-                                    written
-                                    for _, written, _ in self._qualified_columns(
-                                        describable_tables
+                                    reference
+                                    for _, reference, _ in self._written_columns(
+                                        written.sources, dialect
                                     )
                                 ),
                             ),
