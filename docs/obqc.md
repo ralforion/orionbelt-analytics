@@ -36,11 +36,11 @@ The overall `is_valid` flag is determined by: **any ERROR-level issue makes the 
 Checks that every table referenced in `FROM` and `JOIN` clauses exists in the ontology.
 
 ```sql
--- ERROR: Table 'cusotmers' not found in ontology
+-- ERROR: Table 'cusotmers' not found in ontology -- Did you mean customers?
 SELECT * FROM cusotmers;
 ```
 
-When a table is not found, OBQC suggests up to 10 available table names from the ontology.
+When a table is not found, OBQC names the tables and views the query most likely meant -- see [Did you mean](#did-you-mean) below.
 
 Tables reached through a database catalog schema -- `information_schema`, `pg_catalog`, `system`, `performance_schema`, `snowflake`, `sys` -- are exempt: they describe the database rather than user data, so they are never part of a generated ontology. MySQL's `mysql` schema is **not** exempt, because it holds accounts and grants rather than metadata; `src/security.py` blocks those tables outright. A bare name that merely looks like a catalog table (`FROM tables`) is still checked.
 
@@ -82,7 +82,7 @@ A CTE is only ever named bare, so a name qualified by its schema is the real tab
 Checks that every column reference resolves to an actual column in its table.
 
 ```sql
--- ERROR: Column 'emial' not found in table 'customers'
+-- ERROR: Column 'emial' not found in any referenced table -- Did you mean customers.email?
 SELECT emial FROM customers;
 ```
 
@@ -93,6 +93,23 @@ Two kinds of name are not columns and are not reported missing:
 - **`SELECT` aliases** referenced from a later clause. `ORDER BY revenue` over `SUM(total) AS revenue` resolves to the select list. Visibility follows the dialect: PostgreSQL allows an output name in `GROUP BY` and `ORDER BY` but not `HAVING` or `WHERE`, and only as a whole sort key (`ORDER BY t + 1` is an expression over input columns); DuckDB resolves aliases in every clause. A name that is *both* an alias and a real column resolves to the column.
 - **Columns of a catalog table**, which the ontology does not describe. If a query touches one, an unqualified name that matches no user table is left alone rather than reported.
 - **Columns of a CTE**, for the same reason: they come from its select list, so a name in a scope that includes a `WITH` alias is not reported missing. Decided per reference, like the table rule above.
+
+### Did you mean
+
+A table or column that does not exist is reported with the names the query most likely meant, best first, at most three -- in the suggestion (`Did you mean customers.email?`) and, for clients, as `did_you_mean` in the issue. The wrong name is compared with the ontology's own names and with the business names `apply_semantic_names` gave them, nothing else, so the answer is the same every time. A name is offered when it is:
+
+- the same name written differently: `OrderItems` for `order_items`;
+- the same words in another number or order: `customer` for `customers`, `items_order` for `order_items`;
+- abbreviated word by word: `cust_id` for `customer_id`, `qty` for `quantity`;
+- the same words with one left out or added: `price` for `unit_price`, `customer_name` for `name` -- but not on `id` alone;
+- close in spelling: `custmer`, `ordr`;
+- the table's or column's business name: `FROM customer` offers `cust_mstr ("Customer")` once `apply_semantic_names` named it so.
+
+Synonyms are not: `client` does not find `customers`.
+
+A column is looked for where the reference could have found it. An unqualified name is compared with the columns of every table it could see. A qualified one is compared with its own table's columns, and since the qualifier is as easily the wrong part, the same column in another table it could see is named too: `o.status` over `orders` joined to `shipments` offers `shipments.status` beside `orders.order_status`. A subquery's tables are not offered for the outer query, just as they do not resolve its names.
+
+When nothing is close, the suggestion lists the available tables or columns in alphabetical order, the first ten and how many there are.
 
 ### Ambiguous columns (WARNING)
 

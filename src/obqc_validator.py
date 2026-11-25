@@ -20,6 +20,7 @@ from sqlglot.errors import ParseError
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
 from .group_grain import Keyed, kept_once, output_at
+from .name_suggestions import LIMIT, Match, closest, did_you_mean, listing
 from .personal_data import enabled as personal_data_enabled
 from .relationship_validation import (
     STATUS_CONFIRMED,
@@ -241,6 +242,9 @@ class OBQCIssue:
     location: str | None = None
     suggestion: str | None = None
     related_entities: list[str] = field(default_factory=list)
+    # For a name the query got wrong: the names it may have meant, best first,
+    # as the query should write them. The suggestion says the same in words.
+    did_you_mean: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -324,6 +328,11 @@ class OBQCResult:
                     "location": issue.location,
                     "suggestion": issue.suggestion,
                     "related_entities": issue.related_entities,
+                    **(
+                        {"did_you_mean": issue.did_you_mean}
+                        if issue.did_you_mean
+                        else {}
+                    ),
                 }
                 for issue in self.issues
             ],
@@ -378,6 +387,8 @@ class ColumnSchema:
     personal_data: str | None = None
     # Its place in the table, from 1, as SELECT * returns it (oba:columnOrdinal).
     ordinal: int | None = None
+    # Its business name (rdfs:label), when that is more than the column name.
+    label: str | None = None
 
 
 @dataclass
@@ -396,6 +407,8 @@ class TableSchema:
     # The tables it links many to many, when it is a bridge table, from
     # oba:bridgeBetween.
     bridge_between: tuple[str, ...] = ()
+    # Its business name (rdfs:label), when that is more than the table name.
+    label: str | None = None
 
 
 # Column-to-column equalities of a join condition: pairs of (table, column).
@@ -649,6 +662,69 @@ class OBQCValidator:
         table = self._schema_cache.tables.get(table_key)
         return table is not None and col_key in table.columns
 
+    def _columns_of(self, table_key: str) -> tuple[str, list[tuple[str, str | None]]]:
+        """A table's or view's name as written, and its columns with labels."""
+        if table_key in self._known_views:
+            return table_key, [(c, None) for c in sorted(self._known_views[table_key])]
+        table = self._schema_cache.tables.get(table_key) if self._schema_cache else None
+        if table is None:
+            return table_key, []
+        return table.name, [(c.name, c.label) for c in table.columns.values()]
+
+    def _qualified_columns(
+        self, tables: list[str]
+    ) -> list[tuple[str, str, str | None]]:
+        """``(column, table.column, label)`` of each of *tables*, once each."""
+        found = []
+        for key in dict.fromkeys(t.lower() for t in tables):
+            table, columns = self._columns_of(key)
+            found += [(c, f"{table}.{c}", label) for c, label in columns]
+        return found
+
+    @staticmethod
+    def _visible(scope: tuple[tuple[tuple[str, bool], ...], ...]) -> list[str]:
+        """The tables, not CTEs, a reference in *scope* could see."""
+        return [name for level in scope for name, is_cte in level if not is_cte]
+
+    def _table_matches(self, wrong: str) -> list[Match]:
+        """Tables and views a reference to *wrong* may have meant."""
+        tables = self._schema_cache.tables.values() if self._schema_cache else []
+        return closest(
+            wrong,
+            [(t.name, t.name, t.label) for t in tables]
+            + [(v, v, None) for v in self._known_views],
+        )
+
+    def _column_matches(
+        self, wrong: str, own: str | None, seen: list[str]
+    ) -> list[Match]:
+        """Columns a reference to *wrong* may have meant, as table.column.
+
+        Args:
+            wrong: The column name as written.
+            own: The table its qualifier names, or None when unqualified.
+            seen: The tables it could see, *own* among them.
+
+        Returns:
+            Unqualified: the closest columns of every table it could see.
+            Qualified: the closest of *own*'s, and -- since a qualifier is
+            easily the wrong one -- the column itself in another table it
+            could see, after any of *own*'s that is as close.
+        """
+        matches = closest(wrong, self._qualified_columns([own] if own else seen))
+        if own is None:
+            return matches
+        elsewhere = [
+            Match(f"{self._columns_of(key)[0]}.{wrong}", None, 1.0)
+            for key in dict.fromkeys(t.lower() for t in seen)
+            if key != own.lower() and self._table_provides_column(key, wrong.lower())
+        ]
+        ranked = sorted(
+            [(m, 0) for m in matches] + [(m, 1) for m in elsewhere],
+            key=lambda pair: (-pair[0].score, pair[1], pair[0].name),
+        )
+        return [m for m, _ in ranked][:LIMIT]
+
     def load_ontology(self, ontology_graph: Graph, base_uri: str) -> None:
         """Load and cache schema from ontology graph.
 
@@ -782,6 +858,7 @@ class OBQCValidator:
                     schema_name=declared_schema or "public",
                     schema_declared=bool(declared_schema),
                     family=self._get_literal(subject, self._oba_ns.tableFamily),
+                    label=self._business_name(subject, table_name),
                     bridge_between=tuple(
                         sorted(
                             str(o)
@@ -836,6 +913,7 @@ class OBQCValidator:
                             subject, self._oba_ns.personalData
                         ),
                         ordinal=self._get_int(subject, self._oba_ns.columnOrdinal),
+                        label=self._business_name(subject, column_name),
                     )
 
                     # Get XSD type from rdfs:range
@@ -986,6 +1064,22 @@ class OBQCValidator:
             return None
         for obj in self._graph.objects(subject, predicate):
             return str(obj)
+        return None
+
+    def _business_name(self, subject: Node, name: str) -> str | None:
+        """The business name of *subject*, unless it only repeats *name*.
+
+        apply_semantic_names records it as oba:semanticName, and as the
+        rdfs:label -- which it may extend with the table to tell two apart,
+        so the semantic name comes first. The generator labels every class
+        and column with its own name, which says nothing more.
+        """
+        if self._oba_ns is None:
+            return None
+        for predicate in (self._oba_ns.semanticName, RDFS.label):
+            label = (self._get_literal(subject, predicate) or "").strip()
+            if label and label.lower() != name.lower():
+                return label
         return None
 
     def _get_int(self, subject: Node, predicate: URIRef) -> int | None:
@@ -2272,15 +2366,20 @@ class OBQCValidator:
             if table_name.lower() in self._known_views:
                 continue
             if table_name.lower() not in self._schema_cache.tables:
-                available_tables = list(self._schema_cache.tables.keys())[:10]
+                close = self._table_matches(table_name)
                 result.issues.append(
                     OBQCIssue(
                         issue_type=OBQCIssueType.TABLE_NOT_FOUND,
                         severity=OBQCSeverity.ERROR,
                         message=f"Table '{table_name}' not found in ontology",
                         location="FROM/JOIN clause",
-                        suggestion=f"Available tables: {', '.join(available_tables)}",
+                        suggestion=did_you_mean(close)
+                        or listing(
+                            "tables",
+                            (t.name for t in self._schema_cache.tables.values()),
+                        ),
                         related_entities=[table_name],
+                        did_you_mean=[m.name for m in close],
                     )
                 )
 
@@ -2302,7 +2401,9 @@ class OBQCValidator:
                 if table_key in self._known_views:
                     view_columns = self._known_views[table_key]
                     if view_columns and col_key not in view_columns:
-                        available_cols = sorted(view_columns)[:10]
+                        close = self._column_matches(
+                            col_name, table_key, self._visible(scope)
+                        )
                         result.issues.append(
                             OBQCIssue(
                                 issue_type=OBQCIssueType.COLUMN_NOT_FOUND,
@@ -2312,8 +2413,10 @@ class OBQCValidator:
                                     f"'{table_name}'"
                                 ),
                                 location="Column reference",
-                                suggestion=f"Available columns: {', '.join(available_cols)}",
+                                suggestion=did_you_mean(close)
+                                or listing("columns", view_columns),
                                 related_entities=[col_ref],
+                                did_you_mean=[m.name for m in close],
                             )
                         )
                     continue
@@ -2324,15 +2427,22 @@ class OBQCValidator:
                 if table_key in self._schema_cache.tables:
                     table_schema = self._schema_cache.tables[table_key]
                     if col_key not in table_schema.columns:
-                        available_cols = list(table_schema.columns.keys())[:10]
+                        close = self._column_matches(
+                            col_name, table_key, self._visible(scope)
+                        )
                         result.issues.append(
                             OBQCIssue(
                                 issue_type=OBQCIssueType.COLUMN_NOT_FOUND,
                                 severity=OBQCSeverity.ERROR,
                                 message=f"Column '{col_name}' not found in table '{table_name}'",
                                 location="Column reference",
-                                suggestion=f"Available columns: {', '.join(available_cols)}",
+                                suggestion=did_you_mean(close)
+                                or listing(
+                                    "columns",
+                                    (c.name for c in table_schema.columns.values()),
+                                ),
                                 related_entities=[col_ref],
+                                did_you_mean=[m.name for m in close],
                             )
                         )
             else:
@@ -2386,13 +2496,24 @@ class OBQCValidator:
                     and len(describable_tables) > 0
                     and all_tables_describable
                 ):
+                    close = self._column_matches(col_ref, None, describable_tables)
                     result.issues.append(
                         OBQCIssue(
                             issue_type=OBQCIssueType.COLUMN_NOT_FOUND,
                             severity=OBQCSeverity.ERROR,
                             message=f"Column '{col_ref}' not found in any referenced table",
                             location="Column reference",
-                            suggestion="Qualify column with table name (e.g., table.column)",
+                            suggestion=did_you_mean(close)
+                            or listing(
+                                "columns",
+                                (
+                                    written
+                                    for _, written, _ in self._qualified_columns(
+                                        describable_tables
+                                    )
+                                ),
+                            ),
+                            did_you_mean=[m.name for m in close],
                         )
                     )
                 elif len(found_in_tables) > 1:
