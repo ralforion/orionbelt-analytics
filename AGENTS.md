@@ -21,6 +21,7 @@ mypy src/                                # strict type check (disallow_untyped_d
 bandit -c pyproject.toml -r src/         # security scan (run for SQL/credential changes)
 ./scripts/audit-prod-deps.sh             # advisories in the shipped dep tree (CI job `deps`)
 uv run python scripts/bench_runtime.py   # runtime benchmarks (opt-in, synthetic, temp dirs only)
+uv run python scripts/bench_fan_traps.py # fan-trap benchmark: OBQC vs wrong totals (numbers pinned in tests)
 uv run python scripts/gen-third-party-notices.py   # refresh THIRD_PARTY_NOTICES.md after a dependency change
 pre-commit run --all-files               # all of the above as configured hooks
 ```

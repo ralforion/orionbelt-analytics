@@ -1,0 +1,618 @@
+# Fan-trap benchmark cases: queries that run, name only real tables and
+# columns, and still may return the wrong number.
+#
+# Each case is a question, a candidate query someone (or a model) might write
+# for it, and a "truth" query that answers the question correctly. Whether a
+# candidate is wrong is not asserted by hand: the benchmark runs both on the
+# same data and calls the candidate wrong when the numbers differ. `expect`
+# records what the data shows, so a case that stops showing it is noticed.
+#
+# Schema and data: scripts/bench_fan_traps.py. Run:
+#     uv run python scripts/bench_fan_traps.py
+
+# --- A measure of the "one" side, summed across a join to the "many" side -----
+
+[[case]]
+id = "total-per-customer-with-item-count"
+pattern = "fan-trap"
+question = "Per customer: total value of their orders that have items, and how many items they bought."
+expect = "wrong"
+sql = """
+SELECT c.id, SUM(o.total) AS order_value, COUNT(oi.id) AS items
+FROM customers c
+JOIN orders o ON o.customer_id = c.id
+JOIN order_items oi ON oi.order_id = o.id
+GROUP BY c.id
+"""
+truth = """
+WITH v AS (
+    SELECT customer_id, SUM(total) AS t FROM orders
+    WHERE id IN (SELECT order_id FROM order_items) GROUP BY customer_id
+), n AS (
+    SELECT o.customer_id, COUNT(*) AS n
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id GROUP BY o.customer_id
+)
+SELECT v.customer_id, v.t, n.n FROM v JOIN n ON n.customer_id = v.customer_id
+"""
+
+[[case]]
+id = "total-per-customer-with-item-count-preaggregated"
+pattern = "pre-aggregation"
+question = "Per customer: total value of their orders that have items, and how many items they bought."
+expect = "right"
+sql = """
+WITH items AS (
+    SELECT order_id, COUNT(*) AS n FROM order_items GROUP BY order_id
+)
+SELECT c.id, SUM(o.total) AS order_value, SUM(i.n) AS items
+FROM customers c
+JOIN orders o ON o.customer_id = c.id
+JOIN items i ON i.order_id = o.id
+GROUP BY c.id
+"""
+truth = """
+WITH v AS (
+    SELECT customer_id, SUM(total) AS t FROM orders
+    WHERE id IN (SELECT order_id FROM order_items) GROUP BY customer_id
+), n AS (
+    SELECT o.customer_id, COUNT(*) AS n
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id GROUP BY o.customer_id
+)
+SELECT v.customer_id, v.t, n.n FROM v JOIN n ON n.customer_id = v.customer_id
+"""
+
+[[case]]
+id = "average-order-with-electronics"
+pattern = "fan-trap"
+question = "Average value of orders that contain an electronics product."
+expect = "wrong"
+sql = """
+SELECT AVG(o.total)
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+JOIN products p ON p.id = oi.product_id
+WHERE p.category = 'electronics'
+"""
+truth = """
+SELECT AVG(total) FROM orders
+WHERE id IN (
+    SELECT oi.order_id FROM order_items oi JOIN products p ON p.id = oi.product_id
+    WHERE p.category = 'electronics'
+)
+"""
+
+[[case]]
+id = "average-order-with-electronics-semi-join"
+pattern = "semi-join"
+question = "Average value of orders that contain an electronics product."
+expect = "right"
+sql = """
+SELECT AVG(o.total)
+FROM orders o
+WHERE o.id IN (
+    SELECT oi.order_id FROM order_items oi
+    JOIN products p ON p.id = oi.product_id
+    WHERE p.category = 'electronics'
+)
+"""
+truth = """
+SELECT AVG(total) FROM orders
+WHERE id IN (
+    SELECT oi.order_id FROM order_items oi JOIN products p ON p.id = oi.product_id
+    WHERE p.category = 'electronics'
+)
+"""
+
+[[case]]
+id = "value-of-orders-with-books-distinct-join"
+pattern = "distinct-subquery"
+question = "Total value of orders that contain a book."
+expect = "right"
+sql = """
+SELECT SUM(o.total)
+FROM orders o
+JOIN (
+    SELECT DISTINCT oi.order_id FROM order_items oi
+    JOIN products p ON p.id = oi.product_id
+    WHERE p.category = 'books'
+) b ON b.order_id = o.id
+"""
+truth = """
+SELECT SUM(total) FROM orders
+WHERE id IN (
+    SELECT oi.order_id FROM order_items oi JOIN products p ON p.id = oi.product_id
+    WHERE p.category = 'books'
+)
+"""
+
+[[case]]
+id = "value-of-orders-with-books-join"
+pattern = "fan-trap"
+question = "Total value of orders that contain a book."
+expect = "wrong"
+sql = """
+SELECT SUM(o.total)
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+JOIN products p ON p.id = oi.product_id
+WHERE p.category = 'books'
+"""
+truth = """
+SELECT SUM(total) FROM orders
+WHERE id IN (
+    SELECT oi.order_id FROM order_items oi JOIN products p ON p.id = oi.product_id
+    WHERE p.category = 'books'
+)
+"""
+
+[[case]]
+id = "credit-limit-per-region-with-orders"
+pattern = "fan-trap"
+question = "Per region: total credit limit of customers who ordered, and their number of orders."
+expect = "wrong"
+sql = """
+SELECT r.name, SUM(c.credit_limit) AS credit, COUNT(o.id) AS orders
+FROM regions r
+JOIN customers c ON c.region_id = r.id
+JOIN orders o ON o.customer_id = c.id
+GROUP BY r.name
+"""
+truth = """
+WITH buyers AS (SELECT customer_id, COUNT(*) AS n FROM orders GROUP BY customer_id)
+SELECT r.name, SUM(c.credit_limit), SUM(b.n)
+FROM regions r JOIN customers c ON c.region_id = r.id
+JOIN buyers b ON b.customer_id = c.id
+GROUP BY r.name
+"""
+
+[[case]]
+id = "credit-limit-per-region-with-orders-preaggregated"
+pattern = "pre-aggregation"
+question = "Per region: total credit limit of customers who ordered, and their number of orders."
+expect = "right"
+sql = """
+SELECT r.name, SUM(c.credit_limit) AS credit, SUM(o.n) AS orders
+FROM regions r
+JOIN customers c ON c.region_id = r.id
+JOIN (SELECT customer_id, COUNT(*) AS n FROM orders GROUP BY customer_id) o
+    ON o.customer_id = c.id
+GROUP BY r.name
+"""
+truth = """
+WITH buyers AS (SELECT customer_id, COUNT(*) AS n FROM orders GROUP BY customer_id)
+SELECT r.name, SUM(c.credit_limit), SUM(b.n)
+FROM regions r JOIN customers c ON c.region_id = r.id
+JOIN buyers b ON b.customer_id = c.id
+GROUP BY r.name
+"""
+
+[[case]]
+id = "total-per-customer-left-joins"
+pattern = "fan-trap"
+question = "Per customer, including those without orders: total order value and number of items."
+expect = "wrong"
+sql = """
+SELECT c.id, COALESCE(SUM(o.total), 0) AS order_value, COUNT(oi.id) AS items
+FROM customers c
+LEFT JOIN orders o ON o.customer_id = c.id
+LEFT JOIN order_items oi ON oi.order_id = o.id
+GROUP BY c.id
+"""
+truth = """
+SELECT c.id,
+    COALESCE((SELECT SUM(o.total) FROM orders o WHERE o.customer_id = c.id), 0),
+    (SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id = oi.order_id
+     WHERE o.customer_id = c.id)
+FROM customers c
+"""
+
+[[case]]
+id = "total-per-customer-correlated"
+pattern = "correlated-subquery"
+question = "Per customer, including those without orders: total order value and number of items."
+expect = "right"
+sql = """
+SELECT c.id,
+    COALESCE((SELECT SUM(o.total) FROM orders o WHERE o.customer_id = c.id), 0)
+        AS order_value,
+    (SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id = oi.order_id
+     WHERE o.customer_id = c.id) AS items
+FROM customers c
+"""
+truth = """
+SELECT c.id,
+    COALESCE((SELECT SUM(o.total) FROM orders o WHERE o.customer_id = c.id), 0),
+    (SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id = oi.order_id
+     WHERE o.customer_id = c.id)
+FROM customers c
+"""
+
+[[case]]
+id = "window-total-per-customer-across-items"
+pattern = "fan-trap"
+question = "Each customer with the total value of their orders that have items."
+expect = "wrong"
+sql = """
+SELECT DISTINCT o.customer_id, SUM(o.total) OVER (PARTITION BY o.customer_id) AS t
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+"""
+truth = """
+SELECT customer_id, SUM(total) FROM orders
+WHERE id IN (SELECT order_id FROM order_items) GROUP BY customer_id
+"""
+
+[[case]]
+id = "sum-distinct-total-per-customer"
+pattern = "fan-trap"
+question = "Each customer with the total value of their orders that have items."
+expect = "wrong"
+sql = """
+SELECT o.customer_id, SUM(DISTINCT o.total) AS t
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+GROUP BY o.customer_id
+"""
+truth = """
+SELECT customer_id, SUM(total) FROM orders
+WHERE id IN (SELECT order_id FROM order_items) GROUP BY customer_id
+"""
+
+# --- Two "many" sides joined to one "one" side: the chasm trap ----------------
+
+[[case]]
+id = "ordered-and-paid-per-customer"
+pattern = "chasm-trap"
+question = "Per customer: value of the items they ordered and the amount they paid."
+expect = "wrong"
+sql = """
+SELECT o.customer_id,
+    SUM(oi.quantity * oi.price) AS ordered,
+    SUM(p.amount) AS paid
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+JOIN payments p ON p.order_id = o.id
+GROUP BY o.customer_id
+"""
+truth = """
+WITH ordered AS (
+    SELECT o.customer_id, SUM(oi.quantity * oi.price) AS v
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id GROUP BY o.customer_id
+), paid AS (
+    SELECT o.customer_id, SUM(p.amount) AS v
+    FROM payments p JOIN orders o ON o.id = p.order_id GROUP BY o.customer_id
+)
+SELECT ordered.customer_id, ordered.v, paid.v
+FROM ordered JOIN paid ON paid.customer_id = ordered.customer_id
+"""
+
+[[case]]
+id = "ordered-and-paid-per-customer-separately"
+pattern = "pre-aggregation"
+question = "Per customer: value of the items they ordered and the amount they paid."
+expect = "right"
+sql = """
+WITH ordered AS (
+    SELECT o.customer_id, SUM(oi.quantity * oi.price) AS v
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id
+    GROUP BY o.customer_id
+), paid AS (
+    SELECT o.customer_id, SUM(p.amount) AS v
+    FROM payments p JOIN orders o ON o.id = p.order_id
+    GROUP BY o.customer_id
+)
+SELECT ordered.customer_id, ordered.v AS ordered, paid.v AS paid
+FROM ordered JOIN paid ON paid.customer_id = ordered.customer_id
+"""
+truth = """
+WITH ordered AS (
+    SELECT o.customer_id, SUM(oi.quantity * oi.price) AS v
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id GROUP BY o.customer_id
+), paid AS (
+    SELECT o.customer_id, SUM(p.amount) AS v
+    FROM payments p JOIN orders o ON o.id = p.order_id GROUP BY o.customer_id
+)
+SELECT ordered.customer_id, ordered.v, paid.v
+FROM ordered JOIN paid ON paid.customer_id = ordered.customer_id
+"""
+
+[[case]]
+id = "ordered-and-paid-per-customer-union-all"
+pattern = "union-all"
+question = "Per customer: value of the items they ordered and the amount they paid."
+expect = "right"
+sql = """
+SELECT customer_id, SUM(ordered) AS ordered, SUM(paid) AS paid
+FROM (
+    SELECT o.customer_id, oi.quantity * oi.price AS ordered, 0 AS paid
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id
+    UNION ALL
+    SELECT o.customer_id, 0 AS ordered, p.amount AS paid
+    FROM payments p JOIN orders o ON o.id = p.order_id
+) movements
+GROUP BY customer_id
+"""
+truth = """
+WITH ordered AS (
+    SELECT o.customer_id, SUM(oi.quantity * oi.price) AS v
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id GROUP BY o.customer_id
+), paid AS (
+    SELECT o.customer_id, SUM(p.amount) AS v
+    FROM payments p JOIN orders o ON o.id = p.order_id GROUP BY o.customer_id
+)
+SELECT ordered.customer_id, ordered.v, paid.v
+FROM ordered JOIN paid ON paid.customer_id = ordered.customer_id
+"""
+
+# --- Counting the "one" side through the "many" side --------------------------
+
+[[case]]
+id = "orders-with-books-count-star"
+pattern = "count-star"
+question = "Per customer: how many of their orders contain a book."
+expect = "wrong"
+sql = """
+SELECT o.customer_id, COUNT(*) AS orders
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+JOIN products p ON p.id = oi.product_id
+WHERE p.category = 'books'
+GROUP BY o.customer_id
+"""
+truth = """
+SELECT customer_id, COUNT(*) FROM orders
+WHERE id IN (
+    SELECT oi.order_id FROM order_items oi JOIN products p ON p.id = oi.product_id
+    WHERE p.category = 'books'
+)
+GROUP BY customer_id
+"""
+
+[[case]]
+id = "orders-with-books-count-column"
+pattern = "fan-trap"
+question = "Per customer: how many of their orders contain a book."
+expect = "wrong"
+sql = """
+SELECT o.customer_id, COUNT(o.id) AS orders
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+JOIN products p ON p.id = oi.product_id
+WHERE p.category = 'books'
+GROUP BY o.customer_id
+"""
+truth = """
+SELECT customer_id, COUNT(*) FROM orders
+WHERE id IN (
+    SELECT oi.order_id FROM order_items oi JOIN products p ON p.id = oi.product_id
+    WHERE p.category = 'books'
+)
+GROUP BY customer_id
+"""
+
+[[case]]
+id = "orders-with-books-count-distinct"
+pattern = "count-distinct"
+question = "Per customer: how many of their orders contain a book."
+expect = "right"
+sql = """
+SELECT o.customer_id, COUNT(DISTINCT o.id) AS orders
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+JOIN products p ON p.id = oi.product_id
+WHERE p.category = 'books'
+GROUP BY o.customer_id
+"""
+truth = """
+SELECT customer_id, COUNT(*) FROM orders
+WHERE id IN (
+    SELECT oi.order_id FROM order_items oi JOIN products p ON p.id = oi.product_id
+    WHERE p.category = 'books'
+)
+GROUP BY customer_id
+"""
+
+[[case]]
+id = "largest-order-per-customer"
+pattern = "min-max"
+question = "Per customer: the value of their largest order that has items."
+expect = "right"
+sql = """
+SELECT c.id, MAX(o.total) AS largest
+FROM customers c
+JOIN orders o ON o.customer_id = c.id
+JOIN order_items oi ON oi.order_id = o.id
+GROUP BY c.id
+"""
+truth = """
+SELECT customer_id, MAX(total) FROM orders
+WHERE id IN (SELECT order_id FROM order_items) GROUP BY customer_id
+"""
+
+# --- Measures of the "many" side, through many-to-one lookups -----------------
+
+[[case]]
+id = "revenue-per-region"
+pattern = "many-to-one"
+question = "Revenue (quantity times price of items sold) per region."
+expect = "right"
+sql = """
+SELECT r.name, SUM(oi.quantity * oi.price) AS revenue
+FROM order_items oi
+JOIN orders o ON o.id = oi.order_id
+JOIN customers c ON c.id = o.customer_id
+JOIN regions r ON r.id = c.region_id
+GROUP BY r.name
+"""
+truth = """
+SELECT r.name, SUM(t.v) FROM (
+    SELECT o.customer_id, oi.quantity * oi.price AS v
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id
+) t JOIN customers c ON c.id = t.customer_id JOIN regions r ON r.id = c.region_id
+GROUP BY r.name
+"""
+
+[[case]]
+id = "order-value-per-region"
+pattern = "many-to-one"
+question = "Total order value per region."
+expect = "right"
+sql = """
+SELECT r.name, SUM(o.total) AS order_value
+FROM orders o
+JOIN customers c ON c.id = o.customer_id
+JOIN regions r ON r.id = c.region_id
+GROUP BY r.name
+"""
+truth = """
+SELECT r.name, (SELECT SUM(o.total) FROM orders o JOIN customers c ON c.id = o.customer_id
+                WHERE c.region_id = r.id)
+FROM regions r
+WHERE EXISTS (SELECT 1 FROM orders o JOIN customers c ON c.id = o.customer_id
+              WHERE c.region_id = r.id)
+"""
+
+[[case]]
+id = "quantity-per-category"
+pattern = "many-to-one"
+question = "Units sold per product category."
+expect = "right"
+sql = """
+SELECT p.category, SUM(oi.quantity) AS units
+FROM order_items oi
+JOIN products p ON p.id = oi.product_id
+GROUP BY p.category
+"""
+truth = """
+SELECT p.category, (SELECT SUM(quantity) FROM order_items oi
+                    JOIN products q ON q.id = oi.product_id WHERE q.category = p.category)
+FROM (SELECT DISTINCT category FROM products
+      WHERE id IN (SELECT product_id FROM order_items)) p
+"""
+
+[[case]]
+id = "credit-limit-per-region"
+pattern = "many-to-one"
+question = "Total credit limit of customers per region."
+expect = "right"
+sql = """
+SELECT r.name, SUM(c.credit_limit) AS credit
+FROM customers c
+JOIN regions r ON r.id = c.region_id
+GROUP BY r.name
+"""
+truth = """
+SELECT r.name, (SELECT SUM(credit_limit) FROM customers c WHERE c.region_id = r.id)
+FROM regions r
+WHERE EXISTS (SELECT 1 FROM customers c WHERE c.region_id = r.id)
+"""
+
+# --- One row per order in the data, many allowed by the schema ----------------
+
+[[case]]
+id = "order-value-and-shipping-per-customer"
+pattern = "fan-trap (latent)"
+question = "Per customer: total order value and total shipping cost."
+expect = "right"
+sql = """
+SELECT o.customer_id, SUM(o.total) AS order_value, SUM(s.cost) AS shipping
+FROM orders o
+JOIN shipments s ON s.order_id = o.id
+GROUP BY o.customer_id
+"""
+truth = """
+WITH v AS (SELECT customer_id, SUM(total) AS t FROM orders
+           WHERE id IN (SELECT order_id FROM shipments) GROUP BY customer_id),
+     s AS (SELECT o.customer_id, SUM(s.cost) AS c FROM shipments s
+           JOIN orders o ON o.id = s.order_id GROUP BY o.customer_id)
+SELECT v.customer_id, v.t, s.c FROM v JOIN s ON s.customer_id = v.customer_id
+"""
+
+# --- Many to many, through a bridge table --------------------------------------
+
+[[case]]
+id = "credits-per-student"
+pattern = "bridge, grouped by key"
+question = "Credits each student is enrolled for."
+expect = "right"
+sql = """
+SELECT s.id, SUM(c.credits) AS credits
+FROM students s
+JOIN student_courses sc ON sc.student_id = s.id
+JOIN courses c ON c.id = sc.course_id
+GROUP BY s.id
+"""
+truth = """
+SELECT sc.student_id, SUM(c.credits) FROM student_courses sc
+JOIN courses c ON c.id = sc.course_id GROUP BY sc.student_id
+"""
+
+[[case]]
+id = "credits-per-student-group-by-all"
+pattern = "bridge, grouped by key"
+question = "Credits each student is enrolled for."
+expect = "right"
+sql = """
+SELECT s.id, SUM(c.credits) AS credits
+FROM students s
+JOIN student_courses sc ON sc.student_id = s.id
+JOIN courses c ON c.id = sc.course_id
+GROUP BY ALL
+"""
+truth = """
+SELECT sc.student_id, SUM(c.credits) FROM student_courses sc
+JOIN courses c ON c.id = sc.course_id GROUP BY sc.student_id
+"""
+
+[[case]]
+id = "credits-per-student-name"
+pattern = "bridge, grouped by non-key"
+question = "Credits each student is enrolled for, listed by name."
+expect = "wrong"
+sql = """
+SELECT s.name, SUM(c.credits) AS credits
+FROM students s
+JOIN student_courses sc ON sc.student_id = s.id
+JOIN courses c ON c.id = sc.course_id
+GROUP BY s.name
+"""
+truth = """
+SELECT s.name, SUM(t.credits) FROM students s
+JOIN (SELECT sc.student_id, SUM(c.credits) AS credits FROM student_courses sc
+      JOIN courses c ON c.id = sc.course_id GROUP BY sc.student_id) t
+  ON t.student_id = s.id
+GROUP BY s.id, s.name
+"""
+
+[[case]]
+id = "tuition-per-course"
+pattern = "bridge, grouped by key"
+question = "Total tuition of the students taking each course."
+expect = "right"
+sql = """
+SELECT c.id, SUM(s.tuition) AS tuition
+FROM courses c
+JOIN student_courses sc ON sc.course_id = c.id
+JOIN students s ON s.id = sc.student_id
+GROUP BY c.id
+"""
+truth = """
+SELECT sc.course_id, SUM(s.tuition) FROM student_courses sc
+JOIN students s ON s.id = sc.student_id GROUP BY sc.course_id
+"""
+
+[[case]]
+id = "tuition-of-enrolled-students"
+pattern = "bridge, ungrouped"
+question = "Total tuition of all students enrolled in at least one course."
+expect = "wrong"
+sql = """
+SELECT SUM(s.tuition) AS tuition
+FROM students s
+JOIN student_courses sc ON sc.student_id = s.id
+JOIN courses c ON c.id = sc.course_id
+"""
+truth = """
+SELECT SUM(tuition) FROM students
+WHERE id IN (SELECT student_id FROM student_courses)
+"""

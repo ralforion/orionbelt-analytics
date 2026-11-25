@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Fan-trap benchmark** (`scripts/bench_fan_traps.py`): 29 queries that
+  run and name only real tables and columns, 12 of which return a wrong
+  number -- decided by running each against a correct query on the same
+  data, not by hand. A check of names lets all 12 through; OBQC blocks 10
+  with declared keys or inferred keys checked on the data, warns on 10 with
+  keys only inferred, and refuses one right answer the schema makes
+  fragile. The misses are documented in docs/fan-trap-prevention.md.
 - **Reviewed by a person**: the new `review_ontology` tool marks tables,
   columns and relationships `reviewed` or `rejected`
   (`oba:reviewStatus`, with when, who and why). OBQC treats a reviewed
