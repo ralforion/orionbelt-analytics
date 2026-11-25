@@ -121,7 +121,7 @@ def enabled() -> bool:
 # --- Names ---------------------------------------------------------------------
 
 
-def _words(name: str) -> list[str]:
+def name_words(name: str) -> list[str]:
     return [
         word.lower()
         for part in _SEPARATORS.split(name)
@@ -130,7 +130,7 @@ def _words(name: str) -> list[str]:
     ]
 
 
-def _singular(word: str) -> str:
+def singular(word: str) -> str:
     if word.endswith("ies") and len(word) > 4:
         return word[:-3] + "y"
     if word.endswith(("sses", "xes", "ches", "shes")):
@@ -219,7 +219,7 @@ class Names:
 
     def __init__(self, tables: Iterable[str], embed: Embed | None = None) -> None:
         self._tables = list(dict.fromkeys(tables))
-        self._words = {t: [_singular(w) for w in _words(t)] for t in self._tables}
+        self._words = {t: [singular(w) for w in name_words(t)] for t in self._tables}
         self._embed = embed
         self._vectors: dict[str, np.ndarray] | None = None
 
@@ -228,11 +228,11 @@ class Names:
         tables = [t for t in self._tables if t != exclude]
         found: dict[str, NameMatch] = {}
         unresolved = []
-        for word in (w for w in _words(column) if w not in _KEY_WORDS):
+        for word in (w for w in name_words(column) if w not in _KEY_WORDS):
             hits = False
             for table in tables:
                 words = self._words[table]
-                if word in words or _singular(word) in words:
+                if word in words or singular(word) in words:
                     found[table] = _stronger(found.get(table), NameMatch(WORD, 1.0))
                     hits = True
                 elif any(abbreviates(word, w) for w in words):
@@ -249,7 +249,7 @@ class Names:
             for reading in readings:
                 for table in tables:
                     if reading in self._words[table] or (
-                        _singular(reading) in self._words[table]
+                        singular(reading) in self._words[table]
                     ):
                         match = NameMatch(ABBREVIATION, 1.0, via=reading)
                         found[table] = _stronger(found.get(table), match)
@@ -302,7 +302,7 @@ class Names:
     def _table_vectors(self) -> dict[str, np.ndarray]:
         if self._vectors is None:
             assert self._embed is not None
-            texts = [" ".join(_words(t)) for t in self._tables]
+            texts = [" ".join(name_words(t)) for t in self._tables]
             self._vectors = {
                 t: np.asarray(v, dtype=float)
                 for t, v in zip(self._tables, self._embed(texts), strict=True)
@@ -395,7 +395,7 @@ def candidates(
                 or is_bookkeeping(lowered)
             ):
                 continue
-            words = _words(column.name)
+            words = name_words(column.name)
             keyed = len(words) > 1 and words[-1] in _KEY_WORDS
             if keyed or names(column.name, exclude=table.name):
                 found.setdefault(table.name, []).append((column.name, column_kind))
