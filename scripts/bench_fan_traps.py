@@ -28,8 +28,11 @@ sqlglot's qualifier resolves them), which is what a SQL gate without an
 ontology can do.
 
 Everything is built in a temporary directory -- a DuckDB file per variant,
-fixed data from a seeded generator -- and nothing reads ``.env`` or a
-workspace. Nothing here needs a database or a network.
+fixed data from a seeded generator -- and runs with the application's
+defaults: no ``.env`` is read, no setting from the shell applies, and the
+home directory the application sees, where its DuckDB driver keeps a
+credential salt, is inside that directory too (see :func:`_defaults`).
+Nothing here needs a database or a network.
 
     uv run python scripts/bench_fan_traps.py               # summary + cases
     uv run python scripts/bench_fan_traps.py --json out.json
@@ -39,11 +42,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import tempfile
 import tomllib
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -230,6 +236,34 @@ def create_database(
 
 # --- Ontology, as the server builds it --------------------------------------------
 
+#: What the OS needs of the environment; the rest is out while the cases run.
+_KEEP = ("PATH", "SYSTEMROOT", "WINDIR", "TMPDIR", "TEMP", "TMP")
+
+
+@contextmanager
+def _defaults(home: Path) -> Iterator[None]:
+    """Run with the application's defaults, and with *home* as its home.
+
+    The server reads its settings from the environment and from ``.env``
+    files, and its DuckDB driver reads or creates a credential salt in the
+    home directory on every connect. For the length of the run, python-dotenv's
+    own switch turns ``.env`` loading off, every variable but the few the OS
+    needs is out of the environment -- so no setting moves the numbers -- and
+    the home directory is *home*, inside the benchmark's temporary directory.
+    The environment is restored afterwards.
+    """
+    home.mkdir(exist_ok=True)
+    saved = dict(os.environ)
+    try:
+        os.environ.clear()
+        os.environ.update({k: v for k, v in saved.items() if k in _KEEP})
+        os.environ["HOME"] = os.environ["USERPROFILE"] = str(home)
+        os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
 
 def ontology(path: Path) -> Any:
     """The ontology generate_ontology would build for the DuckDB file."""
@@ -363,20 +397,37 @@ def _rows(con: Any, sql: str) -> list[tuple[Any, ...]]:
     )
 
 
-def _error(got: list[tuple[Any, ...]], truth: list[tuple[Any, ...]]) -> float | None:
-    """The largest relative difference between matching numbers, by first column."""
+def _pairs(
+    got: list[tuple[Any, ...]], truth: list[tuple[Any, ...]]
+) -> list[tuple[tuple[Any, ...], tuple[Any, ...]]] | None:
+    """The candidate's numbers next to the truth's, or None if rows don't pair.
+
+    Rows pair by their first column, which must name one row on each side; a
+    one-column result pairs only as a single row against a single row.
+    """
+    if any(len(row) < 2 for row in (*got, *truth)):
+        return [(got[0], truth[0])] if len(got) == len(truth) == 1 else None
     by_key = {row[0]: row[1:] for row in truth}
+    if len(by_key) < len(truth) or len({row[0] for row in got}) < len(got):
+        return None
+    return [(row[1:], by_key[row[0]]) for row in got if row[0] in by_key]
+
+
+def _error(got: list[tuple[Any, ...]], truth: list[tuple[Any, ...]]) -> float | None:
+    """The largest relative difference between paired numbers, e.g. 0.38.
+
+    None when the rows themselves differ and no number is off: in particular
+    when a key names several rows on either side -- a query that merges two
+    students of one name returns one row where the truth has two, and no
+    single one of those is the number it should have returned.
+    """
     worst: float | None = None
-    for row in got:
-        expected = by_key.get(row[0]) if len(row) > 1 else truth[0] if truth else None
-        values = row[1:] if len(row) > 1 else row
-        if expected is None:
-            continue
+    for values, expected in _pairs(got, truth) or []:
         for a, b in zip(values, expected, strict=False):
             if isinstance(a, (int, float)) and isinstance(b, (int, float)) and b:
                 diff = abs(a - b) / abs(b)
                 worst = diff if worst is None else max(worst, diff)
-    return worst
+    return worst or None
 
 
 @dataclass
@@ -408,7 +459,10 @@ def run(seed: int = 7) -> dict[str, Any]:
 
     cases = tomllib.loads(CASES.read_text())["case"]
     data = generate_data(seed)
-    with tempfile.TemporaryDirectory(prefix="oba-fan-traps-") as tmp:
+    with (
+        tempfile.TemporaryDirectory(prefix="oba-fan-traps-") as tmp,
+        _defaults(Path(tmp) / "home"),
+    ):
         declared_db = Path(tmp) / "declared.duckdb"
         inferred_db = Path(tmp) / "inferred.duckdb"
         create_database(declared_db, data, declared=True)

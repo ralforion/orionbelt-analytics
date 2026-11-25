@@ -365,7 +365,7 @@ uv run python scripts/bench_fan_traps.py               # summary and every case
 uv run python scripts/bench_fan_traps.py --json out.json
 ```
 
-It builds its own DuckDB files from seeded data in a temporary directory and needs no database; `tests/test_fan_trap_benchmark.py` pins the numbers above. The cases were written for this benchmark by the people who wrote OBQC, so read them as a floor for what it should catch, not as a sample of real queries -- additions are welcome, above all ones it gets wrong.
+It builds its own DuckDB files from seeded data in a temporary directory and needs no database. It runs with the server's defaults: no `.env` is read, no setting from the shell applies, and the home directory the server sees -- where its DuckDB driver keeps a credential salt -- is inside that temporary directory too; `tests/test_fan_trap_benchmark.py` pins the numbers above. The cases were written for this benchmark by the people who wrote OBQC, so read them as a floor for what it should catch, not as a sample of real queries -- additions are welcome, above all ones it gets wrong.
 
 ---
 
