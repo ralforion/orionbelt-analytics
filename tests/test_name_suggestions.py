@@ -186,6 +186,10 @@ def database() -> Iterator[duckdb.DuckDBPyConnection]:
         con.execute(f'CREATE TABLE "{table.name}" ({columns})')
     for name, body in VIEWS.items():
         con.execute(f"CREATE VIEW {name} AS {body}")
+    # The ontology's orders, in two more schemas.
+    for schema in ("sales", "archive"):
+        con.execute(f"CREATE SCHEMA {schema}")
+        con.execute(f"CREATE TABLE {schema}.orders AS SELECT * FROM orders")
     yield con
     con.close()
 
@@ -249,6 +253,22 @@ def test_a_business_name_is_shown_beside_the_table(validator: OBQCValidator) -> 
         ("SELECT o.totl FROM orders o", "o.totl", ["o.total"]),
         # Without an alias, under the name.
         ("SELECT orders.totl FROM orders", "orders.totl", ["orders.total"]),
+        # Its last part, where that alone names one table in sight,
+        ("SELECT totl FROM sales.orders", "totl", ["orders.total"]),
+        # and all of it where it does not: orders would be ambiguous.
+        (
+            "SELECT totl FROM sales.orders "
+            "JOIN archive.orders ON archive.orders.id = sales.orders.id",
+            "totl",
+            ["archive.orders.total", "sales.orders.total"],
+        ),
+        # Across a subquery's edge too.
+        (
+            "SELECT id FROM sales.orders WHERE EXISTS (SELECT 1 FROM archive.orders"
+            " WHERE archive.orders.id = sales.orders.id AND totl > 0)",
+            "totl",
+            ["archive.orders.total", "sales.orders.total"],
+        ),
         # Abbreviated.
         ("SELECT o.order_dt FROM orders o", "o.order_dt", ["o.order_date"]),
         # By its business name.

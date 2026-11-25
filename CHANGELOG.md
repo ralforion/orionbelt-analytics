@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are matched on spelling, word forms, word-by-word abbreviations and the
   business names from `apply_semantic_names`; a column is also found in
   another table the query could see (`o.status` offers `s.status`). Each
-  is written as the query can use it: under the table's alias, quoted for
-  the dialect where it must be. Deterministic, no synonyms. See
+  is written as the query can use it: under the table's alias, or its
+  schema too where the name alone would be ambiguous, quoted for the
+  dialect where it must be. Deterministic, no synonyms. See
   docs/obqc.md.
 - **Fan-trap benchmark** (`scripts/bench_fan_traps.py`): 29 queries that
   run and name only real tables and columns, 12 of which return a wrong

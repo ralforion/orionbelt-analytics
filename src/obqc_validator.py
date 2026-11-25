@@ -7,6 +7,7 @@ and fan-trap patterns without using LLM.
 
 import logging
 import re
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -256,8 +257,41 @@ class _Written:
     #: None when it has none.
     qualifier: str | None
     #: ``(table, qualifier)`` of every table, not CTE, it could see, innermost
-    #: first: the alias when the query gave one, else the name as written.
+    #: first: the alias when the query gave one, else the name as written --
+    #: its last part, or all of it where that alone would be ambiguous.
     sources: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class _Source:
+    """A table, not CTE, a reference can see, and how it can name it."""
+
+    #: The table's name, for its columns.
+    table: str
+    #: The name a bare qualifier would match, lower-cased: the alias, or the
+    #: last part of the name.
+    known_as: str
+    #: The alias, or the last part of the name as written (``orders``).
+    short: str
+    #: The alias, or the whole name as written (``sales.orders``).
+    full: str
+
+
+def _qualified(seen: Iterable[_Source]) -> tuple[tuple[str, str], ...]:
+    """``(table, qualifier)`` of each source, as a reference can name it.
+
+    The alias, when the table has one: its name is then out of sight. Else
+    the name, its last part when nothing else in sight is known by that, all
+    of it as written when something is -- beside ``archive.orders``,
+    ``orders`` is ambiguous, ``sales.orders`` is not.
+    """
+    sources = tuple(seen)
+    known = Counter(s.known_as for s in sources)
+    return tuple(
+        dict.fromkeys(
+            (s.table, s.short if known[s.known_as] == 1 else s.full) for s in sources
+        )
+    )
 
 
 @dataclass
@@ -1404,7 +1438,7 @@ class OBQCValidator:
         """Extract column references, excluding legal SELECT-alias references."""
         alias_refs = self._select_alias_references(parsed, result, dialect)
         scope_cache: dict[int, tuple[tuple[tuple[str, bool], ...], ...]] = {}
-        source_cache: dict[int, tuple[tuple[str, str], ...]] = {}
+        source_cache: dict[int, tuple[_Source, ...]] = {}
         sqlglot_dialect = self.DIALECT_MAP.get(dialect.lower(), "postgres")
 
         for column in parsed.find_all(exp.Column):
@@ -1461,7 +1495,11 @@ class OBQCValidator:
                     else None
                 ),
                 sources=(
-                    self._scope_sources(owner, source_cache, cte_refs, sqlglot_dialect)
+                    _qualified(
+                        self._scope_sources(
+                            owner, source_cache, cte_refs, sqlglot_dialect
+                        )
+                    )
                     if owner
                     else ()
                 ),
@@ -1473,15 +1511,15 @@ class OBQCValidator:
     def _scope_sources(
         self,
         select: exp.Select,
-        cache: dict[int, tuple[tuple[str, str], ...]],
+        cache: dict[int, tuple[_Source, ...]],
         cte_refs: set[int],
         dialect: str,
-    ) -> tuple[tuple[str, str], ...]:
-        """How a reference in *select* may qualify each table it can see.
+    ) -> tuple[_Source, ...]:
+        """The tables a reference in *select* can see, and how it can name them.
 
-        The same tables and order as :meth:`_scope_tables`, CTEs left out, as
-        ``(table name, qualifier)``: the alias when the query gave the table
-        one -- its name is then out of sight -- else its name as written.
+        The same tables and order as :meth:`_scope_tables`, CTEs left out.
+        Which name a reference uses depends on all of them, so
+        :func:`_qualified` chooses.
         """
         cached = cache.get(id(select))
         if cached is not None:
@@ -1493,8 +1531,27 @@ class OBQCValidator:
             if self._is_cte_reference(table, cte_refs):
                 continue
             alias = table.args.get("alias")
-            name = alias.this if alias is not None and alias.this else table.this
-            own.append((table.name, name.sql(dialect=dialect)))
+            if alias is not None and alias.this:
+                written = alias.this.sql(dialect=dialect)
+                own.append(_Source(table.name, alias.name.lower(), written, written))
+                continue
+            path = ".".join(
+                part.sql(dialect=dialect)
+                for part in (
+                    table.args.get("catalog"),
+                    table.args.get("db"),
+                    table.this,
+                )
+                if part
+            )
+            own.append(
+                _Source(
+                    table.name,
+                    table.name.lower(),
+                    table.this.sql(dialect=dialect),
+                    path,
+                )
+            )
         parent = None if self._is_cte_body(select) else select.parent_select
         outer = (
             self._scope_sources(parent, cache, cte_refs, dialect)
