@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-25
+
 ### Added
 - **Did you mean**: an OBQC error about a table or column that does not
   exist names the ones the query most likely meant, best first -- in the
