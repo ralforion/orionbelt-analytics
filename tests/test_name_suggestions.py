@@ -269,6 +269,34 @@ def test_a_business_name_is_shown_beside_the_table(validator: OBQCValidator) -> 
             "totl",
             ["archive.orders.total", "sales.orders.total"],
         ),
+        # A relation whose columns are not offered still takes its name.
+        *(
+            (f"SELECT totl FROM sales.orders CROSS JOIN {other}", "totl", meant)
+            for other in [
+                "(SELECT 0 AS total) orders",
+                "(VALUES (0)) AS orders(total)",
+                "UNNEST([0]) AS orders(total)",
+                "range(1) AS orders(total)",
+                "LATERAL (SELECT 0 AS total) orders",
+            ]
+            for meant in [["sales.orders.total"]]
+        ),
+        (
+            "SELECT totl FROM (sales.orders CROSS JOIN (SELECT 0 AS total) orders)",
+            "totl",
+            ["sales.orders.total"],
+        ),
+        # A CTE too, by its name or an alias: shipments has no total.
+        *(
+            (
+                f"WITH {cte} AS (SELECT 0 AS total) SELECT shipments.total"
+                " FROM sales.orders JOIN shipments"
+                f" ON shipments.order_id = sales.orders.id CROSS JOIN {used}",
+                "shipments.total",
+                ["sales.orders.total"],
+            )
+            for cte, used in [("orders", "orders"), ("c", "c AS orders")]
+        ),
         # Abbreviated.
         ("SELECT o.order_dt FROM orders o", "o.order_dt", ["o.order_date"]),
         # By its business name.

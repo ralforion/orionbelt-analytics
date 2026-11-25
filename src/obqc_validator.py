@@ -264,10 +264,12 @@ class _Written:
 
 @dataclass(frozen=True)
 class _Source:
-    """A table, not CTE, a reference can see, and how it can name it."""
+    """A relation a reference can see, and how it can name it."""
 
-    #: The table's name, for its columns.
-    table: str
+    #: The table's name, for its columns; None for a relation whose columns
+    #: the ontology does not describe (a CTE, a derived table, ``UNNEST``),
+    #: which is never offered but still takes the name it goes by.
+    table: str | None
     #: The name a bare qualifier would match, lower-cased: the alias, or the
     #: last part of the name.
     known_as: str
@@ -289,7 +291,9 @@ def _qualified(seen: Iterable[_Source]) -> tuple[tuple[str, str], ...]:
     known = Counter(s.known_as for s in sources)
     return tuple(
         dict.fromkeys(
-            (s.table, s.short if known[s.known_as] == 1 else s.full) for s in sources
+            (s.table, s.short if known[s.known_as] == 1 else s.full)
+            for s in sources
+            if s.table is not None
         )
     )
 
@@ -1517,9 +1521,9 @@ class OBQCValidator:
     ) -> tuple[_Source, ...]:
         """The tables a reference in *select* can see, and how it can name them.
 
-        The same tables and order as :meth:`_scope_tables`, CTEs left out.
-        Which name a reference uses depends on all of them, so
-        :func:`_qualified` chooses.
+        The same tables and order as :meth:`_scope_tables`, CTEs left out,
+        then the names of every other relation in sight. Which name a
+        reference uses depends on all of them, so :func:`_qualified` chooses.
         """
         cached = cache.get(id(select))
         if cached is not None:
@@ -1552,6 +1556,12 @@ class OBQCValidator:
                     path,
                 )
             )
+        # The other relations offer no columns, but a name they take is not
+        # free: beside (SELECT 0 AS total) orders, orders.total is ambiguous.
+        own += [
+            _Source(None, name.lower(), "", "")
+            for name in self._relation_names(select, cte_refs)
+        ]
         parent = None if self._is_cte_body(select) else select.parent_select
         outer = (
             self._scope_sources(parent, cache, cte_refs, dialect)
@@ -1561,6 +1571,38 @@ class OBQCValidator:
         sources = tuple(dict.fromkeys((*own, *outer)))
         cache[id(select)] = sources
         return sources
+
+    def _relation_names(self, select: exp.Select, cte_refs: set[int]) -> list[str]:
+        """Names of *select*'s relations other than the schema's tables.
+
+        A CTE, a derived table, ``VALUES``, ``UNNEST``, a table function,
+        ``LATERAL``: whatever its ``FROM``, its joins (also those inside
+        parentheses) and Spark's ``LATERAL VIEW`` name, by alias or, a CTE,
+        by its name.
+        """
+        from_ = select.args.get("from_") or select.args.get("from")
+        pending: list[exp.Expr] = [from_.this] if from_ is not None else []
+        pending += [join.this for join in select.args.get("joins") or []]
+        pending += list(select.args.get("laterals") or [])
+        names = []
+        while pending:
+            node = pending.pop()
+            if (
+                isinstance(node, exp.Subquery)
+                and not node.alias
+                and not isinstance(node.this, exp.Query)
+            ):
+                # Only parentheses, around a join: what they hold is in sight.
+                pending.append(node.this)
+                continue
+            pending += [join.this for join in node.args.get("joins") or []]
+            table = node if isinstance(node, exp.Table) and node.name else None
+            if table is not None and not self._is_cte_reference(table, cte_refs):
+                continue
+            name = node.alias or (table.name if table is not None else "")
+            if name:
+                names.append(name)
+        return names
 
     def _scope_tables(
         self,
