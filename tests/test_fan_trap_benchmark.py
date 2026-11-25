@@ -53,13 +53,14 @@ def observed(
         mp.setenv("USERPROFILE", str(home))
         mp.setenv("MCP_MASTER_PASSWORD", "not-for-a-benchmark")
         mp.setattr(dotenv.main.DotEnv, "__init__", spy)
+        before = dict(os.environ)
         outcome = bench.run()
-        environment = dict(os.environ)
+        after = dict(os.environ)
     return {
         "outcome": outcome,
         "dotenv_loads": loads,
         "home": sorted(p.name for p in home.iterdir()),
-        "environment": environment,
+        "environment": (before, after),
     }
 
 
@@ -74,9 +75,10 @@ def test_it_reads_no_env_file_and_writes_nothing_home(
 ) -> None:
     assert observed["dotenv_loads"] == []
     assert observed["home"] == []
-    # And it hands the environment back as it found it.
-    assert observed["environment"]["MCP_MASTER_PASSWORD"] == "not-for-a-benchmark"
-    assert "PYTHON_DOTENV_DISABLED" not in observed["environment"]
+    # And it hands the environment back as it found it, whatever that was.
+    before, after = observed["environment"]
+    assert after == before
+    assert after["MCP_MASTER_PASSWORD"] == "not-for-a-benchmark"
 
 
 def test_an_answer_that_merges_rows_has_no_percentage(bench: ModuleType) -> None:
