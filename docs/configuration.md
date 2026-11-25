@@ -577,7 +577,7 @@ The server validates `MCP_TRANSPORT` on startup. `sse` stops it with an error, s
 ## How OrionBelt Analytics names itself to your database
 
 Each connection OrionBelt Analytics opens carries the name
-`orionbelt-analytics/<version>`, for example `orionbelt-analytics/2.3.1`. Your
+`orionbelt-analytics/<version>`, for example `orionbelt-analytics/2.4.0`. Your
 database shows it next to the queries the server runs, so you can tell them
 apart from other tools' queries. OrionBelt Semantic Layer names itself the same
 way, as `orionbelt-semantic-layer/<version>`.
