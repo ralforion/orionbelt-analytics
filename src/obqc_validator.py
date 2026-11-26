@@ -21,6 +21,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
+from .derived_inlining import Schema, inlined, worth_inlining
 from .fan_trap_examples import (
     SHAPE_LEGS,
     SHAPE_SEMI_JOIN,
@@ -626,6 +627,10 @@ class OBQCValidator:
         # pairs of lower-cased table names declared owl:disjointWith each other
         # (sibling facts sharing a dimension — the canonical fan-trap shape).
         self._disjoint_pairs: set[frozenset] = set()
+        # The ontology's tables as sqlglot reads a schema, for writing CTEs
+        # into their readers; rebuilt when the schema cache is replaced.
+        self._inline_schema_cached: dict[str, dict[str, dict[str, str]]] = {}
+        self._inline_schema_for: OntologySchema | None = None
         # Database views: lower-cased name -> lower-cased output columns.
         # Views are deliberately absent from the ontology (a view pre-joins its
         # sources, so a class for it would restate what the base tables already
@@ -1292,6 +1297,9 @@ class OBQCValidator:
         self._validate_measure_aggregation(parsed, result, cte_refs)
         self._detect_fan_trap(
             result, blocking=not allow_fan_out, dialect=sqlglot_dialect
+        )
+        self._detect_fan_trap_inlined(
+            parsed, result, sqlglot_dialect, blocking=not allow_fan_out
         )
 
         # Set overall validity
@@ -4996,6 +5004,156 @@ class OBQCValidator:
                     }
 
         return list(findings.values())
+
+    #: Said of a fan-trap found once a CTE or derived table is written in.
+    INLINED_NOTE = (
+        " The join is inside a CTE or derived table, and the query reading it "
+        "aggregates the repeated rows."
+    )
+
+    def _detect_fan_trap_inlined(
+        self, parsed: exp.Expr, result: OBQCResult, dialect: str, blocking: bool
+    ) -> None:
+        """Rule: a fan-out inside a CTE or derived table, aggregated outside it.
+
+        ``WITH x AS (SELECT o.total FROM orders o JOIN order_items oi ON ...)
+        SELECT SUM(total) FROM x`` sums each order once per item, yet neither
+        SELECT alone shows it: the CTE aggregates nothing, the outer query
+        joins nothing. The fan-trap rules therefore judge the query once more
+        with every CTE and derived table that keeps its rows written into its
+        reader (:mod:`src.derived_inlining`), and once per branch of a UNION
+        ALL read as a relation. What they find there that the query as
+        written did not show is reported like any fan-trap, and says where the
+        join is.
+
+        A relation that groups, de-duplicates, numbers its rows by a window or
+        limits them is not written in, so the pre-aggregation and the
+        ``ROW_NUMBER() ... = 1`` that undo a fan-out still pass. A query
+        sqlglot cannot rewrite is judged as written only.
+        """
+        if self._schema_cache is None or not worth_inlining(parsed):
+            return
+        reported = self._reported_fan_traps(result)
+        notes = {i.message for i in result.issues}
+        for variant in inlined(parsed, dialect, self._inline_schema()):
+            scratch = OBQCResult(is_valid=True)
+            refs: set[int] = set()
+            self._extract_ctes(variant, scratch, refs)
+            self._extract_tables(variant, scratch, refs)
+            self._extract_joins(variant, scratch, refs)
+            self._detect_fan_trap(scratch, blocking=blocking, dialect=dialect)
+            fan_traps = [
+                i
+                for i in scratch.issues
+                if i.issue_type == OBQCIssueType.FAN_TRAP_DETECTED
+            ]
+            findings_issues = [i for i in fan_traps if i.severity != OBQCSeverity.INFO]
+            if len(findings_issues) != len(scratch.fan_trap_findings):
+                logger.debug("Fan-trap findings and issues do not pair; skipped")
+                continue
+            for finding, issue in zip(
+                scratch.fan_trap_findings, findings_issues, strict=True
+            ):
+                key = self._finding_key(finding)
+                before = reported.get(key)
+                if before is not None and not (
+                    before[0].get("assumed") and not finding.get("assumed")
+                ):
+                    continue
+                issue.message += self.INLINED_NOTE
+                issue.location = "Inside a CTE or derived table"
+                if before is None:
+                    result.fan_trap_findings.append(finding)
+                    result.issues.append(issue)
+                else:
+                    # Firmer evidence for the same tables: it replaces the
+                    # guess, which warned where this blocks.
+                    self._replace_fan_trap(result, before, (finding, issue))
+                reported[key] = (finding, issue)
+                result.fan_trap_risk = True
+                if (
+                    not blocking
+                    and not finding.get("assumed")
+                    and finding["kind"] != KIND_CONDITIONAL_ROW_COUNT
+                ):
+                    result.fan_trap_overridden = True
+            for note in fan_traps:
+                if note.severity == OBQCSeverity.INFO and note.message not in notes:
+                    notes.add(note.message)
+                    result.issues.append(note)
+
+    @staticmethod
+    def _reported_fan_traps(
+        result: OBQCResult,
+    ) -> dict[tuple[Any, ...], tuple[dict[str, Any], OBQCIssue | None]]:
+        """Each fan-trap finding so far, by :meth:`_finding_key`, with its issue.
+
+        The rules add one issue per finding, in the same order, so the two
+        pair up; where they do not, a finding's issue is unknown (None).
+        """
+        issues = [
+            i
+            for i in result.issues
+            if i.issue_type == OBQCIssueType.FAN_TRAP_DETECTED
+            and i.severity != OBQCSeverity.INFO
+        ]
+        paired = len(issues) == len(result.fan_trap_findings)
+        return {
+            OBQCValidator._finding_key(finding): (
+                finding,
+                issues[n] if paired else None,
+            )
+            for n, finding in enumerate(result.fan_trap_findings)
+        }
+
+    @staticmethod
+    def _replace_fan_trap(
+        result: OBQCResult,
+        before: tuple[dict[str, Any], OBQCIssue | None],
+        after: tuple[dict[str, Any], OBQCIssue],
+    ) -> None:
+        """Put *after*'s finding and issue where *before*'s were."""
+        findings = result.fan_trap_findings
+        at = next(n for n, f in enumerate(findings) if f is before[0])
+        findings[at] = after[0]
+        old_issue = before[1]
+        spot = next(
+            (n for n, i in enumerate(result.issues) if i is old_issue),
+            None,
+        )
+        if spot is None:
+            result.issues.append(after[1])
+        else:
+            result.issues[spot] = after[1]
+
+    @staticmethod
+    def _finding_key(finding: dict[str, Any]) -> tuple[Any, ...]:
+        """What makes two fan-trap findings the same one."""
+        return (
+            finding.get("kind"),
+            str(finding.get("measure_table", "")).lower(),
+            str(finding.get("fan_out_table", "")).lower(),
+            tuple(sorted(str(t).lower() for t in finding.get("tables", []))),
+        )
+
+    def _inline_schema(self) -> Schema | None:
+        """The ontology's tables as sqlglot reads a schema, built once per ontology.
+
+        Only the names matter -- to resolve an unqualified column or a star
+        inside a relation -- so every column is typed alike.
+        """
+        cache = self._schema_cache
+        if cache is None:
+            return None
+        if self._inline_schema_for is not cache:
+            schema: dict[str, dict[str, dict[str, str]]] = {}
+            for table in cache.tables.values():
+                schema.setdefault(table.schema_name or "public", {})[table.name] = {
+                    column.name: "text" for column in table.columns.values()
+                }
+            self._inline_schema_cached = schema
+            self._inline_schema_for = cache
+        return self._inline_schema_cached
 
     def _detect_fan_trap(
         self, result: OBQCResult, blocking: bool = True, dialect: str = "postgres"
