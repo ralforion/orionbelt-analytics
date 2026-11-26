@@ -243,6 +243,8 @@ class TestMCPToolsAsync:
                     "POSTGRES_DATABASE": "testdb",
                     "POSTGRES_USERNAME": "testuser",
                     "POSTGRES_PASSWORD": "testpass",
+                    # No named connections, whatever a developer's .env says.
+                    "OBA_DATABASES": "",
                 },
             ),
         ):

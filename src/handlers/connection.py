@@ -111,7 +111,20 @@ async def connect_database(
                 f"Invalid database type '{db_type}'. "
                 f"Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
             ).to_response()
-        entry = unnamed_entry(db_type)
+        # A type with named connections is those connections: its unprefixed
+        # variables are only their shared defaults, and connecting with them
+        # would step around how each one signs in (DB_<NAME>_AUTH=user).
+        of_type = [e for e in configured if e.db_type == db_type]
+        if len(of_type) == 1:
+            entry = of_type[0]
+        elif of_type:
+            names = ", ".join(e.name for e in of_type)
+            return ValidationError(
+                f"Several {db_type} databases are configured: {names}. Pass "
+                "database=<name>; list_databases says what each holds."
+            ).to_response()
+        else:
+            entry = unnamed_entry(db_type)
     elif len(configured) == 1:
         entry = configured[0]
     else:

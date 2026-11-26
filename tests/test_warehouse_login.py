@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from aiohttp import web
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 import src.drivers.databricks as databricks_driver
 import src.main as main_module
@@ -394,7 +395,8 @@ async def test_each_user_has_a_connection_of_their_own(monkeypatch):
     alice = await _connected_as(monkeypatch, ALICE)
     bob = await _connected_as(monkeypatch, BOB)
     alice_again = await _connected_as(monkeypatch, ALICE, token="dbx-rotated")
-    assert alice.auth_identity == ALICE and bob.auth_identity == BOB
+    assert alice.auth_identity.startswith(f"{ALICE}#")
+    assert bob.auth_identity.startswith(f"{BOB}#")
     assert _get_connection_fingerprint(alice) != _get_connection_fingerprint(bob)
     # A new warehouse token is the same user, the same workspace.
     assert _get_connection_fingerprint(alice) == _get_connection_fingerprint(
@@ -515,9 +517,10 @@ async def test_a_signed_in_caller_connects_as_themself(fin, monkeypatch):
         connected = await client.call_tool("connect_database", {"database": "fin"})
         assert "Successfully connected to fin (databricks)" in connected.data
         (session,) = list(state_module._server_state._sessions.values())
-        assert session.db_manager.auth_identity == ALICE
-        # Each call renews ahead: this token lives 60 s, inside the margin.
-        await client.call_tool("list_databases", {})
+        assert session.db_manager.auth_identity.startswith(f"{ALICE}#")
+        # Each call that may use the connection renews ahead: this token lives
+        # 60 s, inside the margin. (list_databases does not use it.)
+        await client.call_tool("list_semantic_models", {})
     assert len(fin.calls) == 2
     assert all(c["form"]["subject_token"] == SUBJECT for c in fin.calls)
 
@@ -537,3 +540,115 @@ async def test_the_listing_marks_the_database(fin, monkeypatch):
         listed = await client.call_tool("list_databases", {})
     text = listed.data if isinstance(listed.data, str) else json.dumps(listed.data)
     assert "as the signed-in user" in text
+
+
+# --- review: no service fallback, identity, redaction, switching ----------------
+
+
+async def test_db_type_never_steps_around_a_named_login(fin, monkeypatch):
+    """A type with named connections is them, not its shared service defaults."""
+    for name, value in {
+        "DATABRICKS_SERVER_HOSTNAME": "adb-1.azuredatabricks.net",
+        "DATABRICKS_HTTP_PATH": "/sql/1.0/warehouses/abc",
+        "DATABRICKS_ACCESS_TOKEN": "dapi-service",
+    }.items():
+        monkeypatch.setenv(name, value)
+    _signed_in_as(monkeypatch, None, None)
+    _FakeDriver.given = []
+    async with Client(mcp) as client:
+        result = await client.call_tool("connect_database", {"db_type": "databricks"})
+    text = result.data if isinstance(result.data, str) else json.dumps(result.data)
+    assert "SIGN_IN_REQUIRED" in text
+    assert _FakeDriver.given == []
+
+
+async def test_db_type_with_several_named_connections_asks_which(fin, monkeypatch):
+    monkeypatch.setenv("OBA_DATABASES", "fin,ops")
+    monkeypatch.setenv("DB_OPS_TYPE", "databricks")
+    _signed_in_as(monkeypatch, ALICE, SUBJECT)
+    async with Client(mcp) as client:
+        result = await client.call_tool("connect_database", {"db_type": "databricks"})
+    text = result.data if isinstance(result.data, str) else json.dumps(result.data)
+    assert "Several databricks databases" in text and fin.calls == []
+
+
+async def test_connections_that_sign_in_differently_are_two(monkeypatch):
+    """Another service principal sees other things: not the same runtime."""
+    monkeypatch.setattr(databricks_driver, "DatabricksDriver", _FakeDriver)
+
+    async def connected(env: dict[str, str]) -> Any:
+        login = UserLogin(
+            LoginSource.from_entry(_entry(env)), ALICE, post=_TokenService()
+        )
+        await login.renew(ALICE, SUBJECT)
+        manager = DatabaseManager()
+        monkeypatch.setattr(manager, "_sync_engine_from_driver", lambda: None)
+        assert manager.connect_databricks(
+            "adb-1.azuredatabricks.net",
+            "/p",
+            None,
+            "finance",
+            "gold",
+            user_login=login,
+        )
+        return manager
+
+    plain = await connected(FIN)
+    privileged = await connected({**FIN, "DB_FIN_OAUTH_CLIENT_ID": "sp-admin"})
+    restricted = await connected({**FIN, "DB_FIN_OAUTH_CLIENT_ID": "sp-readonly"})
+    prints = {_get_connection_fingerprint(m) for m in (plain, privileged, restricted)}
+    assert len(prints) == 3
+    assert "sp-admin" in privileged.auth_identity
+    again = await connected({**FIN, "DB_FIN_OAUTH_CLIENT_ID": "sp-admin"})
+    assert _get_connection_fingerprint(again) == _get_connection_fingerprint(privileged)
+
+
+async def test_an_echoed_token_or_secret_never_comes_back():
+    """A token service that repeats its input must not hand the token back."""
+
+    class _Echo:
+        async def __call__(self, url, form, auth):
+            echoed = " ".join(dict(form).values()) + " " + " ".join(auth or ())
+            return 400, {"error": "invalid_request", "error_description": echoed}
+
+    with pytest.raises(SignInRefusedError) as raised:
+        await exchange(LoginSource.from_entry(_entry()), SUBJECT, post=_Echo())
+    assert SUBJECT not in str(raised.value) and "[redacted]" in str(raised.value)
+    source = LoginSource(
+        name="sf", dialect="snowflake", exchange=STANDARD_EXCHANGE, scope="s"
+    )
+    with pytest.raises(SignInRefusedError) as raised:
+        await exchange(
+            source,
+            SUBJECT,
+            IdpClient("our-client", "s3cr t/!"),
+            "https://login.example/token",
+            _Echo(),
+        )
+    message = str(raised.value)
+    assert SUBJECT not in message
+    assert "s3cr t/!" not in message and "s3cr%20t%2F%21" not in message
+    obo = LoginSource(name="sf", dialect="snowflake", exchange=ENTRA_OBO, scope="s")
+    with pytest.raises(SignInRefusedError) as raised:
+        await exchange(
+            obo, SUBJECT, IdpClient("c", "obo-secret"), "https://l/t", _Echo()
+        )
+    assert "obo-secret" not in str(raised.value) and SUBJECT not in str(raised.value)
+
+
+async def test_a_failed_renewal_never_keeps_a_user_from_switching(fin, monkeypatch):
+    """list_databases and connect_database do not use the current connection."""
+    _signed_in_as(monkeypatch, ALICE, SUBJECT)
+    async with Client(mcp) as client:
+        connected = await client.call_tool("connect_database", {"database": "fin"})
+        assert "Successfully connected" in connected.data
+        # From now on the warehouse refuses this user.
+        fin.answers = [(400, {"error": "invalid_grant"})]
+        fin.calls.clear()
+        listed = await client.call_tool("list_databases", {})
+        assert "fin" in json.dumps(listed.data)
+        with pytest.raises(ToolError, match="DATA_SOURCE_SIGN_IN_REFUSED"):
+            await client.call_tool("list_schemas", {})
+        # Switching to another database is not held up by the failed one.
+        switched = await client.call_tool("connect_database", {"db_type": "duckdb"})
+        assert "Successfully connected to duckdb" in switched.data
