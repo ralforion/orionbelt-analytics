@@ -346,3 +346,20 @@ def test_names_a_set_operation_or_a_list_does_not_keep(
 ) -> None:
     (issue,) = _stray(validator, sql)
     assert issue.message.startswith("'address' in 'address.city'")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # id + 1 is matched by a name OBQC does not know: three columns, id,
+        # (id + 1), address -- so calc renames the second, not address.
+        "SELECT address.city FROM (SELECT id FROM customers UNION ALL BY NAME "
+        "SELECT id + 1, address FROM customers) d(id, calc)",
+        "WITH c(id, calc) AS (SELECT id FROM customers UNION ALL BY NAME "
+        "SELECT id + 1, address FROM customers) SELECT address.city FROM c",
+    ],
+)
+def test_a_by_name_union_with_an_unnamed_output_is_unknown(
+    validator: OBQCValidator, sql: str
+) -> None:
+    assert _stray(validator, sql) == []

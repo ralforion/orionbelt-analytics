@@ -1701,9 +1701,12 @@ class OBQCValidator:
                 # BY NAME ON (...): which columns it keeps is not read here.
                 return None
             right = OBQCValidator._query_outputs(query.right)
-            if left is None or right is None:
+            # An unnamed output is matched by the name the database gives it
+            # (DuckDB: its text), which is not read here: where one is, which
+            # columns the union has, and in what order, is unknown.
+            if left is None or right is None or "" in left or "" in right:
                 return None
-            return (*left, *(n for n in right if n and n not in left))
+            return (*left, *(n for n in right if n not in left))
         if not isinstance(query, exp.Query):
             return None
         projections = query.selects
