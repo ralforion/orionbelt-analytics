@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A fan-out inside a CTE or derived table** was not judged where its rows
+  are added up: `WITH x AS (SELECT o.total FROM orders o JOIN order_items
+  oi ...) SELECT SUM(total) FROM x` sums each order once per item, but the
+  CTE aggregates nothing and the outer query joins nothing, so it passed.
+  The fan-trap rules now also judge the query with every CTE and derived
+  table that keeps its rows written into its reader -- a CTE read twice in
+  both places, an inner-joined derived table like one in `FROM`, a `UNION
+  ALL` one branch at a time. Pre-aggregation, `DISTINCT` and `ROW_NUMBER()
+  ... = 1` still pass. See docs/obqc.md.
+
 ## [2.4.0] - 2026-11-25
 
 ### Added
