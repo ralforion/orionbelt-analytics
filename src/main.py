@@ -975,7 +975,11 @@ async def execute_sql_query(
     not "clean". `blocking` says whether the verdict actually stopped this query.
     Not every finding blocks: a `conditional_row_count` (SUM(CASE WHEN ... THEN 1
     END) over a join that repeats what it counts) is reported as a warning,
-    because the same shape is a correct star-join idiom.
+    because the same shape is a correct star-join idiom. A finding may carry
+    `example`: a sketch of the query to write instead -- one leg per fact
+    combined by UNION ALL, or an EXISTS semi-join -- with the query's tables
+    and join columns and `<...>` placeholders. Adapt it to the question; it
+    is not SQL and does not run as it stands.
 
     REQUIRES: connect_database must be called first.
 

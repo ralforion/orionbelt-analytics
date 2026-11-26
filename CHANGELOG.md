@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Sketches of the fix**: a fan-trap finding carries `example` when the
+  query's shape says how to write it instead -- `union_all_legs`, one leg
+  per fact combined by `UNION ALL`, when both tables are summed (sales lines
+  and their returns, an order's items and payments), or `semi_join`, an
+  `EXISTS`, when the table that fans out only filters ("orders that contain
+  a book"). Written with the query's tables and join columns, and `<...>`
+  placeholders for what only the question decides, so it is adapted rather
+  than run: sent back unchanged, it fails to parse. Filled in, it passes the
+  check. The suggestion says which fix it is. See docs/obqc.md.
+- **Fan-trap benchmark: one fact pointing at another.** A `returns` table,
+  each return of one order line, and five cases: sold and refunded per
+  category, the value of returned lines, refunds per customer through the
+  line. 34 cases, 14 wrong; OBQC blocks 12 with declared or checked keys,
+  11 of them with a sketch of the fix, and lets 19 of the 20 right answers
+  through. The benchmark records each case's sketch shape.
+
 ## [2.4.0] - 2026-11-25
 
 ### Added

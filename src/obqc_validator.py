@@ -21,6 +21,14 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from .constants import DB_SQLGLOT_DIALECTS, OBA_NAMESPACE
+from .fan_trap_examples import (
+    SHAPE_LEGS,
+    SHAPE_SEMI_JOIN,
+    Link,
+    only_with,
+    semi_join,
+    union_all_legs,
+)
 from .group_grain import Keyed, kept_once, output_at
 from .name_suggestions import LIMIT, Match, closest, did_you_mean, listing, sql_name
 from .personal_data import enabled as personal_data_enabled
@@ -157,6 +165,12 @@ KIND_MEASURE_ACROSS_FAN_OUT = "measure_across_fan_out"
 KIND_DISJOINT_FACTS = "disjoint_facts"
 KIND_MULTIPLE_FAN_OUT_JOINS = "multiple_fan_out_joins"
 KIND_CONDITIONAL_ROW_COUNT = "conditional_row_count"
+
+#: Appended to a fan-trap suggestion whose finding carries a sketch.
+SKETCH_NOTE = (
+    " A sketch of the fix, with this query's tables and join columns, is in "
+    "obqc_fan_trap.findings (example); complete its <...> placeholders."
+)
 
 FAN_TRAP_KINDS = (
     KIND_MEASURE_ACROSS_FAN_OUT,
@@ -1261,7 +1275,9 @@ class OBQCValidator:
         )
         self._validate_aggregation_context(parsed, result)
         self._validate_measure_aggregation(parsed, result, cte_refs)
-        self._detect_fan_trap(result, blocking=not allow_fan_out)
+        self._detect_fan_trap(
+            result, blocking=not allow_fan_out, dialect=sqlglot_dialect
+        )
 
         # Set overall validity
         result.is_valid = not any(
@@ -1826,6 +1842,10 @@ class OBQCValidator:
                 if scope_aggregates and select.args.get("joins")
                 else set()
             )
+            # What a fan-trap sketch needs to know of the grouping: whether
+            # there is one, and which tables its keys come from.
+            grouped = select.args.get("group") is not None
+            group_tables = self._group_tables(select, alias_map) if grouped else set()
 
             for join in select.args.get("joins") or []:
                 join_info: dict[str, Any] = {
@@ -1856,6 +1876,14 @@ class OBQCValidator:
                     "measure_tables": measure_tables,
                     "counted_tables": counted_tables,
                     "kept_once": grain_kept,
+                    # LEFT, RIGHT, FULL, or "" for an inner join. "type" holds
+                    # the join's kind, which sqlglot leaves empty for a LEFT
+                    # JOIN, so it reads INNER there.
+                    "side": (join.side or "").upper(),
+                    "grouped": grouped,
+                    # Lower-cased tables the GROUP BY keys come from; None
+                    # when that is not known for certain.
+                    "group_tables": group_tables,
                 }
 
                 # How to name this join in a message. A joined subquery has
@@ -2423,6 +2451,66 @@ class OBQCValidator:
                 if len(owners) == 1:
                     tables.add(owners[0])
 
+        return tables
+
+    def _group_tables(
+        self, select: exp.Select, alias_map: dict[str, str]
+    ) -> set[str] | None:
+        """Tables this SELECT's GROUP BY keys are taken from, lower-cased.
+
+        A key may be a column, an output's position (``GROUP BY 1``) or an
+        output's alias; an expression contributes the tables of its columns.
+        Only a fan-trap sketch reads this, and one built on a guess shows the
+        wrong shape, so anything not certain gives None: ``GROUP BY ALL``, a
+        grouping set, a position behind a star, a qualifier that names no
+        table of the scope, or a bare column no single table declares.
+
+        Args:
+            select: The SELECT, which has a GROUP BY.
+            alias_map: This scope's alias -> table name map.
+
+        Returns:
+            The tables, or None when they are not known for certain.
+        """
+        group = select.args.get("group")
+        if group is None:
+            return set()
+        if group.args.get("all") or any(
+            group.args.get(arg) for arg in ("rollup", "cube", "grouping_sets")
+        ):
+            return None
+        outputs = {
+            p.alias.lower(): p.this
+            for p in select.expressions
+            if isinstance(p, exp.Alias) and p.alias
+        }
+        tables: set[str] = set()
+        for key in group.expressions:
+            if isinstance(key, _GROUPING_SET_CONSTRUCTS):
+                return None
+            target = output_at(select.expressions, key)
+            if target is None and isinstance(key, exp.Literal) and not key.is_string:
+                return None
+            # An output alias, unless a column of that name is in scope: the
+            # column is what most dialects read then.
+            if (
+                target is None
+                and isinstance(key, exp.Column)
+                and not key.table
+                and not self._tables_declaring(key.name, alias_map)
+            ):
+                target = outputs.get(key.name.lower())
+            for column in (target or key).find_all(exp.Column):
+                if column.table:
+                    resolved = alias_map.get(column.table.lower())
+                    if not resolved:
+                        return None
+                    tables.add(resolved.lower())
+                    continue
+                owners = self._tables_declaring(column.name, alias_map)
+                if len(owners) != 1:
+                    return None
+                tables.add(owners[0])
         return tables
 
     def _tables_declaring(self, column: str, alias_map: dict[str, str]) -> list[str]:
@@ -4170,11 +4258,221 @@ class OBQCValidator:
                     )
                 )
 
+    def _table_name(self, table: str) -> str:
+        """*table* as the ontology names it, else as the query wrote it."""
+        schema = (
+            self._schema_cache.tables.get(table.lower()) if self._schema_cache else None
+        )
+        return schema.name if schema else table
+
+    @staticmethod
+    def _scope_joins(result: OBQCResult, scope_id: Any) -> list[dict[str, Any]]:
+        return [j for j in result.parsed_joins if j.get("scope_id") == scope_id]
+
+    def _scope_link(
+        self, joins: list[dict[str, Any]], table: str, toward: set[str] | None = None
+    ) -> Link | None:
+        """The many-to-one join by which *table* reaches another table of the scope.
+
+        What a leg of a sketch starts with on its way to the group keys: an
+        order item reaches its customer through its order. Read off the joins
+        the query wrote, so the sketch names the key the query already uses.
+
+        Args:
+            joins: The scope's joins.
+            table: The leg's table.
+            toward: Only parents among these, lower-cased; any when None.
+        """
+        wanted = table.lower()
+        for join in joins:
+            ends = [join.get("table") or "", *join.get("on_tables", [])]
+            if wanted not in (e.lower() for e in ends):
+                continue
+            for other in ends:
+                if not other or other.lower() == wanted:
+                    continue
+                if toward is not None and other.lower() not in toward:
+                    continue
+                for rel in self._join_relationships(
+                    table, other, join.get("on_comparisons", frozenset())
+                ):
+                    if (
+                        rel.relationship_type == "many_to_one"
+                        and rel.from_table.lower() == wanted
+                        and rel.to_table.lower() == other.lower()
+                    ):
+                        return Link(rel.from_table, rel.to_table, rel.pairs)
+        return None
+
+    @staticmethod
+    def _reachable(joins: list[dict[str, Any]], start: str, without: str) -> set[str]:
+        """Tables the scope's joins connect to *start* without passing *without*."""
+        edges: dict[str, set[str]] = {}
+        for join in joins:
+            table = (join.get("table") or "").lower()
+            for anchor in join.get("on_tables", []):
+                a = anchor.lower()
+                if table and a != table:
+                    edges.setdefault(table, set()).add(a)
+                    edges.setdefault(a, set()).add(table)
+        seen = {start.lower()}
+        todo = [start.lower()]
+        while todo:
+            for nxt in edges.get(todo.pop(), set()):
+                if nxt not in seen and nxt != without.lower():
+                    seen.add(nxt)
+                    todo.append(nxt)
+        return seen
+
+    def _across_example(
+        self,
+        result: OBQCResult,
+        join_info: dict[str, Any],
+        measure: str,
+        fanning: str,
+        rel: RelationshipInfo,
+        dialect: str,
+    ) -> dict[str, str] | None:
+        """A sketch of the query that sums *measure* without *fanning* repeating it.
+
+        - Both summed (sales and their returns): one leg each. The returns leg
+          reaches the group keys through its sale, by the key the query joins.
+        - *fanning* only joined, as a filter, by an inner join: a semi-join.
+          Only when nothing else needs it -- every group key and every other
+          measured table is reached from *measure* without passing through
+          *fanning* -- since the semi-join drops it from the query.
+
+        None for every other shape, which keeps the prose suggestion alone:
+        an outer join to a table it does not measure filters nothing, so
+        EXISTS would change the answer, and grouping by *fanning* has no
+        shape that keeps the question.
+        """
+        if not (
+            rel.from_table.lower() == fanning.lower()
+            and rel.to_table.lower() == measure.lower()
+        ):
+            # A lookup whose target repeats: no child to read on its own.
+            return None
+        link = Link(rel.from_table, rel.to_table, rel.pairs)
+        grouped = bool(join_info.get("grouped"))
+        measured = join_info.get("measure_tables") or set()
+        if fanning.lower() in measured:
+            sql = union_all_legs(
+                [rel.to_table, rel.from_table], {rel.from_table: link}, dialect, grouped
+            )
+            return {
+                "shape": SHAPE_LEGS,
+                "sql": f"{sql}\n{only_with(rel.to_table, link, dialect)}",
+            }
+        group_tables = join_info.get("group_tables")
+        if group_tables is None or join_info.get("side"):
+            return None
+        joins = self._scope_joins(result, join_info.get("scope_id"))
+        needed = (set(group_tables) | set(measured)) - {measure.lower()}
+        if not needed <= self._reachable(joins, measure, without=fanning):
+            return None
+        return {
+            "shape": SHAPE_SEMI_JOIN,
+            "sql": semi_join(rel.to_table, link, dialect, grouped),
+        }
+
+    def _legs_example(
+        self,
+        result: OBQCResult,
+        scope_id: Any,
+        tables: Iterable[str],
+        dialect: str,
+    ) -> dict[str, str] | None:
+        """One leg per measured table of *tables*, when there are two or more.
+
+        For two facts that share a parent -- items and payments of an order --
+        each leg starts with the join to that parent the query wrote.
+        """
+        joins = self._scope_joins(result, scope_id)
+        if not joins:
+            return None
+        measured = joins[0].get("measure_tables") or set()
+        legs = sorted({t.lower() for t in tables} & measured)
+        if len(legs) < 2:
+            return None
+        legs_set = set(legs)
+        scope = {
+            t.lower()
+            for j in joins
+            for t in (j.get("table") or "", *j.get("on_tables", []))
+            if t
+        }
+        links = {}
+        for leg in legs:
+            link = self._scope_link(joins, leg, toward=scope - legs_set)
+            if link is not None:
+                links[link.child] = link
+        names = [self._table_name(t) for t in legs]
+        links = {self._table_name(child): link for child, link in links.items()}
+        return {
+            "shape": SHAPE_LEGS,
+            "sql": union_all_legs(names, links, dialect, bool(joins[0].get("grouped"))),
+        }
+
+    def _across_suggestion(
+        self, finding: dict[str, Any], via: frozenset[str] | None
+    ) -> str:
+        """What to do about a measure repeated by a fan-out, matching its sketch.
+
+        A bridge table's own advice comes first (:meth:`_bridge_suggestion`).
+        """
+        measure, fanning = finding["measure_table"], finding["fan_out_table"]
+        shape = (finding.get("example") or {}).get("shape")
+        bridge = self._bridge_suggestion(measure, fanning, via)
+        if bridge:
+            return bridge + (SKETCH_NOTE if shape else "")
+        if shape == SHAPE_SEMI_JOIN:
+            return (
+                f"{fanning} is joined only to filter {measure}: test it with "
+                f"EXISTS instead of joining, so each {measure} row is read once."
+                + SKETCH_NOTE
+            )
+        if shape == SHAPE_LEGS:
+            return (
+                f"Aggregate {measure} and {fanning} separately and combine them "
+                "with UNION ALL, one leg per fact (Composite Fact Layer), or "
+                f"pre-aggregate {fanning} per {measure} row in a CTE and join "
+                "that." + SKETCH_NOTE
+            )
+        return (
+            f"Pre-aggregate {fanning} in a CTE and join the one row per "
+            f"{measure} that produces, or aggregate each fact separately and "
+            "combine with UNION ALL (Composite Fact Layer). COUNT(DISTINCT ...) "
+            "also reads correctly across a fan-out."
+        )
+
+    def _disjoint_example(
+        self, result: OBQCResult, pairs: set[frozenset], dialect: str
+    ) -> dict[str, str] | None:
+        """A legs sketch for the first aggregating SELECT holding a disjoint pair."""
+        scopes: dict[Any, set[str]] = {}
+        for join in result.parsed_joins:
+            if join.get("scope_sensitive"):
+                tables = scopes.setdefault(join.get("scope_id"), set())
+                tables.update(
+                    t.lower()
+                    for t in (join.get("table") or "", *join.get("on_tables", []))
+                    if t
+                )
+        for scope_id, tables in scopes.items():
+            hits = {t for pair in pairs if pair <= tables for t in pair}
+            if hits:
+                example = self._legs_example(result, scope_id, hits, dialect)
+                if example:
+                    return example
+        return None
+
     def _inflated_measures(
         self,
         result: OBQCResult,
         key: str = "measure_tables",
         kind: str = "measure_across_fan_out",
+        dialect: str = "postgres",
     ) -> list[dict[str, Any]]:
         """Joins that repeat rows a measure in the same SELECT is taken from.
 
@@ -4198,9 +4496,12 @@ class OBQCValidator:
                 aggregate takes its value from, or the tables a constant-valued
                 conditional aggregate counts by.
             kind: Value for the finding's ``kind`` field.
+            dialect: sqlglot dialect a measure finding's sketch is written in.
 
         Returns:
             One finding per (measure table, fan-out table) pair, deduplicated.
+            A measure finding carries ``example`` when a sketch of the fix
+            fits its shape (:meth:`_across_example`).
         """
         # One finding per (measure table, fan-out table). The same pair may
         # be joined by different keys in different SELECTs; the firmest
@@ -4259,6 +4560,13 @@ class OBQCValidator:
                         if compared and rel.from_table.lower() == other.lower()
                         else None
                     )
+                    example = (
+                        self._across_example(
+                            result, join_info, measure_table, other, rel, dialect
+                        )
+                        if key == "measure_tables"
+                        else None
+                    )
                     findings[pair] = {
                         "kind": kind,
                         "measure_table": measure_table,
@@ -4267,12 +4575,15 @@ class OBQCValidator:
                         "relationship": self._describe(rel),
                         # Only naming backs it: reported, never blocking.
                         "assumed": rel.assumed,
+                        **({"example": example} if example else {}),
                         "_via": via,
                     }
 
         return list(findings.values())
 
-    def _detect_fan_trap(self, result: OBQCResult, blocking: bool = True) -> None:
+    def _detect_fan_trap(
+        self, result: OBQCResult, blocking: bool = True, dialect: str = "postgres"
+    ) -> None:
         """Rule: Detect fan-trap patterns.
 
         Three findings, strongest first:
@@ -4293,6 +4604,7 @@ class OBQCValidator:
             result: Result to record findings on.
             blocking: Whether a finding blocks the query (ERROR) or merely
                 annotates it (WARNING).
+            dialect: sqlglot dialect the sketches of a fix are written in.
         """
         severity = OBQCSeverity.ERROR if blocking else OBQCSeverity.WARNING
 
@@ -4339,7 +4651,7 @@ class OBQCValidator:
         #
         # The most direct evidence there is: a table is summed, and a join in
         # the same SELECT repeats its rows. One such join is enough.
-        inflated = self._inflated_measures(result)
+        inflated = self._inflated_measures(result, dialect=dialect)
         if inflated:
             for finding in inflated:
                 via = finding.pop("_via", None)
@@ -4359,13 +4671,7 @@ class OBQCValidator:
                             + (assumption(finding["relationship"]) if assumed else "")
                         ),
                         location="Query structure",
-                        suggestion=self._bridge_suggestion(measure, fanning, via)
-                        or (
-                            f"Pre-aggregate {fanning} in a CTE and join the one row per "
-                            f"{anchor} that produces, or aggregate each fact separately "
-                            "and combine with UNION ALL (Composite Fact Layer). "
-                            "COUNT(DISTINCT ...) also reads correctly across a fan-out."
-                        ),
+                        suggestion=self._across_suggestion(finding, via),
                         related_entities=sorted({measure, fanning, anchor}),
                     )
                 )
@@ -4390,8 +4696,14 @@ class OBQCValidator:
             # Blocks when one pair's axiom stands on firm ground; generated
             # from guessed relationships alone, it is a guess as well.
             assumed = all(self._disjointness_assumed(pair) for pair in disjoint_hits)
+            example = self._disjoint_example(result, disjoint_hits, dialect)
             record(
-                {"kind": KIND_DISJOINT_FACTS, "tables": involved, "assumed": assumed},
+                {
+                    "kind": KIND_DISJOINT_FACTS,
+                    "tables": involved,
+                    "assumed": assumed,
+                    **({"example": example} if example else {}),
+                },
                 blocks=not assumed,
             )
             result.issues.append(
@@ -4409,6 +4721,7 @@ class OBQCValidator:
                         "These facts are at different grains sharing a common dimension. "
                         "Aggregate each fact separately and combine with UNION ALL "
                         "(Composite Fact Layer), or pre-aggregate in CTEs before joining."
+                        + (SKETCH_NOTE if example else "")
                     ),
                     related_entities=involved,
                 )
@@ -4506,22 +4819,24 @@ class OBQCValidator:
         def scope_blocks(fan_outs: list[tuple[str, bool]]) -> bool:
             return sum(1 for _, is_assumed in fan_outs if not is_assumed) >= 2
 
-        worst_scope = max(
-            fan_outs_by_scope.values(),
-            key=lambda fan_outs: (scope_blocks(fan_outs), len(fan_outs)),
-            default=[],
+        worst_id, worst_scope = max(
+            fan_outs_by_scope.items(),
+            key=lambda item: (scope_blocks(item[1]), len(item[1])),
+            default=(None, []),
         )
         one_to_many_count = len(worst_scope)
         involved_tables = [table for table, _ in worst_scope]
         assumed = not scope_blocks(worst_scope)
 
         if one_to_many_count >= 2:
+            example = self._legs_example(result, worst_id, involved_tables, dialect)
             record(
                 {
                     "kind": KIND_MULTIPLE_FAN_OUT_JOINS,
                     "tables": sorted(set(involved_tables)),
                     "join_count": one_to_many_count,
                     "assumed": assumed,
+                    **({"example": example} if example else {}),
                 },
                 blocks=not assumed,
             )
@@ -4537,7 +4852,8 @@ class OBQCValidator:
                     location="Query structure",
                     suggestion=(
                         "Use UNION ALL pattern for separate aggregations per fact table, "
-                        "or use CTEs to pre-aggregate before joining"
+                        "or use CTEs to pre-aggregate before joining."
+                        + (SKETCH_NOTE if example else "")
                     ),
                     related_entities=list(set(involved_tables)),
                 )
