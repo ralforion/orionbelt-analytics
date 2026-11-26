@@ -321,6 +321,24 @@ def _qualified(seen: Iterable[_Source]) -> tuple[tuple[str, str], ...]:
     )
 
 
+def _renamed(
+    outputs: tuple[str, ...] | None, columns: list[str]
+) -> tuple[str, ...] | None:
+    """*outputs* under a column alias list: renamed by position, the rest kept.
+
+    Unknown outputs stay unknown: ``(SELECT * ...) d(customer_id)`` renames
+    the first column only, and the others are whatever the star holds.
+    """
+    if outputs is None or not columns:
+        return outputs
+    return (*columns, *outputs[len(columns) :])
+
+
+def _names(outputs: tuple[str, ...] | None) -> frozenset[str] | None:
+    """The named ones of *outputs*; None when they are not known."""
+    return None if outputs is None else frozenset(n for n in outputs if n)
+
+
 @dataclass
 class OBQCResult:
     """Complete OBQC validation result."""
@@ -352,6 +370,12 @@ class OBQCResult:
         tuple[str, tuple[tuple[tuple[str, bool], ...], ...], _Written]
     ] = field(default_factory=list)
     parsed_joins: list[dict[str, Any]] = field(default_factory=list)
+    # Column references whose qualifier names nothing the reference can see:
+    # (the reference as written, its qualifier, its column, what is in sight
+    # that has that column, as the query could write it).
+    stray_qualifiers: list[tuple[str, str, str, tuple[str, ...]]] = field(
+        default_factory=list
+    )
     # Tables of each SELECT that applies an aggregate, in its own scope. Only
     # these can be multiplied by that SELECT's joins, so fan-trap rules judge
     # them rather than every table named anywhere in the query.
@@ -1279,6 +1303,7 @@ class OBQCValidator:
         # Run validation rules
         self._validate_tables(result, sqlglot_dialect)
         self._validate_columns(result, sqlglot_dialect)
+        self._validate_qualifiers(result)
         self._validate_joins(parsed, result, cte_refs)
         self._validate_table_families(result)
         self._validate_personal_data(parsed, result)
@@ -1509,6 +1534,19 @@ class OBQCValidator:
                     continue
                 if source is not None and source.name:
                     scoped_ref = f"{source.name}.{column.name}"
+                elif owner is not None:
+                    seen = self._scope_sources(
+                        owner, source_cache, cte_refs, sqlglot_dialect
+                    )
+                    stray = self._stray_qualifier(
+                        column, owner, seen, cte_refs, sqlglot_dialect
+                    )
+                    if stray is not None:
+                        # Reported once; not also judged as a column of a
+                        # table of that name, which the query does not read.
+                        if stray not in result.stray_qualifiers:
+                            result.stray_qualifiers.append(stray)
+                        continue
 
             # Which tables the name could resolve against, which is a property
             # of where it appears. Resolving against every table in the query
@@ -1543,6 +1581,239 @@ class OBQCValidator:
             entry = (scoped_ref, scope, written)
             if entry not in result.column_scopes:
                 result.column_scopes.append(entry)
+
+    def _visible_relations(
+        self, select: exp.Select, cte_refs: set[int], dialect: str
+    ) -> list[tuple[str | None, str | None, frozenset[str] | None]]:
+        """Every relation a reference in *select* sees, with its outputs.
+
+        Its SELECT's FROM, joins and laterals, then those of each SELECT out
+        (:meth:`_enclosing_select`): ``(name, name as the query wrote it,
+        outputs)``, the names lower-cased, a relation without alias having
+        neither. Outputs are a table's columns, a CTE's or derived table's
+        select list -- the CTE the reference binds to, whatever its alias --
+        or an alias's column list; None where they are not known: a star, a
+        table or view OBQC cannot describe, ``UNNEST``, ``VALUES``, a table
+        function, ``LATERAL``.
+        """
+        found: list[tuple[str | None, str | None, frozenset[str] | None]] = []
+        node: exp.Select | None = select
+        while node is not None:
+            found += self._own_relations(node, cte_refs, dialect)
+            node = self._enclosing_select(node)
+        return found
+
+    def _own_relations(
+        self, select: exp.Select, cte_refs: set[int], dialect: str
+    ) -> list[tuple[str | None, str | None, frozenset[str] | None]]:
+        """The relations of *select* itself, as :meth:`_visible_relations` lists."""
+        from_ = select.args.get("from_") or select.args.get("from")
+        pending: list[exp.Expr] = [from_.this] if from_ is not None else []
+        pending += [join.this for join in select.args.get("joins") or []]
+        pending += list(select.args.get("laterals") or [])
+        found: list[tuple[str | None, str | None, frozenset[str] | None]] = []
+        while pending:
+            node = pending.pop()
+            if (
+                isinstance(node, exp.Subquery)
+                and not node.alias
+                and not isinstance(node.this, exp.Query)
+            ):
+                # Only parentheses, around a join: what they hold is in sight.
+                pending.append(node.this)
+                continue
+            pending += [join.this for join in node.args.get("joins") or []]
+            alias = node.args.get("alias")
+            ident: exp.Expr | None = None
+            columns: list[str] = []
+            if isinstance(alias, exp.TableAlias):
+                ident = alias.this
+                columns = [c.name.lower() for c in alias.columns]
+            elif isinstance(alias, exp.Identifier):
+                # A plain alias: ClickHouse's ARRAY JOIN arr AS a.
+                ident = alias
+            outputs: frozenset[str] | None = None
+            if isinstance(node, exp.Table) and node.name:
+                ident = ident or node.this
+                if self._is_cte_reference(node, cte_refs):
+                    cte = self._cte_for(node)
+                    ordered = self._query_outputs(cte.this) if cte else None
+                    # The CTE's own list first (WITH c(loc) AS ...), then the
+                    # reference's (FROM c AS d(x)).
+                    if cte is not None:
+                        cte_alias = cte.args.get("alias")
+                        ordered = _renamed(
+                            ordered,
+                            (
+                                [c.name.lower() for c in cte_alias.columns]
+                                if isinstance(cte_alias, exp.TableAlias)
+                                else []
+                            ),
+                        )
+                    ordered = _renamed(ordered, columns)
+                    outputs = _names(ordered)
+                else:
+                    outputs = self._table_outputs(node.name.lower())
+                    # The ontology keeps no reliable column order here, so a
+                    # list renames some column: either name may be in use.
+                    if outputs is not None and columns:
+                        outputs = outputs | frozenset(columns)
+            elif isinstance(node, exp.Subquery) and isinstance(node.this, exp.Query):
+                ordered = _renamed(self._query_outputs(node.this), columns)
+                outputs = _names(ordered)
+            # Anything else (UNNEST, VALUES, a table function): unknown, a
+            # column list or not -- it may name only the first of them.
+            if isinstance(ident, exp.Identifier) and ident.name:
+                found.append((ident.name.lower(), ident.sql(dialect=dialect), outputs))
+            else:
+                found.append((None, None, outputs))
+        return found
+
+    def _table_outputs(self, table_key: str) -> frozenset[str] | None:
+        """A table's or view's columns, lower-cased; None when not known."""
+        if table_key in self._known_views:
+            columns = self._known_views[table_key]
+            return frozenset(columns) if columns else None
+        schema = (
+            self._schema_cache.tables.get(table_key) if self._schema_cache else None
+        )
+        return frozenset(schema.columns) if schema is not None else None
+
+    @staticmethod
+    def _query_outputs(query: exp.Expr) -> tuple[str, ...] | None:
+        """A query's outputs in order, lower-cased; None behind a star.
+
+        One per projection, so a column list renames the right one: an
+        expression without a name (``id + 1``) holds its place as ``""``,
+        where ``named_selects`` would leave it out and shift the rest. A
+        parenthesized column keeps its name (``(address)``). A set operation
+        is named by its first branch, by position -- unless it matches its
+        branches ``BY NAME``: then each branch's columns are in it, the first
+        branch's in order, then those the others add.
+        """
+        if isinstance(query, exp.Subquery):
+            return OBQCValidator._query_outputs(query.this)
+        if isinstance(query, exp.SetOperation):
+            left = OBQCValidator._query_outputs(query.left)
+            if not query.args.get("by_name"):
+                return left
+            if query.args.get("on"):
+                # BY NAME ON (...): which columns it keeps is not read here.
+                return None
+            right = OBQCValidator._query_outputs(query.right)
+            # An unnamed output is matched by the name the database gives it
+            # (DuckDB: its text), which is not read here: where one is, which
+            # columns the union has, and in what order, is unknown.
+            if left is None or right is None or "" in left or "" in right:
+                return None
+            return (*left, *(n for n in right if n not in left))
+        if not isinstance(query, exp.Query):
+            return None
+        projections = query.selects
+        if any(
+            isinstance(p, exp.Star) or isinstance(p.this, exp.Star) for p in projections
+        ):
+            return None
+        names = []
+        for projection in projections:
+            unwrapped = (
+                projection.unnest() if isinstance(projection, exp.Paren) else projection
+            )
+            names.append(
+                unwrapped.alias_or_name.lower()
+                if isinstance(unwrapped, (exp.Alias, exp.Column))
+                else ""
+            )
+        return tuple(names)
+
+    @staticmethod
+    def _cte_for(table: exp.Table) -> exp.CTE | None:
+        """The CTE a reference binds to: the innermost WITH defining its name.
+
+        Within a WITH, a CTE's body sees only the CTEs declared before it.
+        """
+        name = table.name.lower()
+        node: exp.Expr | None = table.parent
+        inside: exp.CTE | None = None
+        while node is not None:
+            if isinstance(node, exp.CTE):
+                inside = node
+            with_ = node.args.get("with_") or node.args.get("with")
+            if isinstance(with_, exp.With):
+                ctes = [c for c in with_.expressions if isinstance(c, exp.CTE)]
+                ours = [i for i, c in enumerate(ctes) if c is inside]
+                for cte in ctes[: ours[0]] if ours else ctes:
+                    if cte.alias_or_name.lower() == name:
+                        return cte
+            node = node.parent
+        return None
+
+    def _stray_qualifier(
+        self,
+        column: exp.Column,
+        owner: exp.Select,
+        seen: tuple[_Source, ...],
+        cte_refs: set[int],
+        dialect: str = "postgres",
+    ) -> tuple[str, str, str, tuple[str, ...]] | None:
+        """The reference, when its qualifier names nothing it can see.
+
+        ``SELECT products.category FROM orders``: ``products`` may be a table
+        of the schema, but this SELECT does not read it, so no database runs
+        the query -- and judged as a column of the table its qualifier names,
+        it passed. Not every dotted name is a table's column, so the
+        reference is let be wherever the qualifier may be something else:
+
+        - a name with a schema or catalog part as well, whose middle part may
+          be a struct column (``c.address.city``);
+        - a column of a table in sight, or an output of a relation in sight,
+          of that name (a struct: ``address.city``), a column an alias list
+          in sight names (BigQuery's ``UNNEST(arr) AS x``) -- or a relation
+          in sight whose columns are not known (a view the ontology cannot
+          describe, ``UNNEST``, a table function, a star). Only relations the
+          reference sees count (:meth:`_visible_relations`), not ones of
+          another subquery;
+        - the parameter of a lambda around it (``x -> x.price``);
+        - a query that pivots, whose aliases name no relation sqlglot lists.
+
+        Returns:
+            (the reference as written, the qualifier, the column, the names
+            in sight that have the column), or None.
+        """
+        if (
+            column.args.get("db")
+            or column.args.get("catalog")
+            or self._schema_cache is None
+        ):
+            return None
+        qualifier = column.table
+        key = qualifier.lower()
+        if any(source.known_as == key for source in seen):
+            return None
+        lambda_ = column.find_ancestor(exp.Lambda)
+        while lambda_ is not None:
+            if key in {p.name.lower() for p in lambda_.expressions}:
+                return None
+            lambda_ = lambda_.find_ancestor(exp.Lambda)
+        if next(column.root().find_all(exp.Pivot), None) is not None:
+            return None
+        relations = self._visible_relations(owner, cte_refs, dialect)
+        if any(name == key for name, _, _ in relations):
+            return None
+        having: list[str] = []
+        name = column.name.lower()
+        # Every name a suggestion writes is as the query wrote it, quotes and
+        # all: a relation by its alias, the column by the reference itself.
+        written_column = column.this.sql(dialect=dialect)
+        for _, relation, outputs in relations:
+            # A column of a relation in sight may be a struct the dotted name
+            # reads into -- also of one without a name: (SELECT address ...).
+            if outputs is None or key in outputs:
+                return None
+            if relation and name in outputs:
+                having.append(f"{relation}.{written_column}")
+        written = column.sql(dialect=dialect)
+        return (written, qualifier, column.name, tuple(dict.fromkeys(having)))
 
     def _scope_sources(
         self,
@@ -1591,10 +1862,11 @@ class OBQCValidator:
         # The other relations offer no columns, but a name they take is not
         # free: beside (SELECT 0 AS total) orders, orders.total is ambiguous.
         own += [
-            _Source(None, name.lower(), "", "")
+            _Source(None, name.name.lower(), written, written)
             for name in self._relation_names(select, cte_refs)
+            for written in (name.sql(dialect=dialect),)
         ]
-        parent = None if self._is_cte_body(select) else select.parent_select
+        parent = self._enclosing_select(select)
         outer = (
             self._scope_sources(parent, cache, cte_refs, dialect)
             if parent is not None
@@ -1604,7 +1876,9 @@ class OBQCValidator:
         cache[id(select)] = sources
         return sources
 
-    def _relation_names(self, select: exp.Select, cte_refs: set[int]) -> list[str]:
+    def _relation_names(
+        self, select: exp.Select, cte_refs: set[int]
+    ) -> list[exp.Identifier]:
         """Names of *select*'s relations other than the schema's tables.
 
         A CTE, a derived table, ``VALUES``, ``UNNEST``, a table function,
@@ -1631,8 +1905,16 @@ class OBQCValidator:
             table = node if isinstance(node, exp.Table) and node.name else None
             if table is not None and not self._is_cte_reference(table, cte_refs):
                 continue
-            name = node.alias or (table.name if table is not None else "")
-            if name:
+            alias = node.args.get("alias")
+            if isinstance(alias, exp.TableAlias) and alias.this:
+                name = alias.this
+            elif isinstance(alias, exp.Identifier):
+                # A plain alias: ClickHouse's ARRAY JOIN arr AS a.
+                name = alias
+            else:
+                name = table.this if table is not None else None
+            # As the query wrote it, quoted or not: what a suggestion repeats.
+            if isinstance(name, exp.Identifier) and name.name:
                 names.append(name)
         return names
 
@@ -1673,11 +1955,12 @@ class OBQCValidator:
             )
         )
         # A CTE body is not a nested scope of the query that declares it: it
-        # may reference earlier CTEs and real tables, never the outer FROM.
+        # may reference earlier CTEs and real tables, never that query's FROM.
         # Treating it as nested let the outer query's tables answer for names
         # inside the CTE -- and, once WITH aliases became undescribable, let a
         # mere reference to the CTE excuse any bogus name in its own body.
-        parent = None if self._is_cte_body(select) else select.parent_select
+        # It does see what encloses that query (_enclosing_select).
+        parent = self._enclosing_select(select)
         outer = (
             self._scope_tables(parent, cache, cte_refs) if parent is not None else ()
         )
@@ -1685,6 +1968,32 @@ class OBQCValidator:
         levels = (own, *outer) if own else outer
         cache[id(select)] = levels
         return levels
+
+    def _enclosing_select(self, query: exp.Expr) -> exp.Select | None:
+        """The SELECT whose names a reference in *query* sees next, or None.
+
+        Its parent SELECT -- except for a CTE's body, which is not nested in
+        the query declaring the CTE: it sees what that query sees, not that
+        query's own FROM. In ``SELECT (WITH x AS (SELECT o.total AS total)
+        SELECT SUM(total) FROM x) FROM orders o``, the body reads the outer
+        ``o``; under a top-level WITH there is nothing further out.
+
+        Args:
+            query: The SELECT (or other query) a reference appears in.
+
+        Returns:
+            The next SELECT out, or None.
+        """
+        node = query.parent
+        while node is not None and not isinstance(node, exp.Select):
+            if isinstance(node, exp.CTE):
+                with_ = node.parent
+                declaring = with_.parent if with_ is not None else None
+                return (
+                    self._enclosing_select(declaring) if declaring is not None else None
+                )
+            node = node.parent
+        return node
 
     @staticmethod
     def _is_cte_body(select: exp.Select) -> bool:
@@ -2688,7 +2997,7 @@ class OBQCValidator:
                     continue
                 if key in {table.name.lower(), (table.alias or "").lower()}:
                     return table
-            node = None if self._is_cte_body(node) else node.parent_select
+            node = self._enclosing_select(node)
         return None
 
     def _build_alias_map(self, select: exp.Expr) -> dict[str, str]:
@@ -2764,6 +3073,42 @@ class OBQCValidator:
                         did_you_mean=[m.name for m in close],
                     )
                 )
+
+    def _validate_qualifiers(self, result: OBQCResult) -> None:
+        """Rule: a column's qualifier names a table or alias the query can see."""
+        if self._schema_cache is None:
+            return
+        for written, qualifier, column, having in result.stray_qualifiers:
+            in_schema = qualifier.lower() in self._schema_cache.tables
+            result.issues.append(
+                OBQCIssue(
+                    issue_type=OBQCIssueType.TABLE_NOT_FOUND,
+                    severity=OBQCSeverity.ERROR,
+                    message=(
+                        f"'{qualifier}' in '{written}' names no table or alias "
+                        "this part of the query reads"
+                        + (
+                            f": {qualifier} is a table of the schema, but not "
+                            "in this SELECT's FROM or joins"
+                            if in_schema
+                            else ""
+                        )
+                    ),
+                    location="Column reference",
+                    suggestion=(
+                        did_you_mean([Match(name) for name in having])
+                        if having
+                        else (
+                            f"Join {qualifier}, or qualify {column} by a table "
+                            "of the FROM"
+                            if in_schema
+                            else f"Qualify {column} by a table of the FROM"
+                        )
+                    ),
+                    related_entities=[written],
+                    did_you_mean=list(having),
+                )
+            )
 
     def _validate_columns(self, result: OBQCResult, dialect: str) -> None:
         """Rule: Check all referenced columns exist in their respective tables."""

@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both places, an inner-joined derived table like one in `FROM`, a `UNION
   ALL` one branch at a time. Pre-aggregation, `DISTINCT` and `ROW_NUMBER()
   ... = 1` still pass. See docs/obqc.md.
+- **A column qualified by a table the query does not read** passed:
+  `SELECT products.category FROM orders` was judged as a column of
+  `products`, found, and let through, though no database runs it. A
+  qualifier that names no table or alias the reference can see is now an
+  error, which offers what in sight has the column. Dotted names that are
+  not table columns are let be: structs, UNNEST elements, lambda parameters,
+  relations whose columns are not known. See docs/obqc.md.
 
 ## [2.4.0] - 2026-11-25
 
