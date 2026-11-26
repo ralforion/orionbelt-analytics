@@ -255,3 +255,34 @@ def test_only_what_the_reference_sees_excuses_it(
 ) -> None:
     (issue,) = _stray(validator, sql)
     assert issue.message.startswith("'zz' in 'zz.total'")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # The CTE's own column list names its output.
+        "WITH c(loc) AS (SELECT address FROM customers) SELECT loc.city FROM c",
+        # Then the reference's list renames it again.
+        "WITH c(loc) AS (SELECT address FROM customers) SELECT x.city FROM c AS d(x)",
+        # A partial list over a star renames the first column; the rest stay.
+        "SELECT address.city FROM (SELECT * FROM customers) d(id)",
+        "SELECT a.city FROM (SELECT address, id FROM customers) d(a)",
+    ],
+)
+def test_a_column_list_renames_by_position(validator: OBQCValidator, sql: str) -> None:
+    assert _stray(validator, sql) == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Renamed away: the old name is gone, as DuckDB says.
+        "WITH c(loc) AS (SELECT address FROM customers) SELECT address.city FROM c",
+        "SELECT address.city FROM (SELECT address, id FROM customers) d(a)",
+    ],
+)
+def test_a_name_a_column_list_renamed_away_is_out_of_sight(
+    validator: OBQCValidator, sql: str
+) -> None:
+    (issue,) = _stray(validator, sql)
+    assert issue.message.startswith("'address' in 'address.city'")

@@ -321,6 +321,19 @@ def _qualified(seen: Iterable[_Source]) -> tuple[tuple[str, str], ...]:
     )
 
 
+def _renamed(
+    outputs: tuple[str, ...] | None, columns: list[str]
+) -> tuple[str, ...] | None:
+    """*outputs* under a column alias list: renamed by position, the rest kept.
+
+    Unknown outputs stay unknown: ``(SELECT * ...) d(customer_id)`` renames
+    the first column only, and the others are whatever the star holds.
+    """
+    if outputs is None or not columns:
+        return outputs
+    return (*columns, *outputs[len(columns) :])
+
+
 @dataclass
 class OBQCResult:
     """Complete OBQC validation result."""
@@ -1607,10 +1620,10 @@ class OBQCValidator:
             pending += [join.this for join in node.args.get("joins") or []]
             alias = node.args.get("alias")
             ident: exp.Expr | None = None
-            columns: frozenset[str] = frozenset()
+            columns: list[str] = []
             if isinstance(alias, exp.TableAlias):
                 ident = alias.this
-                columns = frozenset(c.name.lower() for c in alias.columns)
+                columns = [c.name.lower() for c in alias.columns]
             elif isinstance(alias, exp.Identifier):
                 # A plain alias: ClickHouse's ARRAY JOIN arr AS a.
                 ident = alias
@@ -1619,14 +1632,32 @@ class OBQCValidator:
                 ident = ident or node.this
                 if self._is_cte_reference(node, cte_refs):
                     cte = self._cte_for(node)
-                    outputs = self._query_outputs(cte.this) if cte is not None else None
+                    ordered = self._query_outputs(cte.this) if cte else None
+                    # The CTE's own list first (WITH c(loc) AS ...), then the
+                    # reference's (FROM c AS d(x)).
+                    if cte is not None:
+                        cte_alias = cte.args.get("alias")
+                        ordered = _renamed(
+                            ordered,
+                            (
+                                [c.name.lower() for c in cte_alias.columns]
+                                if isinstance(cte_alias, exp.TableAlias)
+                                else []
+                            ),
+                        )
+                    ordered = _renamed(ordered, columns)
+                    outputs = frozenset(ordered) if ordered is not None else None
                 else:
                     outputs = self._table_outputs(node.name.lower())
+                    # The ontology keeps no reliable column order here, so a
+                    # list renames some column: either name may be in use.
+                    if outputs is not None and columns:
+                        outputs = outputs | frozenset(columns)
             elif isinstance(node, exp.Subquery) and isinstance(node.this, exp.Query):
-                outputs = self._query_outputs(node.this)
-            if columns:
-                # Renamed by position; what the list leaves out keeps its name.
-                outputs = columns | (outputs or frozenset())
+                ordered = _renamed(self._query_outputs(node.this), columns)
+                outputs = frozenset(ordered) if ordered is not None else None
+            # Anything else (UNNEST, VALUES, a table function): unknown, a
+            # column list or not -- it may name only the first of them.
             if isinstance(ident, exp.Identifier) and ident.name:
                 found.append((ident.name.lower(), ident.sql(dialect=dialect), outputs))
             else:
@@ -1644,8 +1675,8 @@ class OBQCValidator:
         return frozenset(schema.columns) if schema is not None else None
 
     @staticmethod
-    def _query_outputs(query: exp.Expr) -> frozenset[str] | None:
-        """A query's output names, lower-cased; None behind a star."""
+    def _query_outputs(query: exp.Expr) -> tuple[str, ...] | None:
+        """A query's output names in order, lower-cased; None behind a star."""
         if not isinstance(query, exp.Query):
             return None
         names = query.named_selects
@@ -1654,7 +1685,7 @@ class OBQCValidator:
             for p in query.selects
         ):
             return None
-        return frozenset(n.lower() for n in names)
+        return tuple(n.lower() for n in names)
 
     @staticmethod
     def _cte_for(table: exp.Table) -> exp.CTE | None:
