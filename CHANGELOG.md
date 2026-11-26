@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through. The benchmark records each case's sketch shape.
 
 ### Fixed
+- **Databricks connections**: databricks-sql-connector 4.0 moved its
+  SQLAlchemy dialect into a package of its own, so with the 4.x connector the
+  dependency resolves to, `create_engine("databricks://")` had no dialect to
+  load and every Databricks connection failed. `databricks-sqlalchemy` is now
+  a dependency (Apache-2.0; it brings `pyarrow`), and a test checks that every
+  driver's dialect is installed.
 - **A fan-out inside a CTE or derived table** was not judged where its rows
   are added up: `WITH x AS (SELECT o.total FROM orders o JOIN order_items
   oi ...) SELECT SUM(total) FROM x` sums each order once per item, but the

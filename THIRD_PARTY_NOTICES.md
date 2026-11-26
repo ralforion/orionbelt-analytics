@@ -80,7 +80,7 @@ files themselves must be published under MPL-2.0.
 
 | Licence | Packages |
 | --- | --- |
-| Apache-2.0 | 55 |
+| Apache-2.0 | 57 |
 | Apache-2.0 AND CNRI-Python | 1 |
 | Apache-2.0 AND MIT | 1 |
 | Apache-2.0 OR BSD-2-Clause | 1 |
@@ -103,7 +103,7 @@ files themselves must be published under MPL-2.0.
 | Unlicense | 1 |
 | W3C-20150513 | 1 |
 
-188 packages in total.
+190 packages in total.
 
 ## Packages
 
@@ -137,6 +137,7 @@ files themselves must be published under MPL-2.0.
 | cryptography | Apache-2.0 OR BSD-3-Clause | <https://pypi.org/project/cryptography/> |
 | cyclopts | Apache-2.0 | <https://pypi.org/project/cyclopts/> |
 | databricks-sql-connector | Apache-2.0 | <https://pypi.org/project/databricks-sql-connector/> |
+| databricks-sqlalchemy | Apache-2.0 | <https://pypi.org/project/databricks-sqlalchemy/> |
 | dnspython | ISC | <https://pypi.org/project/dnspython/> |
 | docstring_parser | MIT | <https://pypi.org/project/docstring-parser/> |
 | duckdb | MIT | <https://pypi.org/project/duckdb/> |
@@ -230,6 +231,7 @@ files themselves must be published under MPL-2.0.
 | protobuf | BSD-3-Clause | <https://pypi.org/project/protobuf/> |
 | psycopg2-binary | LGPL-3.0-or-later WITH psycopg-exception | <https://pypi.org/project/psycopg2-binary/> |
 | py-key-value-aio | Apache-2.0 | <https://pypi.org/project/py-key-value-aio/> |
+| pyarrow | Apache-2.0 | <https://pypi.org/project/pyarrow/> |
 | pyasn1 | BSD-2-Clause | <https://pypi.org/project/pyasn1/> |
 | pyasn1-modules | BSD-2-Clause | <https://pypi.org/project/pyasn1-modules/> |
 | pybase64 | BSD-2-Clause | <https://pypi.org/project/pybase64/> |
