@@ -45,7 +45,7 @@ RENEW_MARGIN_SECONDS = 120.0
 #: How long a token service may take to answer.
 EXCHANGE_TIMEOUT_SECONDS = 10.0
 #: The databases that can log in as the user, as this release supports them.
-USER_LOGIN_DIALECTS = ("databricks",)
+USER_LOGIN_DIALECTS = ("databricks", "snowflake")
 
 _GRANT_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 _JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer"
@@ -507,12 +507,30 @@ class UserLogin:
 # --- what startup refuses ---------------------------------------------------
 
 
-def check_sources(entries: list[DatabaseEntry], auth_mode: str) -> list[str]:
+def uses_idp(entry: DatabaseEntry) -> bool:
+    """Whether *entry* logs in as the user through the identity provider.
+
+    Snowflake: the identity provider issues its token, asked by our own
+    client at its token endpoint. Databricks and BigQuery exchange at the
+    warehouse's own service.
+    """
+    return entry.logs_in_as_user and entry.db_type == "snowflake"
+
+
+def check_sources(
+    entries: list[DatabaseEntry], auth_mode: str, has_client: bool = False
+) -> list[str]:
     """Refuse a connection that cannot log in as the user, as configured.
+
+    The identity provider's token endpoint is not checked here: discovery
+    reads it at startup when a database needs it, and refuses to start when
+    the document has none.
 
     Args:
         entries: The configured databases.
         auth_mode: ``MCP_AUTH``.
+        has_client: Whether our own client at the identity provider is
+            configured (``MCP_AUTH_CLIENT_ID`` and its secret).
 
     Returns:
         Warnings: settings that a user login ignores.
@@ -550,4 +568,41 @@ def check_sources(entries: list[DatabaseEntry], auth_mode: str) -> list[str]:
                     f"{where}: DATABRICKS_ACCESS_TOKEN is ignored; each user's "
                     "own token is used."
                 )
+        if entry.db_type == "snowflake":
+            warnings += _check_snowflake(entry, where, has_client)
     return warnings
+
+
+def _check_snowflake(entry: DatabaseEntry, where: str, has_client: bool) -> list[str]:
+    """What a Snowflake connection needs to log in as the user."""
+    exchange_kind = entry.login_setting("OAUTH_EXCHANGE")
+    if exchange_kind not in (ENTRA_OBO, STANDARD_EXCHANGE):
+        raise ValueError(
+            f"{where} needs {entry.prefix}OAUTH_EXCHANGE: {ENTRA_OBO} (Entra ID's "
+            f"on-behalf-of flow) or {STANDARD_EXCHANGE} (RFC 8693: Okta, "
+            "Keycloak)."
+        )
+    if not has_client:
+        raise ValueError(
+            f"{where} asks the identity provider for the Snowflake token, as this "
+            "server's own client there: set MCP_AUTH_CLIENT_ID and "
+            "MCP_AUTH_CLIENT_SECRET (or MCP_AUTH_CLIENT_SECRET_FILE) to the "
+            "client the users' tokens are issued for."
+        )
+    if exchange_kind == ENTRA_OBO and not entry.login_setting("OAUTH_SCOPE"):
+        raise ValueError(
+            f"{where} needs {entry.prefix}OAUTH_SCOPE for Entra ID's on-behalf-of "
+            "flow, e.g. api://<Snowflake app ID>/session:role-any."
+        )
+    missing = [
+        v
+        for v in ("SNOWFLAKE_ACCOUNT", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE")
+        if not entry.getenv(v)
+    ]
+    if missing:
+        raise ValueError(f"{where} needs {' and '.join(missing)}.")
+    return [
+        f"{where}: {v} is ignored; the user's token says who connects."
+        for v in ("SNOWFLAKE_USERNAME", "SNOWFLAKE_PASSWORD")
+        if entry.getenv(v)
+    ]

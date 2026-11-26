@@ -37,6 +37,7 @@ from fastmcp.utilities.authorization import AuthContext, _ScopeAwareCheck
 
 from .config import AuthConfig
 from .scopes import DEFAULT_SCOPE_CLAIMS, TOOL_SCOPES, scopes_from_claims
+from .warehouse_login import IdpClient
 
 #: Seconds to wait for the issuer's discovery document at startup.
 DISCOVERY_TIMEOUT_SECONDS = 10
@@ -95,10 +96,13 @@ def build_auth_provider(config: AuthConfig) -> AuthProvider | None:
             well as at startup validation, so that a server with broken auth
             settings never starts unauthenticated.
     """
+    global _resolved
     config.validate()
     if config.mode == "none":
+        _resolved = config
         return None
-    config = with_discovery(config)
+    config = with_discovery(config, need_token_endpoint=_idp_logins_configured())
+    _resolved = config
 
     verifier = _SubjectJWTVerifier(
         jwks_uri=config.jwks_uri,
@@ -125,21 +129,27 @@ def build_auth_provider(config: AuthConfig) -> AuthProvider | None:
     )
 
 
-def with_discovery(config: AuthConfig) -> AuthConfig:
+def with_discovery(config: AuthConfig, need_token_endpoint: bool = False) -> AuthConfig:
     """*config* with what it leaves out read from the issuer's discovery document.
 
-    Only when neither a key set nor a key is configured: the key set
-    (``jwks_uri``), and the token endpoint unless ``MCP_AUTH_TOKEN_ENDPOINT``
-    is set. Air-gapped installs keep the explicit settings.
+    The key set (``jwks_uri``) when neither a key set nor a key is configured,
+    and the token endpoint unless ``MCP_AUTH_TOKEN_ENDPOINT`` is set. The
+    document is read only when one of them is missing and needed: the token
+    endpoint is needed when *need_token_endpoint* (a database logs in as the
+    user through the identity provider). Air-gapped installs keep the
+    explicit settings.
 
     Raises:
         ValueError: When the document cannot be read, names another issuer, or
-            has no key set. The server does not start then, as it does not
-            with incomplete settings.
+            lacks what is needed. The server does not start then, as it does
+            not with incomplete settings.
     """
-    if config.jwks_uri or config.public_key:
+    need_keys = not (config.jwks_uri or config.public_key)
+    need_endpoint = need_token_endpoint and not config.token_endpoint
+    if not (need_keys or need_endpoint):
         return config
     url = config.discovery_url
+    wanted = "the key set" if need_keys else "the token endpoint"
     try:
         document = OIDCConfiguration.get_oidc_configuration(
             url,  # type: ignore[arg-type]
@@ -148,9 +158,14 @@ def with_discovery(config: AuthConfig) -> AuthConfig:
         )
     except Exception as error:
         raise ValueError(
-            f"MCP_AUTH=jwt without MCP_AUTH_JWKS_URI or MCP_AUTH_PUBLIC_KEY reads "
-            f"the key set from {url}, which failed: {type(error).__name__}. Set "
-            "one of them, or check MCP_AUTH_ISSUER."
+            f"MCP_AUTH=jwt reads {wanted} from {url}, which failed: "
+            f"{type(error).__name__}. Set "
+            + (
+                "MCP_AUTH_JWKS_URI or MCP_AUTH_PUBLIC_KEY"
+                if need_keys
+                else "MCP_AUTH_TOKEN_ENDPOINT"
+            )
+            + ", or check MCP_AUTH_ISSUER."
         ) from error
     issuer = str(document.issuer or "")
     if issuer != config.issuer:
@@ -163,16 +178,58 @@ def with_discovery(config: AuthConfig) -> AuthConfig:
             f"MCP_AUTH_ISSUER {config.issuer!r}. Set MCP_AUTH_ISSUER to exactly "
             "the issuer the identity provider puts in its tokens."
         )
-    jwks_uri = str(document.jwks_uri or "")
-    if not jwks_uri.startswith(("https://", "http://")):
-        raise ValueError(
-            f"The discovery document at {url} names no key set (jwks_uri)."
-        )
+    jwks_uri = config.jwks_uri
+    if need_keys:
+        jwks_uri = str(document.jwks_uri or "")
+        if not jwks_uri.startswith(("https://", "http://")):
+            raise ValueError(
+                f"The discovery document at {url} names no key set (jwks_uri)."
+            )
+        logger.info("Key set from the issuer's discovery document: %s", jwks_uri)
     token_endpoint = config.token_endpoint or (
         str(document.token_endpoint) if document.token_endpoint else None
     )
-    logger.info("Key set from the issuer's discovery document: %s", jwks_uri)
+    if need_token_endpoint and not token_endpoint:
+        raise ValueError(
+            f"The discovery document at {url} names no token endpoint, which a "
+            "database logging in as the user needs: set MCP_AUTH_TOKEN_ENDPOINT."
+        )
     return dataclasses.replace(config, jwks_uri=jwks_uri, token_endpoint=token_endpoint)
+
+
+#: The settings the server runs with, discovery applied; set at startup.
+_resolved: AuthConfig | None = None
+
+
+def sign_in_client() -> tuple[IdpClient | None, str | None]:
+    """Our own client at the identity provider, and its token endpoint.
+
+    What a database that logs in as the user through the identity provider
+    (Snowflake) asks with. As resolved at startup, discovery included; None
+    where they are not configured, which startup refuses for such a
+    database.
+    """
+    config = _resolved
+    if config is None or config.mode != "jwt":
+        return None, None
+    client = (
+        IdpClient(str(config.client_id), str(config.client_secret))
+        if config.has_client
+        else None
+    )
+    return client, config.token_endpoint
+
+
+def _idp_logins_configured() -> bool:
+    """Whether a configured database logs in as the user through the IdP."""
+    from .database_registry import DatabaseConfigError, configured_databases
+    from .warehouse_login import uses_idp
+
+    try:
+        entries = configured_databases()
+    except DatabaseConfigError:
+        return False
+    return any(uses_idp(entry) for entry in entries)
 
 
 class ToolScopeCheck(_ScopeAwareCheck):

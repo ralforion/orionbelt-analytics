@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import MetaData, create_engine, inspect, text
+from sqlalchemy import MetaData, create_engine, event, inspect, text
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import QueuePool
@@ -47,17 +47,22 @@ class SnowflakeDriver(DatabaseDriver):
         Expected params: account, username, password, warehouse, database,
                          schema (default 'PUBLIC'), role (default: the user's
                          default role in Snowflake).
+        Or, instead of username and password, token_provider: a callable
+        giving the signed-in user's current Snowflake OAuth token each time a
+        connection opens (External OAuth, src/warehouse_login.py). The token
+        says who connects.
         """
         account = params["account"]
-        username = params["username"]
-        password = params["password"]
+        token_provider: Callable[[], str] | None = params.get("token_provider")
+        username = None if token_provider else params.get("username")
+        password = None if token_provider else params.get("password")
         warehouse = params["warehouse"]
         database = params["database"]
         schema = params.get("schema", "PUBLIC")
         role = params.get("role")
 
         try:
-            if not all([account, username, warehouse, database]):
+            if not all([account, username or token_provider, warehouse, database]):
                 logger.error("Missing required Snowflake connection parameters")
                 return False
 
@@ -84,6 +89,8 @@ class SnowflakeDriver(DatabaseDriver):
             }
             if role:
                 connect_args["role"] = role
+            if token_provider is not None:
+                connect_args["authenticator"] = "oauth"
 
             logger.info(
                 f"Connecting to Snowflake with account: {account}, database: {database}, "
@@ -101,6 +108,17 @@ class SnowflakeDriver(DatabaseDriver):
                 connect_args=connect_args,
             )
             self.metadata = MetaData()
+            if token_provider is not None:
+                provider = token_provider
+
+                @event.listens_for(self.engine, "do_connect")
+                def _set_token(
+                    _dialect: Any, _record: Any, _args: Any, kwargs: dict[str, Any]
+                ) -> None:
+                    # Each connection the pool opens or reopens (pre-ping finds
+                    # one dead) reads the current token, renewed before the call;
+                    # this runs in a worker thread and never exchanges.
+                    kwargs["token"] = provider()
 
             # Test connection
             with self.engine.connect() as conn:

@@ -227,6 +227,13 @@ class AuthConfig:
     # warehouse; from the issuer's discovery document unless set.
     # MCP_AUTH_TOKEN_ENDPOINT.
     token_endpoint: str | None = None
+    # Our own confidential client at the identity provider, which asks it for
+    # a warehouse token on a user's behalf (Snowflake): the client the
+    # users' tokens are issued for. MCP_AUTH_CLIENT_ID and
+    # MCP_AUTH_CLIENT_SECRET (or MCP_AUTH_CLIENT_SECRET_FILE). The secret is
+    # left out of repr, so it reaches no log line through this object.
+    client_id: str | None = None
+    client_secret: str | None = field(default=None, repr=False)
 
     def validate(self) -> None:
         """Refuse settings that would leave the server open or never accept.
@@ -290,6 +297,11 @@ class AuthConfig:
             )
 
     @property
+    def has_client(self) -> bool:
+        """Whether our own client at the identity provider is configured."""
+        return bool(self.client_id and self.client_secret)
+
+    @property
     def discovery_url(self) -> str:
         """The issuer's OpenID Provider metadata document."""
         return f"{(self.issuer or '').rstrip('/')}/.well-known/openid-configuration"
@@ -325,7 +337,38 @@ def _load_auth_config() -> AuthConfig:
         scope_map=parse_scope_map(scope_map) if mode == "jwt" else {},
         tool_scopes=_env_bool("MCP_AUTH_TOOL_SCOPES"),
         token_endpoint=os.getenv("MCP_AUTH_TOKEN_ENDPOINT") or None,
+        client_id=os.getenv("MCP_AUTH_CLIENT_ID") or None,
+        client_secret=_client_secret() if mode == "jwt" else None,
     )
+
+
+def _client_secret() -> str | None:
+    """``MCP_AUTH_CLIENT_SECRET``, or the file ``MCP_AUTH_CLIENT_SECRET_FILE`` names.
+
+    A file, for secrets mounted by an orchestrator; its content is stripped
+    of surrounding whitespace.
+
+    Raises:
+        ValueError: Both are set, or the file cannot be read. The message
+            names the setting, never the secret.
+    """
+    inline = os.getenv("MCP_AUTH_CLIENT_SECRET") or None
+    path = os.getenv("MCP_AUTH_CLIENT_SECRET_FILE") or None
+    if inline and path:
+        raise ValueError(
+            "Set MCP_AUTH_CLIENT_SECRET or MCP_AUTH_CLIENT_SECRET_FILE, not both."
+        )
+    if path is None:
+        return inline
+    try:
+        with open(path, encoding="utf-8") as handle:
+            secret = handle.read().strip()
+    except OSError as error:
+        raise ValueError(
+            f"Could not read MCP_AUTH_CLIENT_SECRET_FILE ({path}): "
+            f"{type(error).__name__}."
+        ) from None
+    return secret or None
 
 
 def _env_bool(name: str) -> bool:
@@ -535,7 +578,7 @@ class ConfigManager:
 
         auth = self.get_auth_config()
         auth.validate()
-        self._validate_user_logins(auth.mode)
+        self._validate_user_logins(auth.mode, auth.has_client)
 
         # Validate port range
         if not (1 <= config.mcp_server_port <= 65535):
@@ -547,7 +590,7 @@ class ConfigManager:
         logger.info("Server configuration validated successfully")
 
     @staticmethod
-    def _validate_user_logins(auth_mode: str) -> None:
+    def _validate_user_logins(auth_mode: str, has_client: bool = False) -> None:
         """Refuse a database set to log in as the user that cannot.
 
         Raises:
@@ -569,7 +612,7 @@ class ConfigManager:
             raise
         except DatabaseConfigError:
             return
-        for warning in check_sources(entries, auth_mode):
+        for warning in check_sources(entries, auth_mode, has_client):
             logger.warning(warning)
 
     def validate_db_config(self, db_type: str) -> dict[str, Any]:
