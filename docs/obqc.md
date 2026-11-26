@@ -331,6 +331,17 @@ A measured table's rows stay one per group when its key and the grouping keys to
 
 The comma form is judged identically: `FROM orders o, order_items i WHERE i.order_id = o.id` states the same join as the `ON` spelling and inflates the same way.
 
+**Through CTEs and derived tables.** A join inside a CTE that aggregates nothing is safe there, and the query that sums the CTE's rows joins nothing -- so judged SELECT by SELECT, this passed:
+
+```sql
+-- ERROR: ... The join is inside a CTE or derived table, and the query reading it
+-- aggregates the repeated rows.
+WITH x AS (SELECT o.total FROM orders o JOIN order_items oi ON oi.order_id = o.id)
+SELECT SUM(total) FROM x;
+```
+
+The rules therefore also judge the query with every CTE and derived table written into the query that reads it -- `SELECT SUM(o.total) FROM orders o JOIN order_items oi ...` here -- and report what that shows as any fan-trap. A CTE read twice is written into both places, each name bound as SQL binds it (a CTE sees only the CTEs declared before it), a derived table joined by inner joins counts like one in `FROM` with each join keeping the columns it compares, and a `UNION ALL` read as a relation is judged one branch at a time -- a union read by another together with it -- so one leg that repeats the rows it carries is enough. Where the query as written already showed a fan-out on a guessed key, a declared or checked one found inside replaces it, and blocks. Only a relation that keeps its rows is written in: one that groups, aggregates, uses `DISTINCT`, numbers its rows by a window or limits them changes which rows its reader gets, so pre-aggregating, `SELECT DISTINCT` and `ROW_NUMBER() OVER (PARTITION BY o.id) ... WHERE rn = 1` still pass. A derived table on either side of an outer join, a union that limits its rows, a recursive CTE, and a query sqlglot cannot qualify are judged as written. A reference's column list (`FROM x AS y(t)`) renames the body's outputs as it does in SQL. Writing CTEs in copies their bodies, so it has a budget: a query that would grow more than ten times larger -- a chain of CTEs each joining its predecessor to itself doubles at every stage -- is judged as written, and at most 32 combinations of union branches are tried.
+
 **2. Disjoint sibling facts**, read from the ontology's own `owl:disjointWith` axioms: two facts at different grains sharing a dimension.
 
 **3. Two or more fan-out joins** in one aggregating `SELECT` -- the heuristic fallback for ontologies carrying no disjointness axioms.
