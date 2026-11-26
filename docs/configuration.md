@@ -514,9 +514,52 @@ What authentication does **not** separate yet:
   models and RDF graphs are kept per database connection, so users of the
   same database share them (planned: per-user workspaces).
 
-Setting `MCP_AUTH` to an unknown value, or `jwt` without a key, issuer or
+Setting `MCP_AUTH` to an unknown value, or `jwt` without an issuer or
 audience, stops the server at startup rather than run it unauthenticated.
 stdio has no tokens and is unaffected.
+
+### Discovery
+
+With neither `MCP_AUTH_JWKS_URI` nor `MCP_AUTH_PUBLIC_KEY`, the server reads
+the key set (`jwks_uri`) and the token endpoint from the issuer's
+`{MCP_AUTH_ISSUER}/.well-known/openid-configuration` at startup. The document
+must name the same issuer and a key set; if it cannot be read or does not,
+the server does not start. Set the key set or key explicitly for air-gapped
+installs; `MCP_AUTH_TOKEN_ENDPOINT` wins over the document's.
+
+### Scopes
+
+Identity providers carry scopes and roles in different claims and name them
+in their own terms, so which claims to read and what their values grant are
+settings:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `MCP_AUTH_SCOPE_CLAIMS` | `scope,scp,roles` | Claims that carry scopes or roles, merged. A dot reaches into an object: `realm_access.roles` (Keycloak). Auth0 RBAC: `permissions` |
+| `MCP_AUTH_SCOPE_MAP` | -- | Values that grant OrionBelt scopes: `analysts=oba:read,modelers=oba:write` |
+
+A value that is itself an OrionBelt scope counts as such, and each scope
+includes the ones below it: `oba:admin` grants `oba:write`, which grants
+`oba:read`. The claims' own values are kept too, so `MCP_AUTH_REQUIRED_SCOPES`
+may name an identity provider's scope or an OrionBelt one. A malformed map, or
+one granting a scope OrionBelt does not know, stops the server.
+
+### Scopes per tool
+
+With `MCP_AUTH_TOOL_SCOPES=true` (and `MCP_AUTH=jwt`), each tool needs its
+tier's scope. A caller sees only the tools their scopes allow, and a call
+beyond them is refused with `insufficient scope (required: oba:admin)`. Off by
+default, since tokens issued before the tiers existed carry none of these
+scopes; setting it without `MCP_AUTH=jwt` stops the server.
+
+| Scope | Tools |
+| --- | --- |
+| `oba:read` | `list_databases`, `list_schemas`, `connect_database`, `discover_schema`, `get_table_details`, `sample_table_data`, `execute_sql_query`, `generate_chart`, `download_artifact`, `suggest_semantic_names`, `get_semantic_model`, `list_semantic_models`, `graphrag_search`, `graphrag_query_context`, `graphrag_find_join_path`, `reachable_from`, `measurable_from`, `plan_composite_query`, `query_sparql` |
+| `oba:write` | `generate_ontology`, `apply_semantic_names`, `validate_relationship`, `review_ontology`, `confirm_join`, `load_my_ontology`, `save_semantic_model`, `add_semantic_context`, `store_ontology_in_rdf`, `add_rdf_knowledge` |
+| `oba:admin` | `reset_cache`, `cleanup_workspace`, `cleanup_old_versions` |
+
+`connect_database` and `discover_schema` rewrite the connection's cache, but
+a user who may query must be able to connect, so they are reading tools.
 
 ## Transport Configuration
 

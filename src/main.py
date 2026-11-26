@@ -31,7 +31,7 @@ from . import __name__ as SERVER_NAME
 from . import __version__
 
 # --- Centralized path and env loading (Task 1 & 2) ---
-from .auth import build_auth_provider
+from .auth import build_auth_provider, tool_scope_middleware
 from .config import config_manager, resolve_mcp_cache_ttl
 from .paths import ensure_output_dir, get_env_file_path
 
@@ -93,11 +93,15 @@ _silence_logging_deprecation()
 # serve one user's cached result to another.
 _CACHE_TTL = resolve_mcp_cache_ttl()
 
+_AUTH_CONFIG = config_manager.get_auth_config()
+
 mcp = FastMCP(
     name=SERVER_NAME,
     version=__version__,
-    # Bearer-token verification on the HTTP transport when MCP_AUTH=jwt.
-    auth=build_auth_provider(config_manager.get_auth_config()),
+    # Bearer-token verification on the HTTP transport when MCP_AUTH=jwt, and
+    # each tool's scope when MCP_AUTH_TOOL_SCOPES=true.
+    auth=build_auth_provider(_AUTH_CONFIG),
+    middleware=tool_scope_middleware(_AUTH_CONFIG),
     cache_ttl=_CACHE_TTL or None,
     cache_scope="private" if _CACHE_TTL else None,
     instructions="""
