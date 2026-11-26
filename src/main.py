@@ -31,7 +31,12 @@ from . import __name__ as SERVER_NAME
 from . import __version__
 
 # --- Centralized path and env loading (Task 1 & 2) ---
-from .auth import build_auth_provider, tool_scope_middleware
+from .auth import (
+    build_auth_provider,
+    current_bearer,
+    current_user,
+    tool_scope_middleware,
+)
 from .config import config_manager, resolve_mcp_cache_ttl
 from .paths import ensure_output_dir, get_env_file_path
 
@@ -193,6 +198,7 @@ from .server_state import (  # noqa: E402, F401
     get_session_safe_filename,
     load_ontology_from_session,
     peek_current_session,
+    peek_session_data,
     remember_prepared_ontology,
     resolve_ontology_path,
 )
@@ -210,6 +216,7 @@ from .tool_types import (  # noqa: E402
     _ShortText,
     _Uri,
 )
+from .warehouse_login import DataSourceSignInError, UserLogin  # noqa: E402
 
 _ConnectionHandle = Annotated[
     str,
@@ -259,6 +266,7 @@ def _connection_aware(mint: bool = False) -> Callable[[_ToolFunction], _ToolFunc
             try:
                 token = begin_connection_scope(ctx, handle_argument, mint)
                 try:
+                    await _renew_user_login(ctx)
                     result = await fn(*args, **kwargs)
                     # Inside the scope: the echo resolves the session by the
                     # same handle the call ran under.
@@ -270,7 +278,11 @@ def _connection_aware(mint: bool = False) -> Callable[[_ToolFunction], _ToolFunc
                     )
                 finally:
                     end_connection_scope(token)
-            except (SessionRequiredError, UnknownConnectionError) as e:
+            except (
+                SessionRequiredError,
+                UnknownConnectionError,
+                DataSourceSignInError,
+            ) as e:
                 # A caller that cannot be placed is an ordinary refusal, not a
                 # fault. As a ToolError its message reaches the model verbatim,
                 # survives mask_error_details, and is logged without the stack
@@ -291,6 +303,26 @@ def _connection_aware(mint: bool = False) -> Callable[[_ToolFunction], _ToolFunc
         return wrapper
 
     return decorate
+
+
+async def _renew_user_login(ctx: Any) -> None:
+    """Renew the caller's warehouse token before a call that may use it.
+
+    Only for a session whose connection logs in as the user
+    (``DB_<NAME>_AUTH=user``): there the driver reads the token in a worker
+    thread, which has no request to exchange from, so it is renewed here, in
+    async code, from this request's token. Looked up without creating a
+    session or reaching another user's.
+
+    Raises:
+        DataSourceSignInError: The caller must sign in (again), or the
+            warehouse refused them; the tool answers with what to do.
+    """
+    session = peek_session_data(ctx)
+    manager = getattr(session, "db_manager", None) if session is not None else None
+    login = getattr(manager, "user_login", None)
+    if isinstance(login, UserLogin):
+        await login.renew(current_user(), current_bearer())
 
 
 def _echo_handle(ctx: Any, result: Any, explicit: bool, announce: bool) -> Any:

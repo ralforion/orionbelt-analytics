@@ -507,9 +507,12 @@ sessions. Ontology state in memory is per session, so it is per user too.
 
 What authentication does **not** separate yet:
 
-- **Database credentials.** Every user queries with the server's
-  configured credentials; a token decides who may use the server, not which
-  database rows they see.
+- **Database credentials**, except where a database logs in as the user. By
+  default every user queries with the server's configured credentials; a
+  token decides who may use the server, not which database rows they see. A
+  named Databricks connection with `DB_<NAME>_AUTH=user` runs each user's
+  queries as that user instead, with their own runtime, caches and workspace:
+  see [Warehouse single sign-on](warehouse-sso.md).
 - **The workspace on disk.** Generated ontology versions, saved semantic
   models and RDF graphs are kept per database connection, so users of the
   same database share them (planned: per-user workspaces).

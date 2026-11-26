@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Warehouse single sign-on for Databricks.** A named connection with
+  `DB_<NAME>_AUTH=user` runs each user's queries as that user: their
+  `MCP_AUTH=jwt` token is exchanged at the workspace (OAuth token
+  federation, RFC 8693) for a Databricks token, so the warehouse applies
+  their own grants and row-level security and its query history names them.
+  Such a connection is the user's own -- runtime, schema cache, GraphRAG and
+  workspace -- since the schema itself differs between users. The warehouse
+  token is renewed before every tool call, ahead of its expiry, and read as
+  each connection opens; it is never logged or stored. A caller without a
+  token, or one the warehouse refuses, gets a sign-in error with a code
+  (`SIGN_IN_REQUIRED`, `DATA_SOURCE_SIGN_IN_REFUSED`, ...). Startup refuses
+  a connection that cannot log in as the user. Setting names and codes are
+  those of OrionBelt Semantic Layer; Snowflake and BigQuery follow. See
+  docs/warehouse-sso.md.
 - **Scopes from any claim, scopes per tool, and OIDC discovery** for
   `MCP_AUTH=jwt`. `MCP_AUTH_SCOPE_CLAIMS` names the claims that carry scopes
   or roles (default `scope,scp,roles`; a dot reaches into an object, as

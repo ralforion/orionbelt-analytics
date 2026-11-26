@@ -1,10 +1,11 @@
 """Databricks SQL database driver."""
 
 import logging
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote_plus
 
-from sqlalchemy import MetaData, create_engine, inspect, text
+from sqlalchemy import MetaData, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DatabaseError, OperationalError, SQLAlchemyError
 from sqlalchemy.pool import NullPool
@@ -71,20 +72,25 @@ class DatabricksDriver(DatabaseDriver):
         - server_hostname: Databricks workspace URL (e.g., "dbc-a1b2c3d4-e5f6.cloud.databricks.com")
         - http_path: SQL Warehouse HTTP path (e.g., "/sql/1.0/warehouses/abc123def456")
         - access_token: Personal access token or service principal token
+        - token_provider: Instead of access_token, a callable giving the
+          current token each time a connection opens: a user login's, which
+          is renewed every hour (src/warehouse_login.py)
         - catalog: Unity Catalog name (default: "hive_metastore")
         - schema: Default schema/database (optional)
 
-        Connection string format:
-        databricks://token:{access_token}@{server_hostname}?http_path={http_path}&catalog={catalog}
+        Connection string format, with no token in it -- the token is set as
+        each connection opens:
+        databricks://token@{server_hostname}?http_path={http_path}&catalog={catalog}
         """
         server_hostname = params.get("server_hostname")
         http_path = params.get("http_path")
         access_token = params.get("access_token")
+        token_provider: Callable[[], str] | None = params.get("token_provider")
         catalog = params.get("catalog", "hive_metastore")
         schema = params.get("schema", "default")
 
         try:
-            if not all([server_hostname, http_path, access_token]):
+            if not all([server_hostname, http_path, access_token or token_provider]):
                 logger.error("Missing required Databricks connection parameters")
                 return False
 
@@ -102,17 +108,14 @@ class DatabricksDriver(DatabaseDriver):
             self._catalog = catalog
             self._schema = schema
 
-            # URL-encode the access token and http_path
             # (guaranteed non-None by the all() check above)
-            assert access_token is not None
             assert http_path is not None
-            safe_token = quote_plus(access_token)
             safe_http_path = quote_plus(http_path)
 
-            # Build connection string
-            # Format: databricks://token:{token}@{hostname}?http_path={path}&catalog={catalog}
+            # No token in the URL: it is set as each connection opens (below),
+            # which is where a user login's renewed token must come from.
             connection_string = (
-                f"databricks://token:{safe_token}@{server_hostname}?"
+                f"databricks://token@{server_hostname}?"
                 f"http_path={safe_http_path}&catalog={catalog}"
             )
 
@@ -132,6 +135,17 @@ class DatabricksDriver(DatabaseDriver):
                 },
             )
             self.metadata = MetaData()
+            current_token: Callable[[], str] = token_provider or (
+                lambda: str(access_token)
+            )
+
+            @event.listens_for(self.engine, "do_connect")
+            def _set_token(
+                _dialect: Any, _record: Any, _args: Any, kwargs: dict[str, Any]
+            ) -> None:
+                # In a worker thread, with no request to exchange a token from:
+                # a user login's token was renewed before the call.
+                kwargs["access_token"] = current_token()
 
             # Initialize encryption
             try:
