@@ -14,7 +14,10 @@ from sqlalchemy import create_engine
 URLS = {
     "databricks": "databricks://token:x@host.example?http_path=/sql/1.0/w&catalog=c",
     "snowflake": "snowflake://user:secret@account/db/schema",
-    "bigquery": "bigquery://project",
+    # user_supplied_client: the dialect leaves the client to us instead of
+    # looking for Google credentials as the engine is built, which CI has none
+    # of. The dialect itself is still the one that loads.
+    "bigquery": "bigquery://project?user_supplied_client=true",
     "clickhouse": "clickhouse+http://user:secret@host.example:8123/db",
     "duckdb": "duckdb:///:memory:",
     "mysql": "mysql+pymysql://user:secret@host.example/db",
