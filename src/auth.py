@@ -152,12 +152,16 @@ def with_discovery(config: AuthConfig) -> AuthConfig:
             f"the key set from {url}, which failed: {type(error).__name__}. Set "
             "one of them, or check MCP_AUTH_ISSUER."
         ) from error
-    issuer = str(document.issuer or "").rstrip("/")
-    if issuer != (config.issuer or "").rstrip("/"):
-        # OpenID Connect Discovery 1.0, 4.3: the document must be the issuer's.
+    issuer = str(document.issuer or "")
+    if issuer != config.issuer:
+        # OpenID Connect Discovery 1.0, 4.3: the document's issuer must be
+        # identical to the one it was fetched for -- and tokens are checked
+        # against MCP_AUTH_ISSUER character for character, so a trailing slash
+        # either side would start a server that refuses every token.
         raise ValueError(
             f"The discovery document at {url} names the issuer {issuer!r}, not "
-            f"MCP_AUTH_ISSUER {config.issuer!r}."
+            f"MCP_AUTH_ISSUER {config.issuer!r}. Set MCP_AUTH_ISSUER to exactly "
+            "the issuer the identity provider puts in its tokens."
         )
     jwks_uri = str(document.jwks_uri or "")
     if not jwks_uri.startswith(("https://", "http://")):

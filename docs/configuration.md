@@ -526,8 +526,9 @@ stdio has no tokens and is unaffected.
 With neither `MCP_AUTH_JWKS_URI` nor `MCP_AUTH_PUBLIC_KEY`, the server reads
 the key set (`jwks_uri`) and the token endpoint from the issuer's
 `{MCP_AUTH_ISSUER}/.well-known/openid-configuration` at startup. The document
-must name the same issuer and a key set; if it cannot be read or does not,
-the server does not start. Set the key set or key explicitly for air-gapped
+must name exactly the same issuer -- a trailing slash counts, since tokens are
+checked against `MCP_AUTH_ISSUER` character for character -- and a key set; if
+it cannot be read or does not, the server does not start. Set the key set or key explicitly for air-gapped
 installs; `MCP_AUTH_TOKEN_ENDPOINT` wins over the document's.
 
 ### Scopes
@@ -538,7 +539,7 @@ settings:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `MCP_AUTH_SCOPE_CLAIMS` | `scope,scp,roles` | Claims that carry scopes or roles, merged. A dot reaches into an object: `realm_access.roles` (Keycloak). Auth0 RBAC: `permissions` |
+| `MCP_AUTH_SCOPE_CLAIMS` | `scope,scp,roles` | Claims that carry scopes or roles, merged. A claim of exactly that name is read first (`https://example.com/roles`, Auth0's namespaced claims); otherwise a dot reaches into an object: `realm_access.roles` (Keycloak). Auth0 RBAC: `permissions` |
 | `MCP_AUTH_SCOPE_MAP` | -- | Values that grant OrionBelt scopes: `analysts=oba:read,modelers=oba:write` |
 
 A value that is itself an OrionBelt scope counts as such, and each scope
