@@ -1104,11 +1104,12 @@ class DatabaseManager:
                 "user_login": user_login,
             }
             if user_login is not None:
-                # The signed-in user (issuer and subject), never the warehouse
-                # token, which changes every hour and would rename the
-                # workspace, and never a name the warehouse reports.
+                # The signed-in user (issuer and subject) and how the
+                # connection signs in -- never the warehouse token, which
+                # changes every hour and would rename the workspace, and never
+                # a name the warehouse reports.
                 self.user_login = user_login
-                self.auth_identity = user_login.user
+                self.auth_identity = user_login.identity
             else:
                 # The user behind the token, so a rotated token keeps its
                 # workspace; the token itself when the warehouse will not say.

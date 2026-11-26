@@ -233,7 +233,9 @@ _ConnectionHandle = Annotated[
 _ToolFunction = Callable[..., Awaitable[Any]]
 
 
-def _connection_aware(mint: bool = False) -> Callable[[_ToolFunction], _ToolFunction]:
+def _connection_aware(
+    mint: bool = False, renew: bool = True
+) -> Callable[[_ToolFunction], _ToolFunction]:
     """Give a tool the optional ``connection`` argument and resolve it.
 
     MCP 2026-07-28 has no transport session, and the specification's answer is
@@ -248,6 +250,11 @@ def _connection_aware(mint: bool = False) -> Callable[[_ToolFunction], _ToolFunc
         mint: True for ``connect_database``, which gives a caller with neither
             handle nor transport session a new session, and always announces
             the handle of the session it connected.
+        renew: Whether the call may use the session's current warehouse
+            connection, so a login as the user is renewed first. False for
+            the tools that do not -- ``connect_database``, which signs in
+            anew, and ``list_databases`` -- so a failed renewal never keeps a
+            user from switching to another database.
     """
 
     def decorate(fn: _ToolFunction) -> _ToolFunction:
@@ -266,7 +273,8 @@ def _connection_aware(mint: bool = False) -> Callable[[_ToolFunction], _ToolFunc
             try:
                 token = begin_connection_scope(ctx, handle_argument, mint)
                 try:
-                    await _renew_user_login(ctx)
+                    if renew:
+                        await _renew_user_login(ctx)
                     result = await fn(*args, **kwargs)
                     # Inside the scope: the echo resolves the session by the
                     # same handle the call ran under.
@@ -463,7 +471,7 @@ def _with_next_steps[R](ctx: Context, tool: str, result: R) -> R:
 
 
 @mcp.tool(annotations=_WRITES)
-@_connection_aware(mint=True)
+@_connection_aware(mint=True, renew=False)
 async def connect_database(
     ctx: Context,
     database: _Identifier | None = None,
@@ -506,7 +514,7 @@ async def connect_database(
 
 
 @mcp.tool(annotations=_READ_ONLY)
-@_connection_aware()
+@_connection_aware(renew=False)
 async def list_databases(ctx: Context) -> dict[str, Any]:
     """List the databases this server can connect to, by name.
 

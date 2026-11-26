@@ -127,9 +127,11 @@ reopens when the check on checkout finds one gone, reads the current token.
 ## Who the connection is
 
 A connection that logs in as the user is that user's own. Its identity is the
-user's issuer and subject (`iss|sub`), never the warehouse token (which
-changes every hour) and never a name the warehouse reports. With it, each user
-gets their own:
+user's issuer and subject (`iss|sub`) together with how it signs in -- the
+service principal, exchange, scope or workforce provider -- never the
+warehouse token (which changes every hour) and never a name the warehouse
+reports. Two connections to one warehouse that sign in differently are two
+connections, even for the same user. With it, each user gets their own:
 
 - connection runtime and database manager;
 - schema cache, GraphRAG index and Chroma collection;
@@ -141,7 +143,10 @@ see. A workspace from before the source logged in as the user (a shared,
 service-login one) is never taken over.
 
 `list_databases` marks such a database with
-`"login": "as the signed-in user"`.
+`"login": "as the signed-in user"`. `connect_database(db_type=...)` on a
+type with named connections connects to that connection (or asks which, if
+there are several): the type's unprefixed variables are only their shared
+defaults, and never a service login around a named one's `AUTH=user`.
 
 ## Tokens over time
 
@@ -150,8 +155,11 @@ their own schedule.
 
 - `connect_database` exchanges the caller's token before connecting, so a
   user who may not use the database is told before anything connects.
-- Every later tool call renews the warehouse token first, when it expires
-  within two minutes, from that call's token. Concurrent calls exchange once.
+- Every later tool call that may use the connection renews the warehouse
+  token first, when it expires within two minutes, from that call's token;
+  concurrent calls exchange once. `connect_database` and `list_databases` do
+  not use it, so a failed renewal never keeps a user from switching to
+  another database.
 - The driver reads the current token as a connection opens, in a worker
   thread; it never exchanges.
 - Work a tool starts in the background uses the token renewed for that call.
@@ -160,7 +168,9 @@ their own schedule.
   not refresh) is rejected with HTTP 401 before any tool runs; the client
   signs in again, and the next call renews from the new token.
 
-Tokens are kept in memory only, and never logged or put in an error message.
+Tokens are kept in memory only, and never logged or put in an error message;
+an error text from the token service is passed on with whatever this server
+sent it -- the user's token, our client's secret -- blanked out.
 
 ## Errors
 
