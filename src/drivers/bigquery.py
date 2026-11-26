@@ -55,6 +55,24 @@ def _name_client(
         client._connection.user_agent = CLIENT_NAME
 
 
+def _valid_project_id(project_id: str) -> bool:
+    """Whether *project_id* is a Google Cloud project ID safe to connect with.
+
+    Google's IDs are lowercase letters, digits and hyphens (``my-project-123``),
+    and nearly every real one has a hyphen, which the generic identifier check
+    refused -- so most projects could not be connected to at all. Hyphens are
+    allowed here on top of that check, not at either end, as Google allows
+    them. The ID goes into the connection URL and into quoted SQL
+    identifiers, where a hyphen is harmless. A legacy domain-scoped ID
+    (``example.com:project``) is still refused: its colon would split the URL.
+    """
+    return (
+        not project_id.startswith("-")
+        and not project_id.endswith("-")
+        and identifier_validator.validate_identifier(project_id.replace("-", "_"))
+    )
+
+
 #: What BigQuery accepts as a dataset name: letters, digits and underscores, at
 #: most 1,024 of them. A schema name is checked against it before it is written
 #: into SQL, since the name comes from the caller.
@@ -105,7 +123,7 @@ class BigQueryDriver(DatabaseDriver):
                 logger.error("Missing required BigQuery parameter: project_id")
                 return False
 
-            if not identifier_validator.validate_identifier(project_id):
+            if not _valid_project_id(project_id):
                 audit_log_security_event(
                     "invalid_identifier_attempt",
                     {"identifier": project_id[:50]},
