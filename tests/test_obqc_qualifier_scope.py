@@ -308,3 +308,41 @@ def test_a_list_over_an_unnamed_output_renames_the_next(
     sql = "SELECT address.city FROM (SELECT id + 1, address FROM customers) d(x, n)"
     (issue,) = _stray(validator, sql)
     assert issue.message.startswith("'address' in 'address.city'")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # BY NAME: the second branch's address is an output too.
+        "SELECT address.city FROM (SELECT id FROM customers "
+        "UNION ALL BY NAME SELECT address FROM customers) d",
+        "WITH c AS (SELECT id FROM customers UNION ALL BY NAME "
+        "SELECT address FROM customers) SELECT address.city FROM c",
+        # By position, the first branch names the outputs.
+        "SELECT address.city FROM (SELECT address FROM customers "
+        "UNION ALL SELECT id FROM customers) d",
+        # A parenthesized column keeps its name.
+        "SELECT address.city FROM (SELECT (address) FROM customers) d",
+        "WITH c AS (SELECT (address) FROM customers) SELECT address.city FROM c",
+    ],
+)
+def test_set_operations_and_parentheses_keep_their_names(
+    validator: OBQCValidator, sql: str
+) -> None:
+    assert _stray(validator, sql) == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # By position, the second branch's name is not an output.
+        "SELECT address.city FROM (SELECT id FROM customers "
+        "UNION ALL SELECT address FROM customers) d",
+        "SELECT address.city FROM (SELECT (address) FROM customers) d(a)",
+    ],
+)
+def test_names_a_set_operation_or_a_list_does_not_keep(
+    validator: OBQCValidator, sql: str
+) -> None:
+    (issue,) = _stray(validator, sql)
+    assert issue.message.startswith("'address' in 'address.city'")

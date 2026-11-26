@@ -1685,8 +1685,25 @@ class OBQCValidator:
 
         One per projection, so a column list renames the right one: an
         expression without a name (``id + 1``) holds its place as ``""``,
-        where ``named_selects`` would leave it out and shift the rest.
+        where ``named_selects`` would leave it out and shift the rest. A
+        parenthesized column keeps its name (``(address)``). A set operation
+        is named by its first branch, by position -- unless it matches its
+        branches ``BY NAME``: then each branch's columns are in it, the first
+        branch's in order, then those the others add.
         """
+        if isinstance(query, exp.Subquery):
+            return OBQCValidator._query_outputs(query.this)
+        if isinstance(query, exp.SetOperation):
+            left = OBQCValidator._query_outputs(query.left)
+            if not query.args.get("by_name"):
+                return left
+            if query.args.get("on"):
+                # BY NAME ON (...): which columns it keeps is not read here.
+                return None
+            right = OBQCValidator._query_outputs(query.right)
+            if left is None or right is None:
+                return None
+            return (*left, *(n for n in right if n and n not in left))
         if not isinstance(query, exp.Query):
             return None
         projections = query.selects
@@ -1694,10 +1711,17 @@ class OBQCValidator:
             isinstance(p, exp.Star) or isinstance(p.this, exp.Star) for p in projections
         ):
             return None
-        return tuple(
-            p.alias_or_name.lower() if isinstance(p, (exp.Alias, exp.Column)) else ""
-            for p in projections
-        )
+        names = []
+        for projection in projections:
+            unwrapped = (
+                projection.unnest() if isinstance(projection, exp.Paren) else projection
+            )
+            names.append(
+                unwrapped.alias_or_name.lower()
+                if isinstance(unwrapped, (exp.Alias, exp.Column))
+                else ""
+            )
+        return tuple(names)
 
     @staticmethod
     def _cte_for(table: exp.Table) -> exp.CTE | None:
