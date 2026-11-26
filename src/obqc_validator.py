@@ -1489,7 +1489,9 @@ class OBQCValidator:
                     seen = self._scope_sources(
                         owner, source_cache, cte_refs, sqlglot_dialect
                     )
-                    stray = self._stray_qualifier(column, seen, outputs)
+                    stray = self._stray_qualifier(
+                        column, seen, outputs, sqlglot_dialect
+                    )
                     if stray is not None:
                         # Reported once; not also judged as a column of a
                         # table of that name, which the query does not read.
@@ -1572,6 +1574,7 @@ class OBQCValidator:
         column: exp.Column,
         seen: tuple[_Source, ...],
         outputs: dict[str, frozenset[str] | None],
+        dialect: str = "postgres",
     ) -> tuple[str, str, str, tuple[str, ...]] | None:
         """The reference, when its qualifier names nothing it can see.
 
@@ -1622,6 +1625,9 @@ class OBQCValidator:
             return None
         having: list[str] = []
         name = column.name.lower()
+        # Every name a suggestion writes is as the query wrote it, quotes and
+        # all: a relation by its alias, the column by the reference itself.
+        written_column = column.this.sql(dialect=dialect)
         for source in seen:
             if source.table is not None:
                 table_key = source.table.lower()
@@ -1632,14 +1638,14 @@ class OBQCValidator:
                 if not described or self._table_provides_column(table_key, key):
                     return None
                 if self._table_provides_column(table_key, name):
-                    having.append(f"{source.short}.{column.name}")
+                    having.append(f"{source.short}.{written_column}")
                 continue
             held = outputs.get(source.known_as)
             if held is None or key in held:
                 return None
             if name in held:
-                having.append(f"{source.known_as}.{column.name}")
-        written = f"{qualifier}.{column.name}"
+                having.append(f"{source.short or source.known_as}.{written_column}")
+        written = column.sql(dialect=dialect)
         return (written, qualifier, column.name, tuple(dict.fromkeys(having)))
 
     def _scope_sources(
@@ -1689,8 +1695,9 @@ class OBQCValidator:
         # The other relations offer no columns, but a name they take is not
         # free: beside (SELECT 0 AS total) orders, orders.total is ambiguous.
         own += [
-            _Source(None, name.lower(), "", "")
+            _Source(None, name.name.lower(), written, written)
             for name in self._relation_names(select, cte_refs)
+            for written in (name.sql(dialect=dialect),)
         ]
         parent = None if self._is_cte_body(select) else select.parent_select
         outer = (
@@ -1702,7 +1709,9 @@ class OBQCValidator:
         cache[id(select)] = sources
         return sources
 
-    def _relation_names(self, select: exp.Select, cte_refs: set[int]) -> list[str]:
+    def _relation_names(
+        self, select: exp.Select, cte_refs: set[int]
+    ) -> list[exp.Identifier]:
         """Names of *select*'s relations other than the schema's tables.
 
         A CTE, a derived table, ``VALUES``, ``UNNEST``, a table function,
@@ -1729,8 +1738,16 @@ class OBQCValidator:
             table = node if isinstance(node, exp.Table) and node.name else None
             if table is not None and not self._is_cte_reference(table, cte_refs):
                 continue
-            name = node.alias or (table.name if table is not None else "")
-            if name:
+            alias = node.args.get("alias")
+            if isinstance(alias, exp.TableAlias) and alias.this:
+                name = alias.this
+            elif isinstance(alias, exp.Identifier):
+                # A plain alias: ClickHouse's ARRAY JOIN arr AS a.
+                name = alias
+            else:
+                name = table.this if table is not None else None
+            # As the query wrote it, quoted or not: what a suggestion repeats.
+            if isinstance(name, exp.Identifier) and name.name:
                 names.append(name)
         return names
 

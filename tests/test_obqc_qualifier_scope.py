@@ -182,3 +182,16 @@ def test_what_a_qualifier_may_also_name_is_let_be(
     validator: OBQCValidator, dialect: str, sql: str
 ) -> None:
     assert _stray(validator, sql, dialect) == []
+
+
+def test_a_suggestion_is_quoted_as_the_query_wrote_the_names(
+    validator: OBQCValidator,
+) -> None:
+    """A quoted mixed-case CTE is offered quoted, or PostgreSQL folds it away."""
+    sql = (
+        'WITH "Legs" AS (SELECT p.category AS "Category" FROM products p) '
+        'SELECT products."Category" FROM "Legs"'
+    )
+    (issue,) = _stray(validator, sql, "postgresql")
+    assert issue.did_you_mean == ['"Legs"."Category"']
+    assert 'products."Category"' in issue.message
