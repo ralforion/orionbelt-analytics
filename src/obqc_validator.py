@@ -4850,7 +4850,7 @@ class OBQCValidator:
         """
         if self._schema_cache is None or not worth_inlining(parsed):
             return
-        known = {self._finding_key(f) for f in result.fan_trap_findings}
+        reported = self._reported_fan_traps(result)
         notes = {i.message for i in result.issues}
         for variant in inlined(parsed, dialect, self._inline_schema()):
             scratch = OBQCResult(is_valid=True)
@@ -4872,13 +4872,21 @@ class OBQCValidator:
                 scratch.fan_trap_findings, findings_issues, strict=True
             ):
                 key = self._finding_key(finding)
-                if key in known:
+                before = reported.get(key)
+                if before is not None and not (
+                    before[0].get("assumed") and not finding.get("assumed")
+                ):
                     continue
-                known.add(key)
                 issue.message += self.INLINED_NOTE
                 issue.location = "Inside a CTE or derived table"
-                result.fan_trap_findings.append(finding)
-                result.issues.append(issue)
+                if before is None:
+                    result.fan_trap_findings.append(finding)
+                    result.issues.append(issue)
+                else:
+                    # Firmer evidence for the same tables: it replaces the
+                    # guess, which warned where this blocks.
+                    self._replace_fan_trap(result, before, (finding, issue))
+                reported[key] = (finding, issue)
                 result.fan_trap_risk = True
                 if (
                     not blocking
@@ -4890,6 +4898,50 @@ class OBQCValidator:
                 if note.severity == OBQCSeverity.INFO and note.message not in notes:
                     notes.add(note.message)
                     result.issues.append(note)
+
+    @staticmethod
+    def _reported_fan_traps(
+        result: OBQCResult,
+    ) -> dict[tuple[Any, ...], tuple[dict[str, Any], OBQCIssue | None]]:
+        """Each fan-trap finding so far, by :meth:`_finding_key`, with its issue.
+
+        The rules add one issue per finding, in the same order, so the two
+        pair up; where they do not, a finding's issue is unknown (None).
+        """
+        issues = [
+            i
+            for i in result.issues
+            if i.issue_type == OBQCIssueType.FAN_TRAP_DETECTED
+            and i.severity != OBQCSeverity.INFO
+        ]
+        paired = len(issues) == len(result.fan_trap_findings)
+        return {
+            OBQCValidator._finding_key(finding): (
+                finding,
+                issues[n] if paired else None,
+            )
+            for n, finding in enumerate(result.fan_trap_findings)
+        }
+
+    @staticmethod
+    def _replace_fan_trap(
+        result: OBQCResult,
+        before: tuple[dict[str, Any], OBQCIssue | None],
+        after: tuple[dict[str, Any], OBQCIssue],
+    ) -> None:
+        """Put *after*'s finding and issue where *before*'s were."""
+        findings = result.fan_trap_findings
+        at = next(n for n, f in enumerate(findings) if f is before[0])
+        findings[at] = after[0]
+        old_issue = before[1]
+        spot = next(
+            (n for n, i in enumerate(result.issues) if i is old_issue),
+            None,
+        )
+        if spot is None:
+            result.issues.append(after[1])
+        else:
+            result.issues[spot] = after[1]
 
     @staticmethod
     def _finding_key(finding: dict[str, Any]) -> tuple[Any, ...]:

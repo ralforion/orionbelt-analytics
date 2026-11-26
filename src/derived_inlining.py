@@ -20,15 +20,18 @@ own as before. sqlglot's ``merge_subqueries`` makes that call; this module
 brings the relations to where it can:
 
 - every reference to a CTE becomes a copy of its body, so a CTE read twice is
-  written into both places;
+  written into both places -- each name bound as SQL binds it: a CTE sees
+  only the CTEs declared before it, an inner WITH hides an outer one;
 - a ``UNION ALL`` is tried one branch at a time, under the union's column
-  names: a total over the union is inflated if any branch repeats the rows it
-  sums;
+  names, a union read by a union with both replaced: a total over the union
+  is inflated if any branch repeats the rows it sums;
 - a derived table joined by inner joins only is moved to ``FROM`` -- sqlglot
-  merges from there alone -- the joins becoming conditions in ``WHERE``, the
-  comma form OBQC judges like the ``JOIN ... ON`` one.
+  merges from there alone -- and each join condition kept in the ``ON`` of
+  the first join that has every relation it reads, since the columns a join
+  compares say which relationship it uses.
 
-A derived table on either side of an outer join is left where it is.
+A derived table on either side of an outer join is left where it is, and so
+is a union that limits its rows (``LIMIT``, ``OFFSET``, ``FETCH``).
 
 No MCP or ontology dependency: the caller passes the tables' columns.
 """
@@ -37,6 +40,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator, Mapping
+from itertools import islice
 
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
@@ -45,7 +49,7 @@ from sqlglot.optimizer.qualify import qualify
 
 logger = logging.getLogger(__name__)
 
-#: Most queries built from one: the query itself, then one per UNION ALL branch.
+#: Most queries built from one: one per choice of UNION ALL branches.
 MAX_VARIANTS = 32
 
 #: {schema: {table: {column: type}}}, as sqlglot's MappingSchema reads it.
@@ -87,18 +91,19 @@ def inlined(
             qualifies itself can be followed.
 
     Returns:
-        The query with its relations written in, then one more per UNION ALL
-        branch. Empty when the query cannot be rewritten, which only means
-        nothing more is judged.
+        The query with its relations written in: once, or -- when it reads
+        a UNION ALL -- once per choice of branches, at most
+        :data:`MAX_VARIANTS`. Empty when the query cannot be rewritten, which
+        only means nothing more is judged.
     """
     tree = _qualified(parsed, dialect, schema)
     if tree is None:
         return []
     try:
         _expand_ctes(tree)
-        variants = [tree, *_union_branches(tree)][:MAX_VARIANTS]
         merged = []
-        for variant in variants:
+        # Taken one at a time: each variant is a copy of the whole query.
+        for variant in islice(_union_variants(tree), MAX_VARIANTS):
             for select in list(variant.find_all(exp.Select)):
                 _derived_to_from(select)
             merged.append(merge_subqueries(variant))
@@ -131,69 +136,76 @@ def _qualified(
 def _expand_ctes(tree: exp.Expr) -> None:
     """Every reference to a non-recursive CTE becomes a copy of its body.
 
-    In order of definition, so a body that reads an earlier CTE is expanded
-    before it is copied. A table refers to the CTE a WITH around it defines
-    under its name -- the innermost such WITH, and not the CTE whose own body
-    the table is in, where the name means a table of the schema.
+    Scoped as SQL scopes the names: a WITH's CTEs are expanded in the order
+    they are declared, each seeing only those before it -- in ``WITH x AS
+    (SELECT total FROM orders), orders AS (...)``, ``x`` reads the table --
+    and the query the WITH belongs to sees all of them, nested subqueries
+    and nested WITHs included, an inner name hiding an outer one. A body is
+    expanded before it is copied, so no copy is ever resolved again out of
+    its place. A recursive WITH is left as it is, and its names hide outer
+    ones of the same name.
     """
-    for with_ in list(tree.find_all(exp.With)):
-        if with_.args.get("recursive") or with_.parent is None:
-            continue
-        owner = with_.parent
-        for cte in list(with_.expressions):
-            if not isinstance(cte, exp.CTE):
-                continue
-            name = cte.alias_or_name.lower()
-            for table in list(owner.find_all(exp.Table)):
-                if (
-                    table.name.lower() != name
-                    or table.args.get("db")
-                    or table.args.get("catalog")
-                    or _definition(table, name) is not cte
-                ):
-                    continue
-                table.replace(
-                    exp.Subquery(
-                        this=cte.this.copy(),
-                        alias=exp.TableAlias(
-                            this=exp.to_identifier(table.alias or table.name)
-                        ),
-                    )
+    _expand(tree, {})
+
+
+def _expand(node: exp.Expr, env: dict[str, exp.Expr | None]) -> None:
+    """Expand the CTE references under *node*; *env* maps a name to its body.
+
+    A name mapped to None is a recursive CTE's: in sight, never written in.
+    """
+    with_ = _arg(node, "with")
+    if isinstance(with_, exp.With):
+        env = dict(env)
+        ctes = [c for c in with_.expressions if isinstance(c, exp.CTE)]
+        if with_.args.get("recursive"):
+            for cte in ctes:
+                env[cte.alias_or_name.lower()] = None
+            for cte in ctes:
+                _expand(cte.this, env)
+        else:
+            for cte in ctes:
+                _expand(cte.this, env)
+                env[cte.alias_or_name.lower()] = cte.this
+            with_.pop()
+    if (
+        isinstance(node, exp.Table)
+        and node.name
+        and not node.args.get("db")
+        and not node.args.get("catalog")
+    ):
+        body = env.get(node.name.lower())
+        if body is not None:
+            node.replace(
+                exp.Subquery(
+                    this=body.copy(),
+                    alias=exp.TableAlias(
+                        this=exp.to_identifier(node.alias or node.name)
+                    ),
                 )
-        with_.pop()
+            )
+        return
+    for child in list(node.iter_expressions()):
+        _expand(child, env)
 
 
-def _definition(table: exp.Table, name: str) -> exp.CTE | None:
-    """The CTE a reference named *name* reads, or None for a schema table."""
-    node: exp.Expr | None = table.parent
-    inside: exp.CTE | None = None
-    while node is not None:
-        if isinstance(node, exp.CTE):
-            inside = node
-        with_ = _arg(node, "with")
-        if isinstance(with_, exp.With):
-            for cte in with_.expressions:
-                if (
-                    isinstance(cte, exp.CTE)
-                    and cte.alias_or_name.lower() == name
-                    and cte is not inside
-                ):
-                    return cte
-        node = node.parent
-    return None
+def _union_variants(tree: exp.Expr) -> Iterator[exp.Expr]:
+    """*tree* once per choice of a branch for each UNION ALL read as a relation.
 
+    The outermost union first: its chosen branch takes its place, under the
+    union's column names (its first branch's), and the unions that branch
+    reads are chosen for in turn -- so a union that reads another through a
+    CTE has both boundaries removed. Depth first and lazy, so a caller
+    taking a few variants pays for a few. A query reading no union is
+    yielded as it is.
 
-def _union_branches(tree: exp.Expr) -> Iterator[exp.Expr]:
-    """*tree* once per branch of each UNION ALL that is read as a relation.
-
-    The branch takes the union's place under the union's column names, which
-    are its first branch's. A union at the top of the query is not read by
-    anything: each of its branches is a query of its own, judged as such.
+    A union at the top of the query is read by nothing: each of its branches
+    is a query of its own, judged as such. Nor is one that limits its rows
+    (``LIMIT``, ``OFFSET``, ``FETCH``) replaced by a branch, which would drop
+    the limit.
     """
-    subqueries = list(tree.find_all(exp.Subquery))
-    for index, subquery in enumerate(subqueries):
+    for index, subquery in enumerate(tree.find_all(exp.Subquery)):
         branches = _branches(subquery.this)
-        if len(branches) < 2:
+        if len(branches) < 2 or _limits(subquery):
             continue
         names = [projection.alias_or_name for projection in branches[0].selects]
         if any(len(branch.selects) != len(names) for branch in branches):
@@ -210,12 +222,25 @@ def _union_branches(tree: exp.Expr) -> Iterator[exp.Expr]:
                 ],
             )
             target.set("this", renamed)
-            yield variant
+            yield from _union_variants(variant)
+        return
+    yield tree
+
+
+def _limits(node: exp.Expr) -> bool:
+    """Whether *node* caps or skips rows: ``LIMIT``, ``OFFSET``, ``FETCH``."""
+    return any(node.args.get(arg) for arg in ("limit", "offset", "fetch"))
 
 
 def _branches(query: exp.Expr) -> list[exp.Select]:
-    """The SELECTs of a UNION ALL chain; empty if anything else is in it."""
+    """The SELECTs of a UNION ALL chain; empty if anything else is in it.
+
+    Empty too when a union in the chain limits its rows: no branch alone
+    stands for what reaches its reader then.
+    """
     if isinstance(query, exp.Union) and not query.args.get("distinct"):
+        if _limits(query):
+            return []
         left, right = _branches(query.left), _branches(query.right)
         return [*left, *right] if left and right else []
     return [query] if isinstance(query, exp.Select) else []
@@ -238,10 +263,16 @@ def _keeps_rows(query: exp.Expr) -> bool:
 def _derived_to_from(select: exp.Select) -> None:
     """Move a derived table joined by inner joins only to ``FROM``.
 
-    When every join of *select* is an inner or a cross join, their order does
-    not matter: the first derived table that keeps its rows becomes the
-    ``FROM``, every other relation a comma join, and the join conditions go
-    to ``WHERE``. Nothing happens when ``FROM`` already holds one.
+    sqlglot writes a derived table into its reader from ``FROM`` alone. When
+    every join of *select* is an inner or a cross join, their order does not
+    matter: the first derived table that keeps its rows becomes the ``FROM``
+    and the other relations follow in their order. Each condition of the
+    joins goes to the ``ON`` of the first join after which every relation it
+    reads is there -- kept in an ``ON``, not moved to ``WHERE``, since which
+    columns a join compares is what says which relationship it uses.
+
+    Nothing happens when ``FROM`` already holds one, or when a condition
+    reads something other than the relations of *select* by their names.
     """
     joins = select.args.get("joins") or []
     from_ = _arg(select, "from")
@@ -258,7 +289,7 @@ def _derived_to_from(select: exp.Select) -> None:
         return
     position = next(
         (
-            i
+            i + 1
             for i, j in enumerate(joins)
             if isinstance(j.this, exp.Subquery) and _keeps_rows(j.this.this)
         ),
@@ -266,9 +297,38 @@ def _derived_to_from(select: exp.Select) -> None:
     )
     if position is None:
         return
-    conditions = [j.args["on"] for j in joins if j.args.get("on") is not None]
-    others = [from_.this, *(j.this for i, j in enumerate(joins) if i != position)]
-    select.set(_key(select, "from"), exp.From(this=joins[position].this.copy()))
-    select.set("joins", [exp.Join(this=relation.copy()) for relation in others])
-    for condition in conditions:
-        select.where(condition.copy(), copy=False)
+    relations = [from_.this, *(j.this for j in joins)]
+    names = [r.alias_or_name.lower() for r in relations]
+    if not all(names) or len(set(names)) != len(names):
+        return
+    conjuncts: list[exp.Expr] = []
+    for join in joins:
+        on = join.args.get("on")
+        if on is not None:
+            on = on.unnest()
+            conjuncts += list(on.flatten()) if isinstance(on, exp.And) else [on]
+    reads: list[set[str]] = []
+    for conjunct in conjuncts:
+        columns = list(conjunct.find_all(exp.Column))
+        read = {c.table.lower() for c in columns}
+        if (
+            any(not c.table for c in columns)
+            or not read <= set(names)
+            or next(conjunct.find_all(exp.Query), None) is not None
+        ):
+            return
+        reads.append(read)
+    order = [position, *(i for i in range(len(relations)) if i != position)]
+    there = {names[position]}
+    pending = list(range(len(conjuncts)))
+    rejoined = []
+    for i in order[1:]:
+        there.add(names[i])
+        mine = [k for k in pending if reads[k] <= there]
+        pending = [k for k in pending if k not in mine]
+        join = exp.Join(this=relations[i].copy())
+        if mine:
+            join.set("on", exp.and_(*(conjuncts[k].copy() for k in mine)))
+        rejoined.append(join)
+    select.set(_key(select, "from"), exp.From(this=relations[position].copy()))
+    select.set("joins", rejoined)

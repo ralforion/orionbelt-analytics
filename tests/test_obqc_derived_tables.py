@@ -261,9 +261,10 @@ def test_the_rewrite_leaves_the_query_alone() -> None:
 def test_each_union_branch_is_its_own_variant() -> None:
     parsed = sqlglot.parse_one(WRONG["a UNION ALL leg that fans out"], dialect="duckdb")
     variants = inlined(parsed, "duckdb")
-    assert len(variants) == 3
-    assert "UNION ALL" in variants[0].sql()
-    assert all("UNION" not in v.sql() for v in variants[1:])
+    # One per branch, the union gone from each; what lies outside the union
+    # is in every one of them.
+    assert len(variants) == 2
+    assert all("UNION" not in v.sql() for v in variants)
 
 
 def test_the_variants_are_capped() -> None:
@@ -279,3 +280,173 @@ def test_a_query_it_cannot_qualify_judges_nothing_more() -> None:
     )
     # Whatever sqlglot makes of it, no exception reaches the caller.
     assert isinstance(inlined(parsed, "duckdb"), list)
+
+
+# --- Review findings: evidence, scoping, limits, nesting, cost ---------------------
+
+
+@pytest.fixture(scope="module")
+def evidence() -> OBQCValidator:
+    """orders.customer_id is only guessed; orders.referrer_id is declared."""
+
+    def col(name: str, data_type: str = "integer", fk: bool = False) -> ColumnInfo:
+        return ColumnInfo(
+            name=name,
+            data_type=data_type,
+            is_nullable=True,
+            is_primary_key=name == "id",
+            is_foreign_key=fk,
+        )
+
+    tables = [
+        TableInfo(
+            name="customers",
+            schema="main",
+            columns=[col("id"), col("credit", "decimal")],
+            primary_keys=["id"],
+            foreign_keys=[],
+        ),
+        TableInfo(
+            name="orders",
+            schema="main",
+            columns=[
+                col("id"),
+                col("customer_id"),
+                col("referrer_id", fk=True),
+                col("total", "decimal"),
+            ],
+            primary_keys=["id"],
+            foreign_keys=[
+                {
+                    "column": "referrer_id",
+                    "referenced_table": "customers",
+                    "referenced_column": "id",
+                }
+            ],
+        ),
+    ]
+    generator = OntologyGenerator(base_uri=VOCAB)
+    generator.generate_from_schema(tables)
+    v = OBQCValidator()
+    v.load_ontology(generator.graph, VOCAB)
+    return v
+
+
+def _severities(result) -> list[str]:  # type: ignore[no-untyped-def]
+    return [
+        i.severity.value
+        for i in result.issues
+        if i.issue_type.name == "FAN_TRAP_DETECTED" and i.severity.value != "info"
+    ]
+
+
+def test_firmer_evidence_inside_replaces_a_guess_outside(
+    evidence: OBQCValidator,
+) -> None:
+    """The same tables, a guessed key outside and a declared one inside."""
+    guessed = (
+        "SELECT SUM(c.credit) FROM customers c JOIN orders o ON o.customer_id = c.id"
+    )
+    alone = evidence.validate(guessed, dialect="duckdb")
+    assert alone.is_valid and _severities(alone) == ["warning"]
+    both = evidence.validate(
+        "SELECT SUM(c.credit) + (SELECT SUM(credit) FROM (SELECT c2.credit "
+        "FROM customers c2 JOIN orders o2 ON o2.referrer_id = c2.id) d) "
+        "FROM customers c JOIN orders o ON o.customer_id = c.id",
+        dialect="duckdb",
+    )
+    assert not both.is_valid and both.fan_trap_blocking
+    assert _severities(both) == ["error"]
+    (finding,) = both.fan_trap_findings
+    assert finding["assumed"] is False
+    assert finding["relationship"] == "orders.referrer_id -> customers.id"
+
+
+def test_a_join_moved_out_of_a_cte_keeps_the_key_it_compares(
+    evidence: OBQCValidator,
+) -> None:
+    """Wrapping orders in a CTE must not trade the guessed key for the declared."""
+    result = evidence.validate(
+        "WITH o2 AS (SELECT * FROM orders) SELECT SUM(c.credit) FROM customers c "
+        "JOIN o2 ON o2.customer_id = c.id",
+        dialect="duckdb",
+    )
+    assert result.is_valid and _severities(result) == ["warning"]
+    (finding,) = result.fan_trap_findings
+    assert finding["relationship"] == "orders.customer_id -> customers.id"
+
+
+def test_the_joins_keep_their_conditions_when_reordered() -> None:
+    parsed = sqlglot.parse_one(WRONG["a derived table joined"], dialect="duckdb")
+    (merged,) = inlined(parsed, "duckdb")
+    sql = merged.sql(dialect="duckdb")
+    assert "JOIN customers AS c ON o.customer_id = c.id" in sql
+    assert "WHERE" not in sql
+
+
+def test_a_cte_sees_only_the_ctes_declared_before_it(
+    validator: OBQCValidator,
+) -> None:
+    """x reads the table orders; the CTE named orders after it fans out."""
+    sql = (
+        f"WITH x AS (SELECT total FROM orders), orders AS (SELECT o.total {FAN_OUT}) "
+        "SELECT SUM(total) FROM x"
+    )
+    result = validator.validate(sql, dialect="duckdb")
+    assert result.is_valid and not result.fan_trap_risk
+
+
+def test_an_inner_with_hides_an_outer_name(validator: OBQCValidator) -> None:
+    sql = (
+        f"WITH x AS (SELECT o.total {FAN_OUT}) "
+        "SELECT SUM(total) FROM (WITH x AS (SELECT total FROM orders) "
+        "SELECT total FROM x) d"
+    )
+    assert validator.validate(sql, dialect="duckdb").is_valid
+
+
+def test_a_union_that_limits_its_rows_is_left_as_written(
+    validator: OBQCValidator,
+) -> None:
+    sql = (
+        f"SELECT SUM(total) FROM (SELECT o.total {FAN_OUT} "
+        "UNION ALL SELECT total FROM orders LIMIT 1) x"
+    )
+    assert validator.validate(sql, dialect="duckdb").is_valid
+
+
+def test_a_union_read_by_a_union_is_written_in_with_it(
+    validator: OBQCValidator,
+) -> None:
+    sql = (
+        f"WITH a AS (SELECT o.total AS t {FAN_OUT} UNION ALL SELECT total FROM orders), "
+        "b AS (SELECT t FROM a UNION ALL SELECT total FROM orders) "
+        "SELECT SUM(t) FROM b"
+    )
+    result = validator.validate(sql, dialect="duckdb")
+    assert not result.is_valid and result.fan_trap_blocking
+
+
+def test_the_cap_holds_before_the_copies() -> None:
+    """128 branches: at most MAX_VARIANTS copies of the query are made."""
+    from unittest import mock
+
+    from sqlglot import exp
+
+    from src import derived_inlining
+
+    legs = " UNION ALL ".join(f"SELECT {i} AS v" for i in range(128))
+    parsed = sqlglot.parse_one(f"SELECT SUM(v) FROM ({legs}) u", dialect="duckdb")
+    copies = {"n": 0}
+    original = exp.Expression.copy
+
+    def counting(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if isinstance(self, exp.Select) and self.parent is None:
+            copies["n"] += 1
+        return original(self, *args, **kwargs)
+
+    with mock.patch.object(exp.Expression, "copy", counting):
+        variants = derived_inlining.inlined(parsed, "duckdb")
+    assert len(variants) == MAX_VARIANTS
+    # The parse is copied once to qualify it; then one copy per variant.
+    assert copies["n"] <= MAX_VARIANTS + 1
