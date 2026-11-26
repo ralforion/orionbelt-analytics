@@ -113,7 +113,7 @@ def _ids(outcome: dict[str, Any], label: str, scenario: str, verdict: str) -> se
 def test_every_case_shows_on_the_data_what_it_claims(outcome: dict[str, Any]) -> None:
     assert [c["id"] for c in outcome["cases"] if c["label"] != c["expect"]] == []
     wrong = [c for c in outcome["cases"] if c["label"] == "wrong"]
-    assert len(wrong) == 14
+    assert len(wrong) == 16
     # Wrong by a margin, not by rounding.
     assert all(c["error"] is None or c["error"] >= 0.05 for c in wrong)
 
@@ -122,21 +122,21 @@ def test_a_check_of_names_lets_every_wrong_number_through(
     outcome: dict[str, Any],
 ) -> None:
     assert outcome["summary"]["names only"] == {
-        "wrong": {"blocked": 0, "warned": 0, "passed": 14},
-        "right": {"blocked": 0, "warned": 0, "passed": 20},
+        "wrong": {"blocked": 0, "warned": 0, "passed": 16},
+        "right": {"blocked": 0, "warned": 0, "passed": 22},
     }
 
 
 def test_the_numbers_the_documentation_quotes(outcome: dict[str, Any]) -> None:
     firm = {
-        "wrong": {"blocked": 12, "warned": 0, "passed": 2},
-        "right": {"blocked": 1, "warned": 0, "passed": 19},
+        "wrong": {"blocked": 14, "warned": 0, "passed": 2},
+        "right": {"blocked": 1, "warned": 0, "passed": 21},
     }
     assert outcome["summary"]["declared"] == firm
     assert outcome["summary"]["inferred + checked"] == firm
     assert outcome["summary"]["inferred"] == {
-        "wrong": {"blocked": 0, "warned": 12, "passed": 2},
-        "right": {"blocked": 0, "warned": 1, "passed": 19},
+        "wrong": {"blocked": 0, "warned": 14, "passed": 2},
+        "right": {"blocked": 0, "warned": 1, "passed": 21},
     }
     assert outcome["verdicts"] == {"confirmed": 9}
 
@@ -199,5 +199,25 @@ def test_the_sketch_of_the_fix_fits_the_shape_of_the_question(
         "value-of-returned-lines-join": "semi_join",
         "orders-with-books-count-column": "semi_join",
         "tuition-of-enrolled-students": "semi_join",
+        "total-per-customer-through-a-cte": "semi_join",
         "credits-per-student-name": None,
+        "ordered-and-paid-legs-joined-back": None,
     }
+
+
+def test_rows_repeated_inside_a_cte_are_judged_where_they_are_added_up(
+    outcome: dict[str, Any],
+) -> None:
+    """A fan-out inside a CTE or a UNION ALL leg blocks; ROW_NUMBER() undoes it."""
+    by_id = {c["id"]: c for c in outcome["cases"]}
+    for scenario in ("declared", "inferred + checked"):
+        for wrong in (
+            "total-per-customer-through-a-cte",
+            "ordered-and-paid-legs-joined-back",
+        ):
+            assert by_id[wrong]["outcome"][scenario] == "blocked", (wrong, scenario)
+        for right in (
+            "total-per-customer-through-a-cte-row-number",
+            "order-value-per-region-through-a-cte",
+        ):
+            assert by_id[right]["outcome"][scenario] == "passed", (right, scenario)

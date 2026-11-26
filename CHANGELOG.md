@@ -50,9 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fan-trap benchmark: one fact pointing at another.** A `returns` table,
   each return of one order line, and five cases: sold and refunded per
   category, the value of returned lines, refunds per customer through the
-  line. 34 cases, 14 wrong; OBQC blocks 12 with declared or checked keys,
-  11 of them with a sketch of the fix, and lets 19 of the 20 right answers
-  through. The benchmark records each case's sketch shape.
+  line. The benchmark records each case's sketch shape.
+- **Fan-trap benchmark: rows repeated inside a CTE.** Four cases: order
+  totals repeated per item in a CTE and summed outside, a `UNION ALL` leg
+  joining payments back to the items (both wrong, both blocked), and the
+  same CTE deduplicated with `ROW_NUMBER()`, and one of lookups only (both
+  right, both passed). 38 cases, 16 wrong; OBQC blocks 14 with declared or
+  checked keys, 12 of them with a sketch of the fix, and lets 21 of the 22
+  right answers through.
 
 ### Fixed
 - **Databricks connections**: databricks-sql-connector 4.0 moved its

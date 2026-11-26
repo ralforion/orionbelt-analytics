@@ -459,6 +459,97 @@ WHERE oi.order_id = o.id AND r.order_item_id = oi.id
 GROUP BY o.customer_id
 """
 
+# --- Rows repeated inside a CTE or derived table, added up outside ------------
+
+[[case]]
+id = "total-per-customer-through-a-cte"
+pattern = "fan-trap in a CTE"
+question = "Each customer with the total value of their orders that have items."
+expect = "wrong"
+sql = """
+WITH x AS (
+    SELECT o.customer_id, o.total
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.id
+)
+SELECT customer_id, SUM(total) FROM x GROUP BY customer_id
+"""
+truth = """
+SELECT customer_id, SUM(total) FROM orders
+WHERE id IN (SELECT order_id FROM order_items) GROUP BY customer_id
+"""
+
+[[case]]
+id = "total-per-customer-through-a-cte-row-number"
+pattern = "row-number"
+question = "Each customer with the total value of their orders that have items."
+expect = "right"
+sql = """
+WITH x AS (
+    SELECT o.customer_id, o.total,
+        ROW_NUMBER() OVER (PARTITION BY o.id ORDER BY oi.id) AS rn
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.id
+)
+SELECT customer_id, SUM(total) FROM x WHERE rn = 1 GROUP BY customer_id
+"""
+truth = """
+SELECT customer_id, SUM(total) FROM orders
+WHERE id IN (SELECT order_id FROM order_items) GROUP BY customer_id
+"""
+
+[[case]]
+id = "ordered-and-paid-legs-joined-back"
+pattern = "fan-trap in a union leg"
+question = "Per customer: value of the items they ordered and the amount they paid."
+expect = "wrong"
+sql = """
+WITH legs AS (
+    SELECT o.customer_id, oi.quantity * oi.price AS ordered, NULL AS paid
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id
+    UNION ALL
+    SELECT o.customer_id, NULL, p.amount
+    FROM payments p
+    JOIN orders o ON o.id = p.order_id
+    JOIN order_items oi ON oi.order_id = o.id
+)
+SELECT customer_id, SUM(ordered) AS ordered, SUM(paid) AS paid
+FROM legs GROUP BY customer_id
+"""
+truth = """
+WITH ordered AS (
+    SELECT o.customer_id, SUM(oi.quantity * oi.price) AS v
+    FROM order_items oi JOIN orders o ON o.id = oi.order_id GROUP BY o.customer_id
+), paid AS (
+    SELECT o.customer_id, SUM(p.amount) AS v
+    FROM payments p JOIN orders o ON o.id = p.order_id GROUP BY o.customer_id
+)
+SELECT ordered.customer_id, ordered.v, paid.v
+FROM ordered JOIN paid ON paid.customer_id = ordered.customer_id
+"""
+
+[[case]]
+id = "order-value-per-region-through-a-cte"
+pattern = "many-to-one in a CTE"
+question = "Total order value per region."
+expect = "right"
+sql = """
+WITH x AS (
+    SELECT r.name, o.total
+    FROM orders o
+    JOIN customers c ON c.id = o.customer_id
+    JOIN regions r ON r.id = c.region_id
+)
+SELECT name, SUM(total) AS order_value FROM x GROUP BY name
+"""
+truth = """
+SELECT r.name, (SELECT SUM(o.total) FROM orders o JOIN customers c ON c.id = o.customer_id
+                WHERE c.region_id = r.id)
+FROM regions r
+WHERE EXISTS (SELECT 1 FROM orders o JOIN customers c ON c.id = o.customer_id
+              WHERE c.region_id = r.id)
+"""
+
 # --- Counting the "one" side through the "many" side --------------------------
 
 [[case]]

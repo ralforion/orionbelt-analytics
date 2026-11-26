@@ -342,19 +342,20 @@ Even with automatic detection, verify your results:
 
 ## Benchmark
 
-`scripts/bench_fan_traps.py` measures how often OBQC stops a query that returns a wrong number. Its 34 cases (`benchmarks/fan_traps/cases.toml`) are questions over a small shop and school schema, each with a candidate query and a "truth" query that answers it correctly. Every candidate runs and names only real tables and columns. Whether it is wrong is not decided by hand: the benchmark runs both queries on the same data and calls the candidate wrong when its numbers differ -- 14 do, off by 7% to 300%. It then asks OBQC what it makes of each candidate, with the keys learned three ways:
+`scripts/bench_fan_traps.py` measures how often OBQC stops a query that returns a wrong number. Its 38 cases (`benchmarks/fan_traps/cases.toml`) are questions over a small shop and school schema, each with a candidate query and a "truth" query that answers it correctly. Every candidate runs and names only real tables and columns. Whether it is wrong is not decided by hand: the benchmark runs both queries on the same data and calls the candidate wrong when its numbers differ -- 16 do, off by 7% to 300%. It then asks OBQC what it makes of each candidate, with the keys learned three ways:
 
 | Check | Wrong answers blocked | warned | let through | Right answers let through | warned | blocked |
 |---|---|---|---|---|---|---|
-| Names only (no ontology) | 0 | 0 | 14 | 20 | 0 | 0 |
-| OBQC, keys declared by the database | 12 | 0 | 2 | 19 | 0 | 1 |
-| OBQC, keys inferred from names | 0 | 12 | 2 | 19 | 1 | 0 |
-| OBQC, inferred keys checked on the data | 12 | 0 | 2 | 19 | 0 | 1 |
+| Names only (no ontology) | 0 | 0 | 16 | 22 | 0 | 0 |
+| OBQC, keys declared by the database | 14 | 0 | 2 | 21 | 0 | 1 |
+| OBQC, keys inferred from names | 0 | 14 | 2 | 21 | 1 | 0 |
+| OBQC, inferred keys checked on the data | 14 | 0 | 2 | 21 | 0 | 1 |
 
 - **Names only** is what a SQL check without an ontology can do: every table and column exists, so every wrong total passes.
 - **Inferred** keys are only guesses, so a fan-trap resting on one is a warning the model sees, not a refusal. Checked on the data (`validate_relationship`, or `AUTO_VALIDATE_RELATIONSHIPS=true`), all nine are confirmed and count like declared keys.
 - **One fact pointing at another** -- returns, each of one order line -- is judged like any other join. Summing the lines across their returns is blocked, whether the returns are summed too (7% off: lines returned in two parts count twice) or only filter the lines (29% off). One leg per fact, a semi-join, and refunds per customer reached through the returned line all pass.
-- **Sketches of the fix**: 11 of the 12 blocked wrong answers carry one ([OBQC](obqc.md#sketches-of-the-fix)), 5 with one leg per fact and 6 with a semi-join. The twelfth, credits listed by a student's name across a bridge, has no shape that keeps its question and gets the bridge advice alone. The benchmark records each case's sketch shape; it does not fill them in, since that takes a model.
+- **Inside a CTE or derived table** -- order totals repeated per item in a CTE, then summed; a `UNION ALL` leg that joins payments back to the items -- the rows are judged where they are added up ([OBQC](obqc.md#fan-trap-detection-error--warning)), and both are blocked (300% off). The same CTE deduplicated with `ROW_NUMBER() ... = 1`, and one of lookups only, pass.
+- **Sketches of the fix**: 12 of the 14 blocked wrong answers carry one ([OBQC](obqc.md#sketches-of-the-fix)), 5 with one leg per fact and 7 with a semi-join. The other two have no shape that keeps their question: credits listed by a student's name across a bridge, which gets the bridge advice alone, and the leg that joins payments back to the items. The benchmark records each case's sketch shape; it does not fill them in, since that takes a model.
 
 What OBQC misses, and the one right answer it refuses:
 
