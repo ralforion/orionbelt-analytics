@@ -292,7 +292,8 @@ async def test_a_snowflake_login_is_the_users_own_connection(monkeypatch):
         )
         managers.append(manager)
     alice, bob = managers
-    assert alice.auth_identity == ALICE
+    assert alice.auth_identity.startswith(f"{ALICE}#dialect=snowflake")
+    assert "exchange=entra_obo" in alice.auth_identity
     assert _get_connection_fingerprint(alice) != _get_connection_fingerprint(bob)
     first = _FakeDriver.given[0]
     assert first["username"] is None and first["password"] is None

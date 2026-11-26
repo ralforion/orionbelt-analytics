@@ -32,7 +32,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import aiohttp
 
@@ -361,6 +361,21 @@ def _needs_sign_in(body: Mapping[str, Any]) -> bool:
     )
 
 
+#: Form fields whose values are credentials: never repeated back.
+_SECRET_FIELDS = ("subject_token", "assertion", "client_secret")
+
+
+def _redact(text: str, secrets: list[str]) -> str:
+    """*text* with every credential this server sent blanked out.
+
+    An identity provider's error description is passed on to the user, and a
+    service that echoes its input would otherwise hand the token back.
+    """
+    for secret in sorted({s for s in secrets if s}, key=len, reverse=True):
+        text = text.replace(secret, "[redacted]")
+    return text
+
+
 async def _token_request(
     source: LoginSource,
     url: str,
@@ -372,9 +387,13 @@ async def _token_request(
     status, body = await post(url, form, auth)
     body = body if isinstance(body, dict) else {}
     if status >= 400:
-        error = body.get("error", f"HTTP {status}")
-        description = body.get("error_description", "")
-        detail = f"{error}: {description}" if description else str(error)
+        sent = [form.get(name, "") for name in _SECRET_FIELDS]
+        if auth is not None:
+            # Both as sent (form-encoded) and as they are.
+            sent += [auth[1], unquote(auth[1])]
+        error = _redact(str(body.get("error", f"HTTP {status}")), sent)
+        description = _redact(str(body.get("error_description", "")), sent)
+        detail = f"{error}: {description}" if description else error
         if status >= 500:
             raise SignInUnavailableError(
                 f"The sign-in service of database '{source.name}' failed ({detail})."
@@ -384,11 +403,15 @@ async def _token_request(
             raise SignInInteractionRequiredError(
                 f"Database '{source.name}' needs the user to sign in again first "
                 f"({detail}).",
-                claims=claims if isinstance(claims, str) and claims else None,
+                claims=(
+                    _redact(claims, sent)
+                    if isinstance(claims, str) and claims
+                    else None
+                ),
             )
         raise SignInRefusedError(
             f"Database '{source.name}' refused to log in this user ({detail}).",
-            error=body.get("error") if isinstance(body.get("error"), str) else None,
+            error=error if isinstance(body.get("error"), str) else None,
         )
     token = body.get("access_token")
     if not isinstance(token, str) or not token:
@@ -442,6 +465,32 @@ class UserLogin:
 
     def __repr__(self) -> str:
         return f"UserLogin(source={self.source.name!r}, user={self.user!r})"
+
+    @property
+    def identity(self) -> str:
+        """Who the connection is: the user, and how the connection signs in.
+
+        The user alone is not enough: two connections to one warehouse that
+        sign in differently -- another service principal, scope, exchange or
+        workforce provider -- see different things, and must not share a
+        runtime, a manager or its token. Only settings, never a token, so a
+        renewed token keeps the workspace.
+        """
+        source = self.source
+        how = "|".join(
+            f"{name}={value}"
+            for name, value in (
+                ("dialect", source.dialect),
+                ("client_id", source.client_id),
+                ("exchange", source.exchange),
+                ("scope", source.scope),
+                ("audience", source.audience),
+                ("workforce_provider", source.workforce_provider),
+                ("workforce_user_project", source.workforce_user_project),
+            )
+            if value
+        )
+        return f"{self.user}#{how}"
 
     def _fresh(self) -> bool:
         return (

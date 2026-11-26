@@ -214,6 +214,9 @@ def test_an_unbound_session_still_owns_its_manager():
 
 @pytest.fixture
 def postgres_env(monkeypatch):
+    # The type's own variables, as a server without named connections reads
+    # them; a developer's .env naming one would make db_type resolve to it.
+    monkeypatch.delenv("OBA_DATABASES", raising=False)
     for name, value in {
         "POSTGRES_HOST": "db.internal",
         "POSTGRES_PORT": "5432",
