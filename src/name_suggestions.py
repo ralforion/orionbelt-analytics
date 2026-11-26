@@ -130,8 +130,8 @@ def closest(
     return [m for m in ranked if m.score >= best - WINDOW][:limit]
 
 
-def sql_name(name: str, dialect: str, exact_case: bool = True) -> str:
-    """*name* as an identifier *dialect* reads back as that name.
+def identifier(name: str, dialect: str, exact_case: bool = True) -> exp.Identifier:
+    """*name* as an identifier node *dialect* reads back as that name.
 
     Quoted when it must be: a space or other character a bare name cannot
     hold, a reserved word, or -- when *exact_case* says the name is the
@@ -143,7 +143,13 @@ def sql_name(name: str, dialect: str, exact_case: bool = True) -> str:
     unsafe = not exp.SAFE_IDENTIFIER_RE.match(name) or (
         exact_case and Dialect.get_or_raise(dialect).case_sensitive(name)
     )
-    return exp.to_identifier(name, quoted=unsafe).sql(dialect=dialect)
+    return exp.to_identifier(name, quoted=unsafe)
+
+
+def sql_name(name: str, dialect: str, exact_case: bool = True) -> str:
+    """*name* written as *dialect* reads it back as that name (:func:`identifier`)."""
+    written: str = identifier(name, dialect, exact_case).sql(dialect=dialect)
+    return written
 
 
 def did_you_mean(matches: list[Match]) -> str | None:

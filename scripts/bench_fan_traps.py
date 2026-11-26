@@ -105,6 +105,14 @@ TABLES: list[tuple[str, str, str, list[tuple[str, str, str]]]] = [
         "id",
         [("order_id", "orders", "id")],
     ),
+    # A fact of its own that points at another fact: each return is of one
+    # order line.
+    (
+        "returns",
+        "id INTEGER, order_item_id INTEGER, quantity INTEGER, refund DECIMAL(10, 2)",
+        "id",
+        [("order_item_id", "order_items", "id")],
+    ),
     ("students", "id INTEGER, name VARCHAR, tuition DECIMAL(10, 2)", "id", []),
     ("courses", "id INTEGER, title VARCHAR, credits INTEGER", "id", []),
     (
@@ -125,8 +133,9 @@ def generate_data(seed: int = 7) -> dict[str, list[tuple[Any, ...]]]:
 
     Built so that the traps show: customers with several orders, orders with
     several items and payments, some customers and orders with none, one
-    shipment per order (many allowed), two students of one name, students in
-    several courses, and one customer with two orders of equal value.
+    shipment per order (many allowed), order lines returned in one or two
+    parts, two students of one name, students in several courses, and one
+    customer with two orders of equal value.
     """
     rng = random.Random(seed)
     regions = [(1, "North"), (2, "South"), (3, "East"), (4, "West")]
@@ -193,6 +202,15 @@ def generate_data(seed: int = 7) -> dict[str, list[tuple[Any, ...]]]:
         for student in range(1, 21)
         for course in rng.sample(range(1, 9), rng.randint(1, 4))
     )
+    # Drawn last, so every row above is what it was before returns existed.
+    returns: list[tuple[Any, ...]] = []
+    for item_id, _, _, quantity, price in items:
+        if rng.random() >= 0.25:
+            continue
+        units = rng.randint(1, quantity)
+        parts = [1, units - 1] if units >= 2 and rng.random() < 0.5 else [units]
+        for part in parts:
+            returns.append((len(returns) + 1, item_id, part, part * price))
     return {
         "regions": regions,
         "customers": customers,
@@ -201,6 +219,7 @@ def generate_data(seed: int = 7) -> dict[str, list[tuple[Any, ...]]]:
         "order_items": items,
         "payments": payments,
         "shipments": shipments,
+        "returns": returns,
         "students": students,
         "courses": courses,
         "student_courses": enrolments,
@@ -341,8 +360,10 @@ def obqc(graph: Any) -> Any:
     return validator
 
 
-def judge(validator: Any, sql: str) -> tuple[str, list[str]]:
-    """What execute_sql_query would do with *sql*, and the findings why."""
+def judge(validator: Any, sql: str) -> tuple[str, list[str], str | None]:
+    """What execute_sql_query would do with *sql*, the findings why, and the
+    shape of the fix OBQC sketches (``union_all_legs``, ``semi_join``), if any.
+    """
     from src.obqc_validator import OBQCIssueType, OBQCSeverity
 
     result = validator.validate(sql, dialect="duckdb")
@@ -353,14 +374,18 @@ def judge(validator: Any, sql: str) -> tuple[str, list[str]]:
             if issue.severity in (OBQCSeverity.ERROR, OBQCSeverity.WARNING)
         }
     )
+    sketch = next(
+        (f["example"]["shape"] for f in result.fan_trap_findings if "example" in f),
+        None,
+    )
     if not result.is_valid:
-        return BLOCKED, findings
+        return BLOCKED, findings, sketch
     fan_out = any(
         issue.issue_type == OBQCIssueType.FAN_TRAP_DETECTED
         and issue.severity == OBQCSeverity.WARNING
         for issue in result.issues
     )
-    return (WARNED if fan_out else PASSED), findings
+    return (WARNED if fan_out else PASSED), findings, sketch
 
 
 def names_only(sql: str, catalog: dict[str, dict[str, str]]) -> str:
@@ -445,6 +470,8 @@ class CaseResult:
     #: Per scenario: blocked, warned or passed.
     outcome: dict[str, str] = field(default_factory=dict)
     findings: dict[str, list[str]] = field(default_factory=dict)
+    #: Per scenario: the shape of the fix OBQC sketched, or None.
+    sketch: dict[str, str | None] = field(default_factory=dict)
 
 
 def run(seed: int = 7) -> dict[str, Any]:
@@ -500,9 +527,10 @@ def run(seed: int = 7) -> dict[str, Any]:
                     names_only=names_only(case["sql"], catalog),
                 )
                 for scenario, validator in validators.items():
-                    outcome, findings = judge(validator, case["sql"])
+                    outcome, findings, sketch = judge(validator, case["sql"])
                     result.outcome[scenario] = outcome
                     result.findings[scenario] = findings
+                    result.sketch[scenario] = sketch
                 results.append(result)
         finally:
             con.close()
@@ -543,14 +571,21 @@ def report(outcome: dict[str, Any]) -> str:
             f"| {scenario} | {w[BLOCKED]} | {w[WARNED]} | {w[PASSED]} "
             f"| {r[PASSED]} | {r[WARNED]} | {r[BLOCKED]} |"
         )
+    blocked = [c for c in wrong if c["outcome"]["declared"] == BLOCKED]
+    shapes = Counter(
+        c["sketch"]["declared"] for c in blocked if c["sketch"]["declared"]
+    )
     lines += [
+        "",
+        f"Wrong answers blocked (declared keys) with a sketch of the fix: "
+        f"{sum(shapes.values())} of {len(blocked)} {dict(sorted(shapes.items()))}",
         "",
         f"Inferred relationships checked on the data: {outcome['verdicts']}",
         "",
         "| Case | Pattern | Data | Off by | Names only | "
         + " | ".join(SCENARIOS)
-        + " |",
-        "|---|---|---|---|---|" + "---|" * len(SCENARIOS),
+        + " | Sketch |",
+        "|---|---|---|---|---|" + "---|" * len(SCENARIOS) + "---|",
     ]
     for c in cases:
         off = (
@@ -561,7 +596,7 @@ def report(outcome: dict[str, Any]) -> str:
         lines.append(
             f"| {c['id']} | {c['pattern']} | {c['label']} | {off} | {c['names_only']} | "
             + " | ".join(c["outcome"][s] for s in SCENARIOS)
-            + " |"
+            + f" | {c['sketch']['declared'] or ''} |"
         )
     mismatched = [c["id"] for c in cases if c["label"] != c["expect"]]
     if mismatched:
