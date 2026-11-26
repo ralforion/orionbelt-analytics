@@ -1887,6 +1887,10 @@ class OBQCValidator:
                     # None when that is not known for certain.
                     "group_tables": group_tables,
                     "outer_tables": outer_tables,
+                    # The ON condition as written and the names it uses, for a
+                    # sketch that must keep the predicate the query states.
+                    "on_node": None,
+                    "alias_map": alias_map,
                 }
 
                 # How to name this join in a message. A joined subquery has
@@ -1925,6 +1929,7 @@ class OBQCValidator:
                 on_clause = join.args.get("on")
                 if on_clause is not None:
                     join_info["on_condition"] = on_clause.sql()
+                    join_info["on_node"] = on_clause
                     join_info["on_tables"] = self._condition_tables(
                         on_clause, alias_map
                     )
@@ -2519,8 +2524,8 @@ class OBQCValidator:
 
         Its outputs -- every aggregate among them, ``MAX`` and ``COUNT(DISTINCT
         ...)`` too, which no fan-out corrupts and ``measure_tables`` therefore
-        leaves out -- the grouping keys, ``HAVING``, ``ORDER BY`` and
-        ``QUALIFY``. A fan-trap sketch may move a table into an ``EXISTS``, or
+        leaves out -- the grouping keys, ``HAVING``, ``ORDER BY``, ``QUALIFY``
+        and the named windows of ``WINDOW``. A fan-trap sketch may move a table into an ``EXISTS``, or
         read it in one leg only, when nothing here needs it elsewhere.
 
         Args:
@@ -2541,6 +2546,8 @@ class OBQCValidator:
         nodes += [
             select.args[arg] for arg in ("having", "qualify") if select.args.get(arg)
         ]
+        # WINDOW w AS (PARTITION BY ...): read wherever OVER w is.
+        nodes += list(select.args.get("windows") or [])
         order = select.args.get("order")
         aliases = {
             p.alias.lower() for p in select.expressions if isinstance(p, exp.Alias)
@@ -4379,9 +4386,64 @@ class OBQCValidator:
                         rel.relationship_type == "many_to_one"
                         and rel.from_table.lower() == wanted
                         and rel.to_table.lower() == other.lower()
+                        and self._key_only(join, rel)
                     ):
                         return Link(rel.from_table, rel.to_table, rel.pairs)
         return None
+
+    @staticmethod
+    def _key_only(join_info: dict[str, Any], rel: RelationshipInfo) -> bool:
+        """Whether the join's ON states *rel*'s key and nothing else.
+
+        Only then can a sketch write the join as the key: ``ON oi.order_id =
+        o.id OR oi.product_id = o.id`` matches more rows, and ``... AND
+        oi.product_id = o.id`` fewer, than ``order_items.order_id =
+        orders.id`` alone. A comma join, whose conditions sit in WHERE with
+        the filters, is never taken as the key.
+        """
+        on = join_info.get("on_node")
+        if on is None:
+            return False
+        on = on.unnest()
+        conjuncts = list(on.flatten()) if isinstance(on, exp.And) else [on]
+        key = {
+            frozenset(
+                {
+                    (rel.from_table.lower(), child.lower()),
+                    (rel.to_table.lower(), parent.lower()),
+                }
+            )
+            for child, parent in rel.pairs
+        }
+        return (
+            len(conjuncts) == len(key)
+            and set(join_info.get("on_comparisons", frozenset())) == key
+        )
+
+    def _written_condition(
+        self, join_info: dict[str, Any], tables: set[str], dialect: str
+    ) -> str | None:
+        """The join's ON condition, every column qualified by its table's name.
+
+        What a semi-join sketch keeps when the ON is more than the key. None
+        when that cannot be written faithfully: no ON, a column without a
+        qualifier (inside EXISTS it may resolve elsewhere), a qualifier that
+        is no table of the scope, a table other than *tables*, or a subquery.
+        """
+        on: exp.Expr | None = join_info.get("on_node")
+        alias_map: dict[str, str] = join_info.get("alias_map") or {}
+        if on is None or any(on.find_all(exp.Query)):
+            return None
+        written = on.copy()
+        for column in written.find_all(exp.Column):
+            table = alias_map.get(column.table.lower()) if column.table else None
+            if table is None or table.lower() not in tables:
+                return None
+            column.set("table", exp.to_identifier(self._table_name(table)))
+            for part in ("db", "catalog"):
+                column.set(part, None)
+        sql: str = written.sql(dialect=dialect)
+        return sql
 
     def _lookups(self, joins: list[dict[str, Any]], start: str) -> set[str]:
         """*start* and every table it reaches through many-to-one joins of the scope.
@@ -4389,7 +4451,8 @@ class OBQCValidator:
         Each step gives a row at most one row of the next table, so a leg or a
         semi-join reading *start* can take a group key or a value from any of
         them without repeating a row. A join to the many side is not followed,
-        nor one whose target the data showed to repeat.
+        nor one whose target the data showed to repeat, nor one that does not
+        compare the key in full through ``AND``.
 
         Args:
             joins: The scope's joins.
@@ -4406,8 +4469,12 @@ class OBQCValidator:
             )
             for i, a in enumerate(ends):
                 for b in ends[i + 1 :]:
-                    for rel in self._join_relationships(
-                        a, b, join.get("on_comparisons", frozenset())
+                    # Only a key the join compares in full, through AND: under
+                    # OR, or in a comma join whose columns are not read, a row
+                    # may meet several rows of the other table.
+                    for rel in self._used_relationships(
+                        self._relationships_between(a, b),
+                        join.get("on_comparisons", frozenset()),
                     ):
                         if rel.relationship_type == "many_to_one" and not (
                             rel.target_not_unique
@@ -4463,7 +4530,12 @@ class OBQCValidator:
           Only when nothing outside FROM and WHERE reads it -- no output, not
           even a ``MAX`` or ``COUNT(DISTINCT ...)`` of it, no ``COUNT(*)`` --
           and *measure* reaches everything that is read through many-to-one
-          joins, since the semi-join takes *fanning* out of the query.
+          joins, since the semi-join takes *fanning* out of the query. The
+          EXISTS states the key where the join states only the key, and the
+          join's own ON otherwise (:meth:`_written_condition`).
+        - Legs only where the join states the key and nothing else
+          (:meth:`_key_only`): under ``OR`` a returns leg joined back to its
+          sale could meet several.
 
         None for every other shape, which keeps the prose suggestion alone:
         an outer join to a table it does not measure filters nothing, so
@@ -4485,7 +4557,9 @@ class OBQCValidator:
         joins = self._scope_joins(result, join_info.get("scope_id"))
         group_tables = join_info.get("group_tables") or set()
         if fanning.lower() in measured:
-            if not self._legs_fit(joins, (measure, fanning), group_tables, outer):
+            if not self._key_only(join_info, rel) or not self._legs_fit(
+                joins, (measure, fanning), group_tables, outer
+            ):
                 return None
             sql = union_all_legs(
                 [rel.to_table, rel.from_table], {rel.from_table: link}, dialect, grouped
@@ -4498,9 +4572,20 @@ class OBQCValidator:
             return None
         if not outer <= self._lookups(joins, measure):
             return None
+        # The key alone where the join states only the key; else the join's own
+        # predicate, which EXISTS keeps exactly.
+        condition = (
+            None
+            if self._key_only(join_info, rel)
+            else self._written_condition(
+                join_info, {measure.lower(), fanning.lower()}, dialect
+            )
+        )
+        if condition is None and not self._key_only(join_info, rel):
+            return None
         return {
             "shape": SHAPE_SEMI_JOIN,
-            "sql": semi_join(rel.to_table, link, dialect, grouped),
+            "sql": semi_join(rel.to_table, link, dialect, grouped, condition),
         }
 
     def _legs_example(

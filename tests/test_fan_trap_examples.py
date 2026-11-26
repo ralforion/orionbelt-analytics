@@ -294,6 +294,16 @@ def test_no_semi_join_where_it_would_change_the_question(
         # A subquery's columns are its own; nothing says which table they read.
         "SELECT SUM(o.total), (SELECT MAX(r.refund) FROM returns r) FROM orders o "
         "JOIN order_items oi ON oi.order_id = o.id",
+        # A named window over the child reads it as an inline one would.
+        "SELECT SUM(o.total) OVER w FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id "
+        "WINDOW w AS (PARTITION BY oi.product_id)",
+        # A comma join's key sits in WHERE among the filters: not taken as one.
+        "SELECT SUM(o.total) FROM orders o, order_items oi WHERE oi.order_id = o.id",
+        # Legs written as the key would claim one row per return; under OR a
+        # line may meet several orders.
+        "SELECT SUM(o.total), SUM(oi.quantity) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id OR oi.product_id = o.id",
     ],
 )
 def test_no_sketch_when_a_leg_or_the_exists_cannot_answer(
@@ -318,6 +328,100 @@ def test_a_lookup_read_by_an_output_keeps_the_semi_join(
     """
     example = _example(validator, sql)
     assert example is not None and example["shape"] == SHAPE_SEMI_JOIN
+
+
+@pytest.mark.parametrize(
+    ("on", "kept"),
+    [
+        (
+            "oi.order_id = o.id OR oi.product_id = o.id",
+            "order_items.order_id = orders.id OR order_items.product_id = orders.id",
+        ),
+        (
+            "oi.order_id = o.id AND oi.product_id = o.id",
+            "order_items.order_id = orders.id AND order_items.product_id = orders.id",
+        ),
+        (
+            "oi.order_id = o.id AND oi.quantity > 1",
+            "order_items.order_id = orders.id AND order_items.quantity > 1",
+        ),
+    ],
+)
+def test_the_exists_keeps_a_join_predicate_that_is_more_than_the_key(
+    validator: OBQCValidator, on: str, kept: str
+) -> None:
+    sql = f"SELECT SUM(o.total) FROM orders o JOIN order_items oi ON {on}"
+    example = _example(validator, sql)
+    assert example is not None and example["shape"] == SHAPE_SEMI_JOIN
+    assert f"    WHERE {kept}\n)" in example["sql"]
+
+
+def test_a_named_window_over_the_measure_keeps_the_semi_join(
+    validator: OBQCValidator,
+) -> None:
+    sql = (
+        "SELECT SUM(o.total) OVER w FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id "
+        "WINDOW w AS (PARTITION BY o.customer_id)"
+    )
+    example = _example(validator, sql)
+    assert example is not None and example["shape"] == SHAPE_SEMI_JOIN
+
+
+def test_a_leg_starts_with_its_join_only_when_that_is_the_key(
+    validator: OBQCValidator,
+) -> None:
+    sql = """
+    SELECT o.customer_id, SUM(oi.quantity * oi.price), SUM(p.amount)
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.id
+    JOIN payments p ON p.order_id = o.id AND p.amount > 0
+    GROUP BY o.customer_id
+    """
+    example = _example(validator, sql)
+    assert example is not None and example["shape"] == SHAPE_LEGS
+    assert "JOIN orders ON order_items.order_id = orders.id" in example["sql"]
+    # The payments join filters too, so the sketch does not write it as the key.
+    assert "JOIN orders ON payments.order_id = orders.id" not in example["sql"]
+
+
+def test_the_exists_filled_in_returns_the_right_numbers_under_or(
+    validator: OBQCValidator,
+) -> None:
+    """A key-only EXISTS would drop the rows the OR's other branch matches."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("""
+        CREATE TABLE orders (id INTEGER, customer_id INTEGER, total DECIMAL(10, 2));
+        CREATE TABLE order_items (
+            id INTEGER, order_id INTEGER, product_id INTEGER,
+            quantity INTEGER, price DECIMAL(10, 2));
+        INSERT INTO orders VALUES (1, 1, 100), (2, 1, 200), (3, 2, 400);
+        -- Order 1 matched by order_id twice; order 2 only through product_id.
+        INSERT INTO order_items VALUES (1, 1, 7, 1, 1), (2, 1, 2, 1, 1), (3, 9, 2, 1, 1);
+        """)
+    sql = (
+        "SELECT SUM(o.total) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id OR oi.product_id = o.id"
+    )
+    truth = con.execute(
+        "SELECT SUM(total) FROM orders WHERE EXISTS (SELECT 1 FROM order_items "
+        "WHERE order_id = orders.id OR product_id = orders.id)"
+    ).fetchall()
+    assert con.execute(sql).fetchall() != truth
+    example = _example(validator, sql)
+    assert example is not None
+    filled = _fill(
+        example["sql"],
+        {
+            "the query's aggregates of orders": "SUM(orders.total)",
+            "its joins and filters, as in the query": "",
+            "AND the query's other filters": "",
+        },
+    )
+    assert con.execute(filled).fetchall() == truth
+    result = validator.validate(filled, dialect="duckdb")
+    assert result.is_valid and not result.fan_trap_risk
 
 
 def test_the_legs_filled_in_return_the_right_numbers(

@@ -19,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check and returns the right numbers. Offered only where it can answer the
   query: every leg reaches the group keys through many-to-one joins, and an
   `EXISTS` only takes out a table nothing else reads (not a `MAX`,
-  `COUNT(DISTINCT ...)` or `COUNT(*)` of it). The suggestion says which fix
-  it is. See docs/obqc.md.
+  `COUNT(DISTINCT ...)` or `COUNT(*)` of it, nor a named window), keeping
+  the join's own `ON` where it is more than the key. The suggestion says
+  which fix it is. See docs/obqc.md.
 - **Fan-trap benchmark: one fact pointing at another.** A `returns` table,
   each return of one order line, and five cases: sold and refunded per
   category, the value of returned lines, refunds per customer through the

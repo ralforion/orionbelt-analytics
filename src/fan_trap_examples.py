@@ -128,7 +128,13 @@ def union_all_legs(
     return "\n".join(sketch)
 
 
-def semi_join(measure: str, link: Link, dialect: str, grouped: bool = True) -> str:
+def semi_join(
+    measure: str,
+    link: Link,
+    dialect: str,
+    grouped: bool = True,
+    condition: str | None = None,
+) -> str:
     """*measure* read once per row, kept when a matching *link.child* row exists.
 
     Args:
@@ -136,6 +142,9 @@ def semi_join(measure: str, link: Link, dialect: str, grouped: bool = True) -> s
         link: The join from the table that fans out (its child) to *measure*.
         dialect: sqlglot dialect the names are written for.
         grouped: Whether the query groups.
+        condition: The join's own predicate, when it is more than the key
+            (``... OR ...``, a second equality): EXISTS must keep it as it
+            is. The key's equalities when None.
 
     Returns:
         The sketch, with ``<...>`` placeholders.
@@ -155,7 +164,7 @@ def semi_join(measure: str, link: Link, dialect: str, grouped: bool = True) -> s
         f"{_INDENT}SELECT 1",
         f"{_INDENT}FROM {sql_name(link.child, dialect)}",
         f"{_INDENT}<its joins and filters, as in the query>",
-        f"{_INDENT}WHERE {link.condition(dialect)}",
+        f"{_INDENT}WHERE {condition or link.condition(dialect)}",
         ")",
         "<AND the query's other filters>",
     ]
