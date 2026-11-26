@@ -384,11 +384,17 @@ Every `execute_sql_query` response carries `obqc_fan_trap`, whatever the outcome
       "fan_out_table": "shipments",
       "tables": ["sales", "shipments"],
       "relationship": "shipments.sale_id -> sales.id",
-      "assumed": false
+      "assumed": false,
+      "example": {
+        "shape": "semi_join",
+        "sql": "-- Sketch, not a query: fill in each <...>. ...\nSELECT <the query's aggregates of sales>\nFROM sales\nWHERE EXISTS (\n    SELECT 1\n    FROM shipments\n    <its joins and filters, as in the query>\n    WHERE shipments.sale_id = sales.id\n)\n<AND the query's other filters>"
+      }
     }
   ]
 }
 ```
+
+`example` is there only when a sketch of the fix fits the query ([Sketches of the fix](#sketches-of-the-fix)).
 
 `kind` is one of `measure_across_fan_out`, `conditional_row_count`, `disjoint_facts`, or `multiple_fan_out_joins`.
 
@@ -398,13 +404,46 @@ Every `execute_sql_query` response carries `obqc_fan_trap`, whatever the outcome
 
 The field is present on every `execute_sql_query` response, including those early failures, so reading it needs no special case.
 
+#### Sketches of the fix
+
+A blocked query has to be written again, and the finding knows the tables and the key that went wrong. Where the shape of the fix is clear from the query, the finding carries `example`: `{shape, sql}`, a sketch of the query to write instead, with the query's tables and join columns and `<...>` placeholders for what only the question decides.
+
+- **`union_all_legs`** -- both tables of the fan-out are summed (sales lines and their returns), or two facts share a parent (an order's items and payments). One leg per fact, NULL-padded and combined with `UNION ALL`, so neither repeats the other's rows. A leg starts with the join to the other table that the query wrote -- a return reaches its product through its order line:
+
+  ```sql
+  WITH legs AS (
+      SELECT <group keys AS names>, <order_items value> AS order_items_value, NULL AS returns_value
+      FROM order_items
+      <many-to-one joins to the group keys>
+      <the query's filters that apply to this fact>
+      UNION ALL
+      SELECT <group keys AS names>, NULL, <returns value>
+      FROM returns
+      JOIN order_items ON returns.order_item_id = order_items.id
+      <many-to-one joins to the group keys>
+      <the query's filters that apply to this fact>
+  )
+  SELECT <group key names>, SUM(order_items_value), SUM(returns_value)
+  FROM legs
+  GROUP BY <group key names>
+  -- Only the order_items rows that have a returns row? Add to the order_items leg:
+  --   WHERE EXISTS (SELECT 1 FROM returns WHERE returns.order_item_id = order_items.id)
+  ```
+
+  The last line is the other reading of the same SQL: `order_items JOIN returns` may mean "sales and returns" or "sales that were returned", and only the question says which. Offered only when the join states the key and nothing else, each leg reaches every group key through many-to-one joins the query wrote, and the legs between them reach every table the query reads outside `FROM` and `WHERE`: grouped by an item's product, an orders leg would have to join the items again and repeat the order. A join counts as a step to a group key only where it compares the key in full through `AND`; under `OR`, or as a comma join, a row may meet several.
+- **`semi_join`** -- the table that fans out is only joined to filter ("orders that contain a book"). Each row of the measured table is read once, and kept by `EXISTS` when a matching row exists. Offered only for an inner join, and only when nothing outside `FROM` and `WHERE` reads the fanning table -- no output, not even a `MAX` or `COUNT(DISTINCT ...)` of it, no `COUNT(*)`, nothing in `HAVING`, `ORDER BY` or a named `WINDOW` -- and the measured table reaches everything that is read through many-to-one joins, since the semi-join takes the fanning table out of the query. The `EXISTS` states the key where the join's `ON` is the key alone, and keeps the `ON` as written otherwise -- `oi.order_id = o.id OR oi.product_id = o.id` matches rows the key alone would drop. A comma join, whose key sits in `WHERE` among the filters, gets no sketch.
+
+Every other shape keeps the prose suggestion alone: grouped by a column of the fanning table, or through it, or through another table on the many side; an outer join to a table nothing sums, which filters nothing, so `EXISTS` would change the answer; grouping that cannot be read for certain (`GROUP BY ALL`, `ROLLUP`, a name no single table declares), and outputs that cannot (a star, a subquery's own columns); a bridge grouped by a non-key; a conditional row count.
+
+A sketch is deliberately not a query. Its placeholders are not SQL, so one sent back unchanged fails to parse instead of running half filled in, and the model keeps the decisions the SQL does not settle: which rows to keep, which aggregates to take. Filled in, it passes the check that blocked the original -- `tests/test_fan_trap_examples.py` fills both shapes and validates them.
+
 #### Running one anyway
 
 `execute_sql_query(..., allow_fan_out=True)` downgrades the finding to a warning and executes. The finding is still reported and `blocking` becomes `false`. Use it only when the multiplied rows are what you want, or when you know the relationship is 1:1 in practice despite the declared cardinality.
 
 **The override is the model's; the decision is the user's.** When `allow_fan_out=True` actually downgrades a blocking finding, a client that can render an elicitation form is asked first, in plain words and naming the tables, whether to run the query and accept inflated totals. If the user declines or dismisses the question, the override is withdrawn: the query fails with the normal blocking verdict, and `obqc_issues` tells the model not to retry the override but to restructure the query. If the user agrees, the warning reads "accepted by the user". Nobody is asked when nothing was overridden, and a client that cannot be asked keeps the behaviour above. An approval is about one database: if the session connects elsewhere while the question is open, the override does not stand. The validation is not affected by the answer: what OBQC detects is the same either way.
 
-The fix is usually to pre-aggregate the fanning table in a CTE and join the one row per key that produces, or to aggregate each fact separately and combine with `UNION ALL`. See [Fan-Trap Prevention](fan-trap-prevention.md) for the patterns.
+The fix is usually to pre-aggregate the fanning table in a CTE and join the one row per key that produces, or to aggregate each fact separately and combine with `UNION ALL` -- the finding's `example` sketches it where the shape is clear ([above](#sketches-of-the-fix)). See [Fan-Trap Prevention](fan-trap-prevention.md) for the patterns.
 
 ## How the LLM uses OBQC
 

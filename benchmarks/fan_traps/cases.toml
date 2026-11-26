@@ -344,6 +344,121 @@ SELECT ordered.customer_id, ordered.v, paid.v
 FROM ordered JOIN paid ON paid.customer_id = ordered.customer_id
 """
 
+# --- One fact pointing at another: returns of order lines --------------------
+
+[[case]]
+id = "sold-and-refunded-per-category"
+pattern = "fact-to-fact"
+question = "Per product category: the value sold and the value refunded."
+expect = "wrong"
+sql = """
+SELECT p.category,
+    SUM(oi.quantity * oi.price) AS sold,
+    SUM(r.refund) AS refunded
+FROM order_items oi
+JOIN products p ON p.id = oi.product_id
+LEFT JOIN returns r ON r.order_item_id = oi.id
+GROUP BY p.category
+"""
+truth = """
+WITH sold AS (
+    SELECT p.category, SUM(oi.quantity * oi.price) AS v
+    FROM order_items oi JOIN products p ON p.id = oi.product_id GROUP BY p.category
+), refunded AS (
+    SELECT p.category, SUM(r.refund) AS v
+    FROM returns r
+    JOIN order_items oi ON oi.id = r.order_item_id
+    JOIN products p ON p.id = oi.product_id
+    GROUP BY p.category
+)
+SELECT sold.category, sold.v, refunded.v
+FROM sold LEFT JOIN refunded ON refunded.category = sold.category
+"""
+
+[[case]]
+id = "sold-and-refunded-per-category-legs"
+pattern = "union-all"
+question = "Per product category: the value sold and the value refunded."
+expect = "right"
+sql = """
+WITH legs AS (
+    SELECT p.category, oi.quantity * oi.price AS sold, NULL AS refunded
+    FROM order_items oi
+    JOIN products p ON p.id = oi.product_id
+    UNION ALL
+    SELECT p.category, NULL, r.refund
+    FROM returns r
+    JOIN order_items oi ON oi.id = r.order_item_id
+    JOIN products p ON p.id = oi.product_id
+)
+SELECT category, SUM(sold) AS sold, SUM(refunded) AS refunded
+FROM legs
+GROUP BY category
+"""
+truth = """
+WITH sold AS (
+    SELECT p.category, SUM(oi.quantity * oi.price) AS v
+    FROM order_items oi JOIN products p ON p.id = oi.product_id GROUP BY p.category
+), refunded AS (
+    SELECT p.category, SUM(r.refund) AS v
+    FROM returns r
+    JOIN order_items oi ON oi.id = r.order_item_id
+    JOIN products p ON p.id = oi.product_id
+    GROUP BY p.category
+)
+SELECT sold.category, sold.v, refunded.v
+FROM sold LEFT JOIN refunded ON refunded.category = sold.category
+"""
+
+[[case]]
+id = "value-of-returned-lines-join"
+pattern = "fact-to-fact"
+question = "Value sold on the order lines that were returned."
+expect = "wrong"
+sql = """
+SELECT SUM(oi.quantity * oi.price)
+FROM order_items oi
+JOIN returns r ON r.order_item_id = oi.id
+"""
+truth = """
+SELECT SUM(quantity * price) FROM order_items
+WHERE id IN (SELECT order_item_id FROM returns)
+"""
+
+[[case]]
+id = "value-of-returned-lines-semi-join"
+pattern = "semi-join"
+question = "Value sold on the order lines that were returned."
+expect = "right"
+sql = """
+SELECT SUM(oi.quantity * oi.price)
+FROM order_items oi
+WHERE EXISTS (SELECT 1 FROM returns r WHERE r.order_item_id = oi.id)
+"""
+truth = """
+SELECT SUM(quantity * price) FROM order_items
+WHERE id IN (SELECT order_item_id FROM returns)
+"""
+
+[[case]]
+id = "refunds-per-customer-through-the-sale"
+pattern = "lookup chain"
+question = "Per customer: the value refunded."
+expect = "right"
+sql = """
+SELECT o.customer_id, SUM(r.refund) AS refunded
+FROM returns r
+JOIN order_items oi ON oi.id = r.order_item_id
+JOIN orders o ON o.id = oi.order_id
+GROUP BY o.customer_id
+"""
+truth = """
+SELECT o.customer_id, SUM(r.refund)
+FROM orders o, order_items oi, returns r
+WHERE oi.order_id = o.id AND r.order_item_id = oi.id
+GROUP BY o.customer_id
+"""
+
 # --- Counting the "one" side through the "many" side --------------------------
 
 [[case]]
