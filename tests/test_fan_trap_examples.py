@@ -536,3 +536,43 @@ def test_every_leg_has_a_column_for_every_fact() -> None:
     assert [leg.count(",") for leg in legs] == [2, 2, 2]
     assert legs[0] == "<a value> AS a_value, NULL AS b_value, NULL AS c_value"
     assert legs[2] == "NULL, NULL, <c value>"
+
+
+@pytest.mark.parametrize(
+    ("dialect", "orders", "items"),
+    [
+        # Mixed case: PostgreSQL folds a bare name to lower case.
+        ("postgresql", "Orders", "OrderItems"),
+        # Lower case: Snowflake folds a bare name to upper case.
+        ("snowflake", "orders", "order_items"),
+    ],
+)
+def test_a_kept_predicate_quotes_its_tables_as_the_from_does(
+    dialect: str, orders: str, items: str
+) -> None:
+    """Rewritten to table names, a qualifier must still name the quoted table."""
+    generator = OntologyGenerator(base_uri=VOCAB)
+    generator.generate_from_schema(
+        [
+            _table(orders, "id:integer total:decimal"),
+            _table(
+                items,
+                "id:integer order_id:integer quantity:integer",
+                ("order_id", orders),
+            ),
+        ]
+    )
+    validator = OBQCValidator()
+    validator.load_ontology(generator.graph, VOCAB)
+    sql = (
+        f'SELECT SUM(o.total) FROM "{orders}" o JOIN "{items}" oi '
+        "ON oi.order_id = o.id AND oi.quantity > 1"
+    )
+    result = validator.validate(sql, dialect=dialect)
+    (example,) = [f["example"] for f in result.fan_trap_findings if "example" in f]
+    assert example["shape"] == SHAPE_SEMI_JOIN
+    assert f'FROM "{items}"' in example["sql"]
+    assert (
+        f'WHERE "{items}".order_id = "{orders}".id AND "{items}".quantity > 1'
+        in example["sql"]
+    )

@@ -30,7 +30,15 @@ from .fan_trap_examples import (
     union_all_legs,
 )
 from .group_grain import Keyed, kept_once, output_at
-from .name_suggestions import LIMIT, Match, closest, did_you_mean, listing, sql_name
+from .name_suggestions import (
+    LIMIT,
+    Match,
+    closest,
+    did_you_mean,
+    identifier,
+    listing,
+    sql_name,
+)
 from .personal_data import enabled as personal_data_enabled
 from .relationship_validation import (
     STATUS_CONFIRMED,
@@ -4425,6 +4433,10 @@ class OBQCValidator:
     ) -> str | None:
         """The join's ON condition, every column qualified by its table's name.
 
+        The name quoted where *dialect* would otherwise fold it to another
+        (:func:`~src.name_suggestions.identifier`), as the FROM of the sketch
+        writes it.
+
         What a semi-join sketch keeps when the ON is more than the key. None
         when that cannot be written faithfully: no ON, a column without a
         qualifier (inside EXISTS it may resolve elsewhere), a qualifier that
@@ -4439,7 +4451,9 @@ class OBQCValidator:
             table = alias_map.get(column.table.lower()) if column.table else None
             if table is None or table.lower() not in tables:
                 return None
-            column.set("table", exp.to_identifier(self._table_name(table)))
+            # Quoted as the key's own path writes it: "OrderItems" in
+            # PostgreSQL, a lower-case name in Snowflake.
+            column.set("table", identifier(self._table_name(table), dialect))
             for part in ("db", "catalog"):
                 column.set(part, None)
         sql: str = written.sql(dialect=dialect)
