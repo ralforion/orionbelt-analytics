@@ -107,7 +107,7 @@ def test_the_listing_says_which_database_logs_in_as_the_user():
     ("env", "mode", "message"),
     [
         ({}, "none", "needs MCP_AUTH=jwt"),
-        ({"DB_FIN_TYPE": "bigquery"}, "jwt", "cannot log in as the user"),
+        ({"DB_FIN_TYPE": "postgresql"}, "jwt", "cannot log in as the user"),
         ({"DB_FIN_DATABRICKS_HTTP_PATH": ""}, "jwt", "DATABRICKS_HTTP_PATH"),
     ],
 )
