@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import MetaData, create_engine, event, inspect, text
@@ -55,6 +56,27 @@ def _name_client(
         client._connection.user_agent = CLIENT_NAME
 
 
+def _user_client(project_id: str, token: Callable[[], str]) -> Callable[..., None]:
+    """A ``do_connect`` listener giving each connection a client as the user.
+
+    In a worker thread, with the token renewed before the call; it never
+    exchanges. The credentials carry no refresh token: the next connection
+    gets the next one.
+    """
+
+    def give_client(
+        _dialect: Any, _record: Any, _args: Any, cparams: dict[str, Any]
+    ) -> None:
+        from google.cloud import bigquery
+        from google.oauth2.credentials import Credentials
+
+        cparams["client"] = bigquery.Client(
+            project=project_id, credentials=Credentials(token=token())
+        )
+
+    return give_client
+
+
 #: What BigQuery accepts as a dataset name: letters, digits and underscores, at
 #: most 1,024 of them. A schema name is checked against it before it is written
 #: into SQL, since the name comes from the caller.
@@ -97,8 +119,11 @@ class BigQueryDriver(DatabaseDriver):
         """
         project_id = params.get("project_id")
         dataset = params.get("dataset", "")
-        credentials_path = params.get("credentials_path")
-        credentials_json = params.get("credentials_json")
+        # A user login: a callable giving the signed-in user's current Google
+        # token each time a connection opens; no key file, no inline key.
+        token_provider: Callable[[], str] | None = params.get("token_provider")
+        credentials_path = None if token_provider else params.get("credentials_path")
+        credentials_json = None if token_provider else params.get("credentials_json")
 
         try:
             if not project_id:
@@ -123,7 +148,13 @@ class BigQueryDriver(DatabaseDriver):
             # accepted and then ignored, so a connection configured as one
             # service account ran as whatever the environment signed in as.
             engine_kwargs: dict[str, Any] = {}
-            if credentials_path:
+            if token_provider is not None:
+                # The dialect builds no client of its own; each connection gets
+                # one with the user's token (below).
+                connection_string = (
+                    f"bigquery://{project_id}/{dataset}?user_supplied_client=true"
+                )
+            elif credentials_path:
                 connection_string = f"bigquery://{project_id}/{dataset}?credentials_path={credentials_path}"
             elif credentials_json:
                 try:
@@ -158,6 +189,10 @@ class BigQueryDriver(DatabaseDriver):
                 # a TypeError.
                 **engine_kwargs,
             )
+            if token_provider is not None:
+                event.listen(
+                    self.engine, "do_connect", _user_client(project_id, token_provider)
+                )
             event.listen(self.engine, "do_connect", _name_client)
             self.metadata = MetaData()
 

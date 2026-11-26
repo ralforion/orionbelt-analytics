@@ -313,8 +313,17 @@ async def connect_database(
         project_id = env("BIGQUERY_PROJECT_ID")
         dataset = env("BIGQUERY_DATASET", "")
         configured_schema = dataset or None
-        credentials_path = env("BIGQUERY_CREDENTIALS_PATH")
-        credentials_json = env("BIGQUERY_CREDENTIALS_JSON")
+        bigquery_login: UserLogin | None = None
+        credentials_path = credentials_json = None
+        if entry.logs_in_as_user:
+            # Workforce identity federation: the user's own Google token.
+            signed_in = await _sign_in(entry)
+            if not isinstance(signed_in, UserLogin):
+                return signed_in
+            bigquery_login = signed_in
+        else:
+            credentials_path = env("BIGQUERY_CREDENTIALS_PATH")
+            credentials_json = env("BIGQUERY_CREDENTIALS_JSON")
 
         required_params = {"BIGQUERY_PROJECT_ID": project_id}
         missing_params = [k for k, v in required_params.items() if not v]
@@ -330,6 +339,7 @@ async def connect_database(
             dataset=dataset or "",
             credentials_path=credentials_path,
             credentials_json=credentials_json,
+            user_login=bigquery_login,
         )
         db_name = f"{project_id}/{dataset}" if dataset else str(project_id)
 

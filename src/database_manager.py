@@ -552,6 +552,12 @@ class DatabaseManager:
                 params.get("dataset", ""),
                 params.get("credentials_path"),
                 params.get("credentials_json"),
+                # A user login reconnects with its own renewed token.
+                **(
+                    {"user_login": params["user_login"]}
+                    if params.get("user_login") is not None
+                    else {}
+                ),
             )
         elif params["type"] == "duckdb":
             success = self.connect_duckdb(
@@ -944,19 +950,28 @@ class DatabaseManager:
         dataset: str = "",
         credentials_path: str | None = None,
         credentials_json: str | None = None,
+        user_login: Any = None,
     ) -> bool:
-        """Connect to Google BigQuery."""
+        """Connect to Google BigQuery.
+
+        With *user_login* (a :class:`~src.warehouse_login.UserLogin`), as the
+        signed-in user, by workforce identity federation: their current Google
+        token on every connection, no key, and the connection theirs alone.
+        """
         from .drivers.bigquery import BigQueryDriver
 
         driver = BigQueryDriver(
             pool_size=self._connection_pool_size,
             max_overflow=self._max_overflow,
         )
+        if user_login is not None:
+            credentials_path = credentials_json = None
         success = driver.connect(
             project_id=project_id,
             dataset=dataset,
             credentials_path=credentials_path,
             credentials_json=credentials_json,
+            token_provider=user_login.token if user_login is not None else None,
         )
         if success:
             self._activate_driver(driver)
@@ -978,8 +993,16 @@ class DatabaseManager:
                 "dataset": dataset,
                 "credentials_path": credentials_path,
                 "credentials_json": credentials_json,
+                "user_login": user_login,
             }
-            self.auth_identity = _bigquery_principal(credentials_path, credentials_json)
+            if user_login is not None:
+                # The signed-in user, never a principal the key names.
+                self.user_login = user_login
+                self.auth_identity = user_login.user
+            else:
+                self.auth_identity = _bigquery_principal(
+                    credentials_path, credentials_json
+                )
         return success
 
     def connect_duckdb(

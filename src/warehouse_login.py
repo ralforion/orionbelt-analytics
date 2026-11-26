@@ -45,7 +45,7 @@ RENEW_MARGIN_SECONDS = 120.0
 #: How long a token service may take to answer.
 EXCHANGE_TIMEOUT_SECONDS = 10.0
 #: The databases that can log in as the user, as this release supports them.
-USER_LOGIN_DIALECTS = ("databricks", "snowflake")
+USER_LOGIN_DIALECTS = ("databricks", "snowflake", "bigquery")
 
 _GRANT_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 _JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer"
@@ -570,7 +570,27 @@ def check_sources(
                 )
         if entry.db_type == "snowflake":
             warnings += _check_snowflake(entry, where, has_client)
+        if entry.db_type == "bigquery":
+            warnings += _check_bigquery(entry, where)
     return warnings
+
+
+def _check_bigquery(entry: DatabaseEntry, where: str) -> list[str]:
+    """What a BigQuery connection needs to log in as the user."""
+    if not entry.login_setting("WORKFORCE_PROVIDER"):
+        raise ValueError(
+            f"{where} needs {entry.prefix}WORKFORCE_PROVIDER, the workforce pool "
+            "provider Google's token service checks the user's token against: "
+            "//iam.googleapis.com/locations/global/workforcePools/<pool>/"
+            "providers/<provider>."
+        )
+    if not entry.getenv("BIGQUERY_PROJECT_ID"):
+        raise ValueError(f"{where} needs BIGQUERY_PROJECT_ID.")
+    return [
+        f"{where}: {v} is ignored; the user's own Google token is used."
+        for v in ("BIGQUERY_CREDENTIALS_PATH", "BIGQUERY_CREDENTIALS_JSON")
+        if entry.getenv(v)
+    ]
 
 
 def _check_snowflake(entry: DatabaseEntry, where: str, has_client: bool) -> list[str]:
