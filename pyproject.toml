@@ -50,8 +50,11 @@ dependencies = [
     # DuckDB connectivity
     "duckdb>=1.1.0",
     "duckdb-engine>=0.13.0",
-    # Databricks connectivity
+    # Databricks connectivity. The SQLAlchemy dialect left the connector in
+    # 4.0 for a package of its own; without it create_engine("databricks://")
+    # has no dialect to load.
     "databricks-sql-connector>=3.5.0",
+    "databricks-sqlalchemy>=2.0.0",
     # MySQL connectivity
     "pymysql>=1.1.0",
     # Security dependencies
