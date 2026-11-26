@@ -412,28 +412,28 @@ A blocked query has to be written again, and the finding knows the tables and th
 
   ```sql
   WITH legs AS (
-      SELECT <group keys>, <order_items value> AS order_items_value, NULL AS returns_value
+      SELECT <group keys AS names>, <order_items value> AS order_items_value, NULL AS returns_value
       FROM order_items
       <many-to-one joins to the group keys>
       <the query's filters that apply to this fact>
       UNION ALL
-      SELECT <group keys>, NULL, <returns value>
+      SELECT <group keys AS names>, NULL, <returns value>
       FROM returns
       JOIN order_items ON returns.order_item_id = order_items.id
       <many-to-one joins to the group keys>
       <the query's filters that apply to this fact>
   )
-  SELECT <group keys>, SUM(order_items_value), SUM(returns_value)
+  SELECT <group key names>, SUM(order_items_value), SUM(returns_value)
   FROM legs
-  GROUP BY <group keys>
+  GROUP BY <group key names>
   -- Only the order_items rows that have a returns row? Add to the order_items leg:
   --   WHERE EXISTS (SELECT 1 FROM returns WHERE returns.order_item_id = order_items.id)
   ```
 
-  The last line is the other reading of the same SQL: `order_items JOIN returns` may mean "sales and returns" or "sales that were returned", and only the question says which.
-- **`semi_join`** -- the table that fans out is only joined to filter ("orders that contain a book"). Each row of the measured table is read once, and kept by `EXISTS` when a matching row exists. Offered only for an inner join, and only when every group key and every other measured table is reached without the fanning table, since the semi-join takes it out of the query.
+  The last line is the other reading of the same SQL: `order_items JOIN returns` may mean "sales and returns" or "sales that were returned", and only the question says which. Offered only when each leg reaches every group key through many-to-one joins the query wrote, and the legs between them reach every table the query reads outside `FROM` and `WHERE`: grouped by an item's product, an orders leg would have to join the items again and repeat the order.
+- **`semi_join`** -- the table that fans out is only joined to filter ("orders that contain a book"). Each row of the measured table is read once, and kept by `EXISTS` when a matching row exists. Offered only for an inner join, and only when nothing outside `FROM` and `WHERE` reads the fanning table -- no output, not even a `MAX` or `COUNT(DISTINCT ...)` of it, no `COUNT(*)`, nothing in `HAVING` or `ORDER BY` -- and the measured table reaches everything that is read through many-to-one joins, since the semi-join takes the fanning table out of the query.
 
-Every other shape keeps the prose suggestion alone: grouped by a column of the fanning table, or through it; an outer join to a table nothing sums, which filters nothing, so `EXISTS` would change the answer; grouping that cannot be read for certain (`GROUP BY ALL`, `ROLLUP`, a name no single table declares); a bridge grouped by a non-key; a conditional row count.
+Every other shape keeps the prose suggestion alone: grouped by a column of the fanning table, or through it, or through another table on the many side; an outer join to a table nothing sums, which filters nothing, so `EXISTS` would change the answer; grouping that cannot be read for certain (`GROUP BY ALL`, `ROLLUP`, a name no single table declares), and outputs that cannot (a star, a subquery's own columns); a bridge grouped by a non-key; a conditional row count.
 
 A sketch is deliberately not a query. Its placeholders are not SQL, so one sent back unchanged fails to parse instead of running half filled in, and the model keeps the decisions the SQL does not settle: which rows to keep, which aggregates to take. Filled in, it passes the check that blocked the original -- `tests/test_fan_trap_examples.py` fills both shapes and validates them.
 

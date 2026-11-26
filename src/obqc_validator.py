@@ -1846,6 +1846,7 @@ class OBQCValidator:
             # there is one, and which tables its keys come from.
             grouped = select.args.get("group") is not None
             group_tables = self._group_tables(select, alias_map) if grouped else set()
+            outer_tables = self._outer_tables(select, alias_map, group_tables)
 
             for join in select.args.get("joins") or []:
                 join_info: dict[str, Any] = {
@@ -1881,9 +1882,11 @@ class OBQCValidator:
                     # JOIN, so it reads INNER there.
                     "side": (join.side or "").upper(),
                     "grouped": grouped,
-                    # Lower-cased tables the GROUP BY keys come from; None
-                    # when that is not known for certain.
+                    # Lower-cased tables the GROUP BY keys come from, and
+                    # every table the SELECT reads outside FROM and WHERE;
+                    # None when that is not known for certain.
                     "group_tables": group_tables,
+                    "outer_tables": outer_tables,
                 }
 
                 # How to name this join in a message. A joined subquery has
@@ -2500,17 +2503,93 @@ class OBQCValidator:
                 and not self._tables_declaring(key.name, alias_map)
             ):
                 target = outputs.get(key.name.lower())
-            for column in (target or key).find_all(exp.Column):
-                if column.table:
-                    resolved = alias_map.get(column.table.lower())
-                    if not resolved:
-                        return None
-                    tables.add(resolved.lower())
-                    continue
-                owners = self._tables_declaring(column.name, alias_map)
-                if len(owners) != 1:
+            read = self._expression_tables(target or key, alias_map)
+            if read is None:
+                return None
+            tables |= read
+        return tables
+
+    def _outer_tables(
+        self,
+        select: exp.Select,
+        alias_map: dict[str, str],
+        group_tables: set[str] | None,
+    ) -> set[str] | None:
+        """Tables this SELECT reads outside its FROM and WHERE, lower-cased.
+
+        Its outputs -- every aggregate among them, ``MAX`` and ``COUNT(DISTINCT
+        ...)`` too, which no fan-out corrupts and ``measure_tables`` therefore
+        leaves out -- the grouping keys, ``HAVING``, ``ORDER BY`` and
+        ``QUALIFY``. A fan-trap sketch may move a table into an ``EXISTS``, or
+        read it in one leg only, when nothing here needs it elsewhere.
+
+        Args:
+            select: The SELECT.
+            alias_map: This scope's alias -> table name map.
+            group_tables: Its grouping keys' tables (:meth:`_group_tables`).
+
+        Returns:
+            The tables, or None when they are not known for certain: unknown
+            grouping, a star (``COUNT(*)`` counts the joined rows, whichever
+            table they are of), or a column no single table of the scope
+            declares -- a subquery's own columns among them.
+        """
+        if group_tables is None:
+            return None
+        tables = set(group_tables)
+        nodes: list[exp.Expr] = list(select.expressions)
+        nodes += [
+            select.args[arg] for arg in ("having", "qualify") if select.args.get(arg)
+        ]
+        order = select.args.get("order")
+        aliases = {
+            p.alias.lower() for p in select.expressions if isinstance(p, exp.Alias)
+        }
+        for key in order.expressions if order is not None else ():
+            target = key.this if isinstance(key, exp.Ordered) else key
+            # A position or an output's alias reads what that output reads,
+            # which is counted already.
+            if output_at(select.expressions, target) is not None:
+                continue
+            if (
+                isinstance(target, exp.Column)
+                and not target.table
+                and target.name.lower() in aliases
+                and not self._tables_declaring(target.name, alias_map)
+            ):
+                continue
+            nodes.append(target)
+        for node in nodes:
+            read = self._expression_tables(node, alias_map)
+            if read is None:
+                return None
+            tables |= read
+        return tables
+
+    def _expression_tables(
+        self, node: exp.Expr, alias_map: dict[str, str]
+    ) -> set[str] | None:
+        """Tables whose columns *node* reads, lower-cased; None if not certain.
+
+        Not certain: a star other than ``t.*``, a qualifier that names no
+        table of the scope, or a bare column no single table declares.
+        """
+        if any(
+            not isinstance(star.parent, exp.Column) for star in node.find_all(exp.Star)
+        ):
+            return None
+        tables: set[str] = set()
+        for column in node.find_all(exp.Column):
+            if column.table:
+                resolved = alias_map.get(column.table.lower())
+                if not resolved:
                     return None
-                tables.add(owners[0])
+                tables.add(resolved.lower())
+                continue
+            owners = self._tables_declaring(column.name, alias_map)
+            if len(owners) != 1:
+                return None
+            tables.add(owners[0])
         return tables
 
     def _tables_declaring(self, column: str, alias_map: dict[str, str]) -> list[str]:
@@ -4304,25 +4383,65 @@ class OBQCValidator:
                         return Link(rel.from_table, rel.to_table, rel.pairs)
         return None
 
-    @staticmethod
-    def _reachable(joins: list[dict[str, Any]], start: str, without: str) -> set[str]:
-        """Tables the scope's joins connect to *start* without passing *without*."""
-        edges: dict[str, set[str]] = {}
+    def _lookups(self, joins: list[dict[str, Any]], start: str) -> set[str]:
+        """*start* and every table it reaches through many-to-one joins of the scope.
+
+        Each step gives a row at most one row of the next table, so a leg or a
+        semi-join reading *start* can take a group key or a value from any of
+        them without repeating a row. A join to the many side is not followed,
+        nor one whose target the data showed to repeat.
+
+        Args:
+            joins: The scope's joins.
+            start: The table a leg or a semi-join reads, any case.
+
+        Returns:
+            Lower-cased table names, *start* among them.
+        """
+        parents: dict[str, set[str]] = {}
         for join in joins:
-            table = (join.get("table") or "").lower()
-            for anchor in join.get("on_tables", []):
-                a = anchor.lower()
-                if table and a != table:
-                    edges.setdefault(table, set()).add(a)
-                    edges.setdefault(a, set()).add(table)
+            ends = sorted(
+                {t for t in (join.get("table") or "", *join.get("on_tables", [])) if t},
+                key=str.lower,
+            )
+            for i, a in enumerate(ends):
+                for b in ends[i + 1 :]:
+                    for rel in self._join_relationships(
+                        a, b, join.get("on_comparisons", frozenset())
+                    ):
+                        if rel.relationship_type == "many_to_one" and not (
+                            rel.target_not_unique
+                        ):
+                            parents.setdefault(rel.from_table.lower(), set()).add(
+                                rel.to_table.lower()
+                            )
         seen = {start.lower()}
         todo = [start.lower()]
         while todo:
-            for nxt in edges.get(todo.pop(), set()):
-                if nxt not in seen and nxt != without.lower():
-                    seen.add(nxt)
-                    todo.append(nxt)
+            for parent in parents.get(todo.pop(), set()):
+                if parent not in seen:
+                    seen.add(parent)
+                    todo.append(parent)
         return seen
+
+    def _legs_fit(
+        self,
+        joins: list[dict[str, Any]],
+        legs: Iterable[str],
+        group_tables: set[str],
+        outer_tables: set[str],
+    ) -> bool:
+        """Whether one leg per table of *legs* can answer the query.
+
+        Every leg must reach every group key through many-to-one joins --
+        an orders leg grouped by an item's product would have to join the
+        items again, and repeat the order -- and every table the query reads
+        outside FROM and WHERE must be reached so by some leg.
+        """
+        reach = [self._lookups(joins, leg) for leg in legs]
+        return all(group_tables <= r for r in reach) and outer_tables <= set().union(
+            *reach
+        )
 
     def _across_example(
         self,
@@ -4337,10 +4456,14 @@ class OBQCValidator:
 
         - Both summed (sales and their returns): one leg each. The returns leg
           reaches the group keys through its sale, by the key the query joins.
+          Only when each leg reaches every group key through many-to-one
+          joins, and the legs between them every table the query reads
+          (:meth:`_legs_fit`).
         - *fanning* only joined, as a filter, by an inner join: a semi-join.
-          Only when nothing else needs it -- every group key and every other
-          measured table is reached from *measure* without passing through
-          *fanning* -- since the semi-join drops it from the query.
+          Only when nothing outside FROM and WHERE reads it -- no output, not
+          even a ``MAX`` or ``COUNT(DISTINCT ...)`` of it, no ``COUNT(*)`` --
+          and *measure* reaches everything that is read through many-to-one
+          joins, since the semi-join takes *fanning* out of the query.
 
         None for every other shape, which keeps the prose suggestion alone:
         an outer join to a table it does not measure filters nothing, so
@@ -4353,10 +4476,17 @@ class OBQCValidator:
         ):
             # A lookup whose target repeats: no child to read on its own.
             return None
+        outer = join_info.get("outer_tables")
+        if outer is None:
+            return None
         link = Link(rel.from_table, rel.to_table, rel.pairs)
         grouped = bool(join_info.get("grouped"))
         measured = join_info.get("measure_tables") or set()
+        joins = self._scope_joins(result, join_info.get("scope_id"))
+        group_tables = join_info.get("group_tables") or set()
         if fanning.lower() in measured:
+            if not self._legs_fit(joins, (measure, fanning), group_tables, outer):
+                return None
             sql = union_all_legs(
                 [rel.to_table, rel.from_table], {rel.from_table: link}, dialect, grouped
             )
@@ -4364,12 +4494,9 @@ class OBQCValidator:
                 "shape": SHAPE_LEGS,
                 "sql": f"{sql}\n{only_with(rel.to_table, link, dialect)}",
             }
-        group_tables = join_info.get("group_tables")
-        if group_tables is None or join_info.get("side"):
+        if join_info.get("side") or fanning.lower() in outer:
             return None
-        joins = self._scope_joins(result, join_info.get("scope_id"))
-        needed = (set(group_tables) | set(measured)) - {measure.lower()}
-        if not needed <= self._reachable(joins, measure, without=fanning):
+        if not outer <= self._lookups(joins, measure):
             return None
         return {
             "shape": SHAPE_SEMI_JOIN,
@@ -4386,7 +4513,9 @@ class OBQCValidator:
         """One leg per measured table of *tables*, when there are two or more.
 
         For two facts that share a parent -- items and payments of an order --
-        each leg starts with the join to that parent the query wrote.
+        each leg starts with the join to that parent the query wrote. None
+        unless the legs can answer the query (:meth:`_legs_fit`): grouped by
+        an item's product, a payments leg has no way to the product.
         """
         joins = self._scope_joins(result, scope_id)
         if not joins:
@@ -4394,6 +4523,11 @@ class OBQCValidator:
         measured = joins[0].get("measure_tables") or set()
         legs = sorted({t.lower() for t in tables} & measured)
         if len(legs) < 2:
+            return None
+        outer = joins[0].get("outer_tables")
+        if outer is None or not self._legs_fit(
+            joins, legs, joins[0].get("group_tables") or set(), outer
+        ):
             return None
         legs_set = set(legs)
         scope = {

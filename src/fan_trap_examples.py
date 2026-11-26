@@ -83,7 +83,9 @@ def union_all_legs(
         The sketch, with ``<...>`` placeholders for what the finding cannot
         know.
     """
-    keys = "<group keys>, " if grouped else ""
+    # Inside the legs the keys are columns of the tables, named; outside,
+    # only those names are in scope.
+    keys = "<group keys AS names>, " if grouped else ""
     aliases = [_value_alias(t, dialect) for t in tables]
     legs: list[str] = []
     for index, table in enumerate(tables):
@@ -108,7 +110,7 @@ def union_all_legs(
             lines.append("<many-to-one joins to the group keys>")
         lines.append("<the query's filters that apply to this fact>")
         legs.append("\n".join(_INDENT + line for line in lines))
-    outer_keys = "<group keys>, " if grouped else ""
+    outer_keys = "<group key names>, " if grouped else ""
     aggregates = ", ".join(f"SUM({alias})" for alias in aliases)
     body = f"\n{_INDENT}UNION ALL\n".join(legs)
     sketch = [
@@ -122,7 +124,7 @@ def union_all_legs(
         "FROM legs",
     ]
     if grouped:
-        sketch.append("GROUP BY <group keys>")
+        sketch.append("GROUP BY <group key names>")
     return "\n".join(sketch)
 
 
@@ -163,9 +165,19 @@ def semi_join(measure: str, link: Link, dialect: str, grouped: bool = True) -> s
 
 
 def only_with(measure: str, link: Link, dialect: str) -> str:
-    """The line a legs sketch adds for "only rows that have a match"."""
+    """The line a legs sketch adds for "only rows that have a match".
+
+    Text for a model to read, never sent to a database; built from its
+    clauses like :func:`semi_join`'s lines.
+    """
+    exists = " ".join(
+        [
+            "WHERE EXISTS (SELECT 1",
+            f"FROM {sql_name(link.child, dialect)}",
+            f"WHERE {link.condition(dialect)})",
+        ]
+    )
     return (
         f"-- Only the {measure} rows that have a {link.child} row? Add to the "
-        f"{measure} leg:\n--   WHERE EXISTS (SELECT 1 FROM "
-        f"{sql_name(link.child, dialect)} WHERE {link.condition(dialect)})"
+        f"{measure} leg:\n--   {exists}"
     )

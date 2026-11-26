@@ -158,7 +158,8 @@ def test_the_legs_filled_in_pass_the_check(validator: OBQCValidator) -> None:
     sql = _fill(
         example["sql"],
         {
-            "group keys": "products.category",
+            "group keys AS names": "products.category AS category",
+            "group key names": "category",
             "order_items value": "order_items.quantity * order_items.price",
             "returns value": "returns.refund",
             "many-to-one joins to the group keys": (
@@ -262,6 +263,109 @@ def test_no_semi_join_where_it_would_change_the_question(
     assert SKETCH_NOTE not in issue.suggestion
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Grouped by the child: an orders leg would have to join the items again.
+        "SELECT oi.product_id, SUM(o.total), SUM(oi.quantity) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id GROUP BY oi.product_id",
+        # Grouped by one sibling: the payments leg has no way to the product.
+        "SELECT oi.product_id, SUM(oi.quantity), SUM(p.amount) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id "
+        "JOIN payments p ON p.order_id = o.id GROUP BY oi.product_id",
+        # Grouped through a third table on the many side of orders.
+        "SELECT p.amount, SUM(o.total), SUM(oi.quantity) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id "
+        "JOIN payments p ON p.order_id = o.id GROUP BY p.amount",
+        # The child read by an aggregate no fan-out corrupts, or by none at all:
+        # in an EXISTS it is out of reach, and COUNT(*) would count orders.
+        "SELECT SUM(o.total), MAX(oi.price) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id",
+        "SELECT SUM(o.total), COUNT(DISTINCT oi.product_id) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id",
+        "SELECT SUM(o.total), COUNT(*) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id",
+        "SELECT o.customer_id, SUM(o.total) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id "
+        "GROUP BY o.customer_id ORDER BY MAX(oi.price)",
+        "SELECT o.customer_id, SUM(o.total) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id "
+        "GROUP BY o.customer_id HAVING MAX(oi.price) > 10",
+        # A subquery's columns are its own; nothing says which table they read.
+        "SELECT SUM(o.total), (SELECT MAX(r.refund) FROM returns r) FROM orders o "
+        "JOIN order_items oi ON oi.order_id = o.id",
+    ],
+)
+def test_no_sketch_when_a_leg_or_the_exists_cannot_answer(
+    validator: OBQCValidator, sql: str
+) -> None:
+    result = validator.validate(sql, dialect="duckdb")
+    assert not result.is_valid
+    assert all("example" not in f for f in result.fan_trap_findings), [
+        f["example"]["shape"] for f in result.fan_trap_findings if "example" in f
+    ]
+
+
+def test_a_lookup_read_by_an_output_keeps_the_semi_join(
+    validator: OBQCValidator,
+) -> None:
+    """A table the measure reaches many-to-one may be read anywhere."""
+    sql = """
+    SELECT c.name, SUM(o.total), MAX(c.id) FROM orders o
+    JOIN customers c ON c.id = o.customer_id
+    JOIN order_items oi ON oi.order_id = o.id
+    GROUP BY c.name ORDER BY c.name
+    """
+    example = _example(validator, sql)
+    assert example is not None and example["shape"] == SHAPE_SEMI_JOIN
+
+
+def test_the_legs_filled_in_return_the_right_numbers(
+    validator: OBQCValidator,
+) -> None:
+    """Passing OBQC is not enough: on data, the filled-in legs give the truth."""
+    duckdb = pytest.importorskip("duckdb")
+    con = duckdb.connect()
+    con.execute("""
+        CREATE TABLE products (id INTEGER, category VARCHAR);
+        CREATE TABLE order_items (
+            id INTEGER, order_id INTEGER, product_id INTEGER,
+            quantity INTEGER, price DECIMAL(10, 2));
+        CREATE TABLE returns (id INTEGER, order_item_id INTEGER, refund DECIMAL(10, 2));
+        INSERT INTO products VALUES (1, 'books'), (2, 'garden');
+        INSERT INTO order_items VALUES
+            (1, 1, 1, 2, 30), (2, 1, 2, 1, 40), (3, 2, 1, 1, 50);
+        -- Line 1 is returned in two parts.
+        INSERT INTO returns VALUES (1, 1, 10), (2, 1, 20), (3, 3, 50);
+        """)
+    truth = sorted(con.execute("""
+            SELECT p.category, SUM(oi.quantity * oi.price),
+                (SELECT SUM(r.refund) FROM returns r
+                 JOIN order_items i ON i.id = r.order_item_id
+                 JOIN products q ON q.id = i.product_id
+                 WHERE q.category = p.category)
+            FROM order_items oi JOIN products p ON p.id = oi.product_id
+            GROUP BY p.category
+            """).fetchall())
+    assert sorted(con.execute(SOLD_AND_REFUNDED).fetchall()) != truth
+    example = _example(validator, SOLD_AND_REFUNDED)
+    assert example is not None
+    sql = _fill(
+        example["sql"],
+        {
+            "group keys AS names": "products.category AS category",
+            "group key names": "category",
+            "order_items value": "order_items.quantity * order_items.price",
+            "returns value": "returns.refund",
+            "many-to-one joins to the group keys": (
+                "JOIN products ON products.id = order_items.product_id"
+            ),
+            "the query's filters that apply to this fact": "",
+        },
+    )
+    assert sorted(con.execute(sql).fetchall()) == truth
+
+
 # --- Two facts sharing a parent: the chasm trap --------------------------------
 
 
@@ -324,7 +428,7 @@ def test_a_composite_key_joins_on_every_column() -> None:
 def test_every_leg_has_a_column_for_every_fact() -> None:
     sketch = union_all_legs(["a", "b", "c"], {}, "duckdb")
     # The legs are indented inside the CTE; the outer SELECT is not.
-    legs = re.findall(r"^    SELECT <group keys>, (.*)$", sketch, re.MULTILINE)
+    legs = re.findall(r"^    SELECT <group keys AS names>, (.*)$", sketch, re.MULTILINE)
     assert [leg.count(",") for leg in legs] == [2, 2, 2]
     assert legs[0] == "<a value> AS a_value, NULL AS b_value, NULL AS c_value"
     assert legs[2] == "NULL, NULL, <c value>"
