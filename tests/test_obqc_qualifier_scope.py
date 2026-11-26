@@ -195,3 +195,63 @@ def test_a_suggestion_is_quoted_as_the_query_wrote_the_names(
     (issue,) = _stray(validator, sql, "postgresql")
     assert issue.did_you_mean == ['"Legs"."Category"']
     assert 'products."Category"' in issue.message
+
+
+# --- What a reference sees: scopes around a CTE, and only those ---------------------
+
+
+def test_a_cte_in_a_subquery_sees_what_encloses_it(validator: OBQCValidator) -> None:
+    """A correlated CTE: its body reads the outer o, which DuckDB runs."""
+    sql = (
+        "SELECT o.id, (WITH x AS (SELECT o.total AS total) "
+        "SELECT SUM(total) FROM x) FROM orders o"
+    )
+    result = validator.validate(sql, dialect="duckdb")
+    assert _stray(validator, sql) == []
+    assert result.is_valid, [i.message for i in result.issues]
+
+
+def test_a_cte_does_not_see_the_from_of_the_query_declaring_it(
+    validator: OBQCValidator,
+) -> None:
+    sql = (
+        "SELECT (WITH x AS (SELECT s.total AS total) SELECT SUM(total) "
+        "FROM x, orders s) FROM customers c"
+    )
+    (issue,) = _stray(validator, sql)
+    assert issue.message.startswith("'s' in 's.total'")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # A derived table without a name still has outputs, a struct among them.
+        "SELECT address.city FROM (SELECT address FROM customers)",
+        "SELECT address.city FROM (SELECT address FROM customers) d",
+    ],
+)
+def test_a_struct_of_a_derived_table_is_let_be(
+    validator: OBQCValidator, sql: str
+) -> None:
+    assert _stray(validator, sql) == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # An aliased CTE reference has its CTE's outputs, none of them zz.
+        "WITH x AS (SELECT total FROM orders) SELECT zz.total FROM x y",
+        "WITH x AS (SELECT total FROM orders) SELECT zz.total FROM x",
+        # Another subquery's alias list is out of the reference's sight...
+        "SELECT zz.total FROM orders WHERE EXISTS "
+        "(SELECT 1 FROM (SELECT id FROM orders) d(zz))",
+        # ...and so is a relation of the same name elsewhere.
+        "SELECT zz.total FROM (SELECT total FROM orders) d "
+        "WHERE EXISTS (SELECT 1 FROM (SELECT 1 AS zz) d)",
+    ],
+)
+def test_only_what_the_reference_sees_excuses_it(
+    validator: OBQCValidator, sql: str
+) -> None:
+    (issue,) = _stray(validator, sql)
+    assert issue.message.startswith("'zz' in 'zz.total'")
