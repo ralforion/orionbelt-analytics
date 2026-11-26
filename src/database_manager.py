@@ -801,9 +801,10 @@ class DatabaseManager:
                 "user_login": user_login,
             }
             if user_login is not None:
-                # The signed-in user, as for Databricks: never the token.
+                # The signed-in user and how the connection signs in, as for
+                # Databricks: never the token.
                 self.user_login = user_login
-                self.auth_identity = user_login.user
+                self.auth_identity = user_login.identity
         return success
 
     def connect_clickhouse(
