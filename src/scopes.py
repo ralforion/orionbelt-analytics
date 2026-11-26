@@ -114,7 +114,14 @@ def parse_scope_map(raw: str) -> dict[str, frozenset[str]]:
 
 
 def claim_at(claims: Mapping[str, Any], path: str) -> Any:
-    """The claim at a dot path (``realm_access.roles``), or None."""
+    """The claim *path* names, or None.
+
+    A claim of exactly that name first: Auth0 and others namespace custom
+    claims with a URL (``https://example.com/roles``), dots and all. Else a dot
+    path into nested objects (``realm_access.roles``, Keycloak).
+    """
+    if path in claims:
+        return claims[path]
     value: Any = claims
     for part in path.split("."):
         if not isinstance(value, Mapping):

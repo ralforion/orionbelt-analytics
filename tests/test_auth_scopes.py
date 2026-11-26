@@ -365,3 +365,45 @@ async def test_a_shortfall_names_the_scope_to_ask_for():
     # No token is a matter of signing in, not of a scope.
     anonymous = AuthContext(token=None, component=reset)
     assert check(anonymous) is False and check.missing_scopes(anonymous) == set()
+
+
+# --- review: literal claim names, exact issuers -------------------------------
+
+
+def test_a_claim_named_like_a_url_is_read_as_named():
+    """Auth0 namespaces custom claims with a URL, dots and all."""
+    claim = "https://example.com/roles"
+    scope_map = parse_scope_map("analysts=oba:read")
+    granted = scopes_from_claims({claim: ["analysts"]}, (claim,), scope_map)
+    assert SCOPE_READ in granted
+    # A dot path still reaches into objects when no claim has that exact name.
+    nested = {"realm_access": {"roles": ["analysts"]}}
+    assert SCOPE_READ in scopes_from_claims(nested, ("realm_access.roles",), scope_map)
+
+
+async def test_a_signed_token_with_a_url_claim_is_accepted():
+    claim = "https://example.com/roles"
+    provider = build_auth_provider(
+        _jwt_config(
+            scope_claims=(claim,),
+            scope_map=parse_scope_map("analysts=oba:read"),
+            required_scopes=[SCOPE_READ],
+        )
+    )
+    access = await provider.load_access_token(_token(**{claim: ["analysts"]}))
+    assert access is not None and SCOPE_READ in access.scopes
+
+
+@pytest.mark.parametrize(
+    ("configured", "discovered"),
+    [(ISSUER, ISSUER + "/"), (ISSUER + "/", ISSUER)],
+)
+def test_an_issuer_that_differs_by_a_slash_stops_the_server(
+    monkeypatch, configured, discovered
+):
+    """Tokens are checked against MCP_AUTH_ISSUER exactly; so is the document."""
+    _discovered(
+        monkeypatch, {"issuer": discovered, "jwks_uri": "https://issuer.example/k"}
+    )
+    with pytest.raises(ValueError, match="exactly the issuer"):
+        build_auth_provider(_rs256(issuer=configured))
