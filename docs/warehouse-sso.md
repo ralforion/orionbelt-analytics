@@ -13,7 +13,7 @@ guide serves both.
 | --- | --- | --- |
 | Databricks | OAuth token federation: an RFC 8693 exchange at the workspace's `/oidc/v1/token` | yes |
 | Snowflake | External OAuth: the identity provider issues it (Entra ID on-behalf-of, or RFC 8693 at Okta or Keycloak) | yes |
-| BigQuery | Workforce identity federation at Google's security token service | not yet |
+| BigQuery | Workforce identity federation at Google's security token service | yes |
 
 Other databases keep the service login.
 
@@ -45,6 +45,8 @@ DB_FINANCE_DATABRICKS_SCHEMA=gold
 | `DB_<NAME>_OAUTH_EXCHANGE` | Snowflake: `entra_obo` (Entra ID's on-behalf-of flow) or `token_exchange` (RFC 8693: Okta, Keycloak) |
 | `DB_<NAME>_OAUTH_SCOPE` | Snowflake: what to ask for, e.g. `api://<Snowflake app ID>/session:role-any`, `session:role:ANALYST`; required for `entra_obo` |
 | `DB_<NAME>_OAUTH_AUDIENCE` | Snowflake with `token_exchange`: Okta's authorization server audience, Keycloak's target client |
+| `DB_<NAME>_WORKFORCE_PROVIDER` | BigQuery: `//iam.googleapis.com/locations/global/workforcePools/<pool>/providers/<provider>` |
+| `DB_<NAME>_WORKFORCE_USER_PROJECT` | BigQuery: the project billed for the exchange; the connection's project by default |
 
 Snowflake's token is issued by the identity provider, asked by this server as
 its own confidential client there -- the client the users' tokens are issued
@@ -65,13 +67,14 @@ The server does not start when a connection with `AUTH=user`:
 - lacks an `OAUTH_EXCHANGE` it knows, our client (`MCP_AUTH_CLIENT_ID` and
   its secret), the scope Entra's flow needs, or `SNOWFLAKE_ACCOUNT`,
   `SNOWFLAKE_WAREHOUSE` and `SNOWFLAKE_DATABASE` (Snowflake);
+- lacks `WORKFORCE_PROVIDER` or `BIGQUERY_PROJECT_ID` (BigQuery);
 - needs the identity provider's token endpoint, and neither
   `MCP_AUTH_TOKEN_ENDPOINT` nor the discovery document names one;
 - has an `AUTH` value that is neither `service` nor `user`.
 
 The credentials it would otherwise read -- `DATABRICKS_ACCESS_TOKEN`,
-`SNOWFLAKE_USERNAME`, `SNOWFLAKE_PASSWORD` -- are ignored, and the log says
-so.
+`SNOWFLAKE_USERNAME`, `SNOWFLAKE_PASSWORD`, `BIGQUERY_CREDENTIALS_PATH`,
+`BIGQUERY_CREDENTIALS_JSON` -- are ignored, and the log says so.
 
 ## Databricks
 
@@ -123,6 +126,28 @@ user whose login name matches the claim.
 `SNOWFLAKE_ROLE`, when set, is still requested; otherwise the user's default
 role applies. The connection pool is kept: each connection it opens, or
 reopens when the check on checkout finds one gone, reads the current token.
+
+## BigQuery
+
+Google's security token service trusts the identity provider through a
+**workforce identity pool** and an OIDC **provider** in it, in your Google
+Cloud organization:
+
+- the provider's issuer is `MCP_AUTH_ISSUER`, and its client ID is
+  `MCP_AUTH_AUDIENCE` -- the audience of the tokens your MCP clients send,
+  which Google checks;
+- its attribute mapping names the user (`google.subject=assertion.sub`, or
+  the email), and the pool's users are granted BigQuery roles on the project
+  (`roles/bigquery.user`, `roles/bigquery.dataViewer` on the datasets) as
+  `principal://iam.googleapis.com/locations/global/workforcePools/<pool>/subject/<sub>`
+  or a `principalSet`.
+
+The user's token is sent to Google as an ID token
+(`subject_token_type=id_token`), as Google's workforce federation takes an
+OIDC provider's tokens. No secret of this server is involved, and no service
+account key: each connection gets a BigQuery client made from the user's
+current Google token. The exchange is billed to
+`DB_<NAME>_WORKFORCE_USER_PROJECT`, else the connection's project.
 
 ## Who the connection is
 

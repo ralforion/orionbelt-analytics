@@ -510,7 +510,7 @@ What authentication does **not** separate yet:
 - **Database credentials**, except where a database logs in as the user. By
   default every user queries with the server's configured credentials; a
   token decides who may use the server, not which database rows they see. A
-  named Databricks or Snowflake connection with `DB_<NAME>_AUTH=user` runs each user's
+  named Databricks, Snowflake or BigQuery connection with `DB_<NAME>_AUTH=user` runs each user's
   queries as that user instead, with their own runtime, caches and workspace:
   see [Warehouse single sign-on](warehouse-sso.md).
 - **The workspace on disk.** Generated ontology versions, saved semantic

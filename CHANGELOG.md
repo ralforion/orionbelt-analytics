@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_OAUTH_SCOPE`, `_OAUTH_AUDIENCE`). The token says who connects; each
   connection the pool opens reads the current one. The token endpoint is
   read from the issuer's discovery document when a login needs it.
+- **Warehouse single sign-on for BigQuery** (workforce identity
+  federation): Google's security token service exchanges the user's token,
+  checked against the workforce pool provider
+  (`DB_<NAME>_WORKFORCE_PROVIDER`), for a Google access token; each
+  connection gets a BigQuery client made from the current one, with no
+  service account key. The exchange is billed to
+  `DB_<NAME>_WORKFORCE_USER_PROJECT`, else the connection's project.
 - **Scopes from any claim, scopes per tool, and OIDC discovery** for
   `MCP_AUTH=jwt`. `MCP_AUTH_SCOPE_CLAIMS` names the claims that carry scopes
   or roles (default `scope,scp,roles`; a dot reaches into an object, as
