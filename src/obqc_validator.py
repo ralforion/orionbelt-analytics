@@ -334,6 +334,11 @@ def _renamed(
     return (*columns, *outputs[len(columns) :])
 
 
+def _names(outputs: tuple[str, ...] | None) -> frozenset[str] | None:
+    """The named ones of *outputs*; None when they are not known."""
+    return None if outputs is None else frozenset(n for n in outputs if n)
+
+
 @dataclass
 class OBQCResult:
     """Complete OBQC validation result."""
@@ -1646,7 +1651,7 @@ class OBQCValidator:
                             ),
                         )
                     ordered = _renamed(ordered, columns)
-                    outputs = frozenset(ordered) if ordered is not None else None
+                    outputs = _names(ordered)
                 else:
                     outputs = self._table_outputs(node.name.lower())
                     # The ontology keeps no reliable column order here, so a
@@ -1655,7 +1660,7 @@ class OBQCValidator:
                         outputs = outputs | frozenset(columns)
             elif isinstance(node, exp.Subquery) and isinstance(node.this, exp.Query):
                 ordered = _renamed(self._query_outputs(node.this), columns)
-                outputs = frozenset(ordered) if ordered is not None else None
+                outputs = _names(ordered)
             # Anything else (UNNEST, VALUES, a table function): unknown, a
             # column list or not -- it may name only the first of them.
             if isinstance(ident, exp.Identifier) and ident.name:
@@ -1676,16 +1681,23 @@ class OBQCValidator:
 
     @staticmethod
     def _query_outputs(query: exp.Expr) -> tuple[str, ...] | None:
-        """A query's output names in order, lower-cased; None behind a star."""
+        """A query's outputs in order, lower-cased; None behind a star.
+
+        One per projection, so a column list renames the right one: an
+        expression without a name (``id + 1``) holds its place as ``""``,
+        where ``named_selects`` would leave it out and shift the rest.
+        """
         if not isinstance(query, exp.Query):
             return None
-        names = query.named_selects
-        if any(n == "*" for n in names) or any(
-            isinstance(p, exp.Star) or isinstance(p.this, exp.Star)
-            for p in query.selects
+        projections = query.selects
+        if any(
+            isinstance(p, exp.Star) or isinstance(p.this, exp.Star) for p in projections
         ):
             return None
-        return tuple(n.lower() for n in names)
+        return tuple(
+            p.alias_or_name.lower() if isinstance(p, (exp.Alias, exp.Column)) else ""
+            for p in projections
+        )
 
     @staticmethod
     def _cte_for(table: exp.Table) -> exp.CTE | None:

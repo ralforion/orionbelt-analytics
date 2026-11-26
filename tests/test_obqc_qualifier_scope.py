@@ -286,3 +286,25 @@ def test_a_name_a_column_list_renamed_away_is_out_of_sight(
 ) -> None:
     (issue,) = _stray(validator, sql)
     assert issue.message.startswith("'address' in 'address.city'")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # id + 1 has no name but holds the first place: next_id renames it.
+        "SELECT address.city FROM (SELECT id + 1, address FROM customers) d(next_id)",
+        "WITH c(next_id) AS (SELECT id + 1, address FROM customers) "
+        "SELECT address.city FROM c",
+        "SELECT n.city FROM (SELECT id + 1, address FROM customers) d(x, n)",
+    ],
+)
+def test_an_unnamed_output_keeps_its_place(validator: OBQCValidator, sql: str) -> None:
+    assert _stray(validator, sql) == []
+
+
+def test_a_list_over_an_unnamed_output_renames_the_next(
+    validator: OBQCValidator,
+) -> None:
+    sql = "SELECT address.city FROM (SELECT id + 1, address FROM customers) d(x, n)"
+    (issue,) = _stray(validator, sql)
+    assert issue.message.startswith("'address' in 'address.city'")
