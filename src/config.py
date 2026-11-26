@@ -16,6 +16,12 @@ from .constants import (
     DEFAULT_SESSION_SCAN_INTERVAL_SECONDS,
     DEFAULT_SNOWFLAKE_SCHEMA,
 )
+from .scopes import (
+    DEFAULT_SCOPE_CLAIMS,
+    IMPLIED,
+    parse_scope_claims,
+    parse_scope_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +213,20 @@ class AuthConfig:
     # Public URL of this server. When set, it advertises the issuer as its
     # authorization server (RFC 9728), so MCP clients can find where to log in.
     resource_url: str | None = None
+    # Claims that carry scopes or roles, merged; a dot reaches into an object
+    # (realm_access.roles). MCP_AUTH_SCOPE_CLAIMS.
+    scope_claims: tuple[str, ...] = DEFAULT_SCOPE_CLAIMS
+    # Identity provider values (a scope or a role) -> the OrionBelt scopes
+    # they grant. MCP_AUTH_SCOPE_MAP.
+    scope_map: dict[str, frozenset[str]] = field(default_factory=dict)
+    # Whether every tool needs its tier's scope (oba:read, oba:write,
+    # oba:admin). Off by default: tokens issued before tiers existed carry
+    # none of them. MCP_AUTH_TOOL_SCOPES.
+    tool_scopes: bool = False
+    # The issuer's token endpoint, for exchanging a user's token at a
+    # warehouse; from the issuer's discovery document unless set.
+    # MCP_AUTH_TOKEN_ENDPOINT.
+    token_endpoint: str | None = None
 
     def validate(self) -> None:
         """Refuse settings that would leave the server open or never accept.
@@ -221,12 +241,19 @@ class AuthConfig:
                 f"{', '.join(_AUTH_MODES)}"
             )
         if self.mode == "none":
+            if self.tool_scopes:
+                # Nothing would be checked: say so rather than look protected.
+                raise ValueError(
+                    "MCP_AUTH_TOOL_SCOPES needs MCP_AUTH=jwt: without tokens "
+                    "there are no scopes to check."
+                )
             return
-        if bool(self.jwks_uri) == bool(self.public_key):
+        if self.jwks_uri and self.public_key:
             raise ValueError(
-                "MCP_AUTH=jwt needs exactly one of MCP_AUTH_JWKS_URI (the "
-                "issuer's key set) or MCP_AUTH_PUBLIC_KEY (a PEM public key, or "
-                "the shared secret for HS256/384/512)."
+                "MCP_AUTH=jwt takes one of MCP_AUTH_JWKS_URI (the issuer's key "
+                "set) or MCP_AUTH_PUBLIC_KEY (a PEM public key, or the shared "
+                "secret for HS256/384/512), not both. With neither, the key set "
+                "is read from the issuer's discovery document."
             )
         missing = [
             name
@@ -246,17 +273,41 @@ class AuthConfig:
                 f"Unsupported MCP_AUTH_ALGORITHM='{self.algorithm}'. Must be one "
                 f"of: {', '.join(_JWT_ALGORITHMS)}"
             )
-        if self.algorithm in _HMAC_ALGORITHMS and self.jwks_uri:
+        if self.algorithm in _HMAC_ALGORITHMS and not self.public_key:
             raise ValueError(
                 f"MCP_AUTH_ALGORITHM={self.algorithm} is a shared-secret "
                 "algorithm; set the secret in MCP_AUTH_PUBLIC_KEY, not a JWKS URI."
             )
+        if not self.scope_claims:
+            raise ValueError("MCP_AUTH_SCOPE_CLAIMS names no claim.")
+        unknown = sorted(
+            {s for granted in self.scope_map.values() for s in granted} - set(IMPLIED)
+        )
+        if unknown:
+            raise ValueError(
+                f"MCP_AUTH_SCOPE_MAP grants {', '.join(unknown)}, which "
+                f"OrionBelt does not know (expected: {', '.join(sorted(IMPLIED))})."
+            )
+
+    @property
+    def discovery_url(self) -> str:
+        """The issuer's OpenID Provider metadata document."""
+        return f"{(self.issuer or '').rstrip('/')}/.well-known/openid-configuration"
 
 
 def _load_auth_config() -> AuthConfig:
+    """The ``MCP_AUTH_*`` settings.
+
+    Raises:
+        ValueError: A malformed scope setting under ``MCP_AUTH=jwt``, which
+            would otherwise grant scopes no one meant to grant, or none.
+    """
     scopes = os.getenv("MCP_AUTH_REQUIRED_SCOPES", "")
+    mode = os.getenv("MCP_AUTH", "none").strip().lower()
+    claims = os.getenv("MCP_AUTH_SCOPE_CLAIMS")
+    scope_map = os.getenv("MCP_AUTH_SCOPE_MAP", "")
     return AuthConfig(
-        mode=os.getenv("MCP_AUTH", "none").strip().lower(),
+        mode=mode,
         jwks_uri=os.getenv("MCP_AUTH_JWKS_URI") or None,
         public_key=os.getenv("MCP_AUTH_PUBLIC_KEY") or None,
         issuer=os.getenv("MCP_AUTH_ISSUER") or None,
@@ -264,7 +315,22 @@ def _load_auth_config() -> AuthConfig:
         algorithm=_canonical_algorithm(os.getenv("MCP_AUTH_ALGORITHM", "RS256")),
         required_scopes=[s for s in scopes.replace(",", " ").split() if s],
         resource_url=os.getenv("MCP_AUTH_RESOURCE_URL") or None,
+        # Parsed only where they are used, so a stray value cannot stop a
+        # server that has authentication off.
+        scope_claims=(
+            parse_scope_claims(claims)
+            if mode == "jwt" and claims is not None
+            else DEFAULT_SCOPE_CLAIMS
+        ),
+        scope_map=parse_scope_map(scope_map) if mode == "jwt" else {},
+        tool_scopes=_env_bool("MCP_AUTH_TOOL_SCOPES"),
+        token_endpoint=os.getenv("MCP_AUTH_TOKEN_ENDPOINT") or None,
     )
+
+
+def _env_bool(name: str) -> bool:
+    """An on/off setting: true, 1, yes or on (any case) is on."""
+    return os.getenv(name, "").strip().lower() in ("true", "1", "yes", "on")
 
 
 @dataclass

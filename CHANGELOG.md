@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Scopes from any claim, scopes per tool, and OIDC discovery** for
+  `MCP_AUTH=jwt`. `MCP_AUTH_SCOPE_CLAIMS` names the claims that carry scopes
+  or roles (default `scope,scp,roles`; a dot reaches into an object, as
+  Keycloak's `realm_access.roles`), and `MCP_AUTH_SCOPE_MAP` which of their
+  values grant `oba:read`, `oba:write` or `oba:admin`, each including the ones
+  below it. With `MCP_AUTH_TOOL_SCOPES=true` every tool needs its tier's
+  scope: a caller sees only the tools they may use, and a call beyond them is
+  refused naming the scope. Off by default, so tokens issued before the tiers
+  keep working. Without `MCP_AUTH_JWKS_URI` or `MCP_AUTH_PUBLIC_KEY`, the key
+  set (and the token endpoint, for warehouse sign-in) comes from the
+  issuer's discovery document at startup. See docs/configuration.md.
 - **Sketches of the fix**: a fan-trap finding carries `example` when the
   query's shape says how to write it instead -- `union_all_legs`, one leg
   per fact combined by `UNION ALL`, when both tables are summed (sales lines

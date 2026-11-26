@@ -73,12 +73,14 @@ def test_an_unknown_mode_fails_closed(monkeypatch):
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        ({"public_key": None}, "exactly one of"),
-        ({"jwks_uri": "https://issuer.example/jwks"}, "exactly one of"),
+        # HS256 has no key set to discover: its secret must be given. (With
+        # RS256, no key reads the issuer's discovery document.)
+        ({"public_key": None}, "shared-secret"),
+        ({"jwks_uri": "https://issuer.example/jwks"}, "not both"),
         ({"issuer": None}, "MCP_AUTH_ISSUER"),
         ({"audience": None}, "MCP_AUTH_AUDIENCE"),
     ],
-    ids=["no-key", "two-keys", "no-issuer", "no-audience"],
+    ids=["no-secret", "two-keys", "no-issuer", "no-audience"],
 )
 def test_jwt_mode_refuses_incomplete_settings(overrides, message):
     with pytest.raises(ValueError, match=message):
