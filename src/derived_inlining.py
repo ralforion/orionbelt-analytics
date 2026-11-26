@@ -31,7 +31,10 @@ brings the relations to where it can:
   compares say which relationship it uses.
 
 A derived table on either side of an outer join is left where it is, and so
-is a union that limits its rows (``LIMIT``, ``OFFSET``, ``FETCH``).
+is a union that limits its rows (``LIMIT``, ``OFFSET``, ``FETCH``). Copying
+CTE bodies has a budget (:data:`MAX_GROWTH`, :data:`MAX_NODES`): a chain of
+CTEs each reading its predecessor twice doubles at every stage, and past the
+budget the query is judged as written.
 
 No MCP or ontology dependency: the caller passes the tables' columns.
 """
@@ -55,8 +58,27 @@ MAX_VARIANTS = 32
 #: {schema: {table: {column: type}}}, as sqlglot's MappingSchema reads it.
 Schema = Mapping[str, Mapping[str, Mapping[str, str]]]
 
+#: How much larger than the query its CTEs written in may grow: each reference
+#: is a copy of a body, and a CTE that reads its predecessor twice doubles the
+#: query at every stage of a chain.
+MAX_GROWTH = 10
+#: The most nodes the written-in query may have, however large the query.
+MAX_NODES = 50_000
+
+
+class _Abandon(Exception):
+    """The rewrite cannot be done faithfully or cheaply; judge as written."""
+
+
 # What a rewrite of an unusual shape may raise; it then judges nothing more.
-_FAILURES = (SqlglotError, ValueError, KeyError, AttributeError, TypeError)
+_FAILURES = (
+    _Abandon,
+    SqlglotError,
+    ValueError,
+    KeyError,
+    AttributeError,
+    TypeError,
+)
 
 
 def _arg(node: exp.Expr, name: str) -> exp.Expr | None:
@@ -144,11 +166,72 @@ def _expand_ctes(tree: exp.Expr) -> None:
     expanded before it is copied, so no copy is ever resolved again out of
     its place. A recursive WITH is left as it is, and its names hide outer
     ones of the same name.
+
+    A reference with a column alias list (``FROM x AS y(t)``) renames the
+    body's outputs, by position, to its columns.
+
+    Raises:
+        _Abandon: When the copies would make the query more than
+            :data:`MAX_GROWTH` times larger (or :data:`MAX_NODES` nodes), or a
+            column list cannot be put on the body.
     """
-    _expand(tree, {})
+    size = _nodes(tree)
+    budget = _Budget(min(MAX_GROWTH * size + 1_000, MAX_NODES) - size)
+    _expand(tree, {}, budget)
 
 
-def _expand(node: exp.Expr, env: dict[str, exp.Expr | None]) -> None:
+class _Budget:
+    """Nodes the copies of CTE bodies may still add."""
+
+    def __init__(self, left: int) -> None:
+        self.left = left
+        self._sizes: dict[int, int] = {}
+
+    def spend(self, body: exp.Expr) -> None:
+        size = self._sizes.get(id(body))
+        if size is None:
+            size = self._sizes[id(body)] = _nodes(body)
+        self.left -= size
+        if self.left < 0:
+            raise _Abandon("CTE expansion over budget")
+
+
+def _nodes(node: exp.Expr) -> int:
+    return sum(1 for _ in node.walk())
+
+
+def _rename_outputs(query: exp.Expr, names: list[str]) -> None:
+    """Give *query*'s first outputs *names*, as a column alias list does.
+
+    A union's outputs are named by its first branch, so that is renamed.
+
+    Raises:
+        _Abandon: When the outputs cannot be named so: a star among them, or
+            fewer outputs than names.
+    """
+    while isinstance(query, exp.Union):
+        query = query.left
+    if not isinstance(query, exp.Select):
+        raise _Abandon("column list on a query that is no SELECT")
+    selects = query.selects
+    if len(names) > len(selects) or any(
+        isinstance(p, exp.Star) or isinstance(p.this, exp.Star) for p in selects
+    ):
+        raise _Abandon("column list the outputs cannot take")
+    query.set(
+        "expressions",
+        [
+            (
+                exp.alias_(p.this if isinstance(p, exp.Alias) else p, names[i])
+                if i < len(names)
+                else p
+            )
+            for i, p in enumerate(selects)
+        ],
+    )
+
+
+def _expand(node: exp.Expr, env: dict[str, exp.Expr | None], budget: _Budget) -> None:
     """Expand the CTE references under *node*; *env* maps a name to its body.
 
     A name mapped to None is a recursive CTE's: in sight, never written in.
@@ -161,10 +244,10 @@ def _expand(node: exp.Expr, env: dict[str, exp.Expr | None]) -> None:
             for cte in ctes:
                 env[cte.alias_or_name.lower()] = None
             for cte in ctes:
-                _expand(cte.this, env)
+                _expand(cte.this, env, budget)
         else:
             for cte in ctes:
-                _expand(cte.this, env)
+                _expand(cte.this, env, budget)
                 env[cte.alias_or_name.lower()] = cte.this
             with_.pop()
     if (
@@ -175,9 +258,15 @@ def _expand(node: exp.Expr, env: dict[str, exp.Expr | None]) -> None:
     ):
         body = env.get(node.name.lower())
         if body is not None:
+            budget.spend(body)
+            copied = body.copy()
+            alias = node.args.get("alias")
+            columns = alias.columns if isinstance(alias, exp.TableAlias) else []
+            if columns:
+                _rename_outputs(copied, [c.name for c in columns])
             node.replace(
                 exp.Subquery(
-                    this=body.copy(),
+                    this=copied,
                     alias=exp.TableAlias(
                         this=exp.to_identifier(node.alias or node.name)
                     ),
@@ -185,7 +274,7 @@ def _expand(node: exp.Expr, env: dict[str, exp.Expr | None]) -> None:
             )
         return
     for child in list(node.iter_expressions()):
-        _expand(child, env)
+        _expand(child, env, budget)
 
 
 def _union_variants(tree: exp.Expr) -> Iterator[exp.Expr]:

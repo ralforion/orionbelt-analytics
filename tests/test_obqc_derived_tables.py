@@ -450,3 +450,47 @@ def test_the_cap_holds_before_the_copies() -> None:
     assert len(variants) == MAX_VARIANTS
     # The parse is copied once to qualify it; then one copy per variant.
     assert copies["n"] <= MAX_VARIANTS + 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        f"WITH x AS (SELECT o.total {FAN_OUT}) SELECT SUM(t) FROM x AS y(t)",
+        f"WITH x AS (SELECT o.id, o.total {FAN_OUT}) SELECT SUM(u) FROM x AS y(i, u)",
+        f"WITH x AS (SELECT o.total {FAN_OUT} UNION ALL SELECT total FROM orders) "
+        "SELECT SUM(t) FROM x AS y(t)",
+    ],
+)
+def test_a_reference_renaming_the_outputs_keeps_them(
+    validator: OBQCValidator, sql: str
+) -> None:
+    """FROM x AS y(t): y.t is the body's first output, written in or not."""
+    result = validator.validate(sql, dialect="duckdb")
+    assert not result.is_valid and result.fan_trap_blocking
+
+
+def test_a_column_list_the_body_cannot_take_judges_as_written() -> None:
+    for sql in (
+        # More names than outputs.
+        f"WITH x AS (SELECT o.total {FAN_OUT}) SELECT SUM(t) FROM x AS y(t, u)",
+        # A star whose columns are not known without a schema.
+        f"WITH x AS (SELECT * {FAN_OUT}) SELECT SUM(t) FROM x AS y(t)",
+    ):
+        assert inlined(sqlglot.parse_one(sql, dialect="duckdb"), "duckdb") == []
+
+
+def _chain(stages: int) -> str:
+    """Each stage joins its predecessor to itself: twice the copies a stage."""
+    ctes = [f"s0 AS (SELECT o.total AS t {FAN_OUT})"] + [
+        f"s{i} AS (SELECT a.t FROM s{i - 1} a JOIN s{i - 1} b ON a.t = b.t)"
+        for i in range(1, stages + 1)
+    ]
+    return f"WITH {', '.join(ctes)} SELECT SUM(t) FROM s{stages}"
+
+
+def test_writing_ctes_in_has_a_budget(validator: OBQCValidator) -> None:
+    """Ten stages would copy the first body 1,024 times: judged as written."""
+    assert inlined(sqlglot.parse_one(_chain(10), dialect="duckdb"), "duckdb") == []
+    # Within the budget, the same shape is written in and judged.
+    result = validator.validate(_chain(2), dialect="duckdb")
+    assert not result.is_valid and result.fan_trap_blocking
