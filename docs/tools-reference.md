@@ -565,7 +565,7 @@ Execute a SQL query with built-in validation, fan-trap protection, and automatic
 - `rows` -- array of result rows
 - `row_count` -- number of rows returned
 - `execution_time_ms` -- query execution time in milliseconds
-- `obqc_fan_trap` -- `{evaluated, detected, blocking, findings}`, present on every response. `evaluated: false` means the rules never ran (no ontology loaded, or the request failed before validation) -- treat that as unknown, not as clean.
+- `obqc_fan_trap` -- `{evaluated, detected, blocking, findings}`, present on every response. `evaluated: false` means the rules never ran (no ontology loaded, or the request failed before validation) -- treat that as unknown, not as clean. A finding may carry `example`, a sketch of the query to write instead (see [Sketches of the fix](obqc.md#sketches-of-the-fix)).
 - `next_tool` -- suggests `generate_chart` when results contain data
 
 **Key Features:**

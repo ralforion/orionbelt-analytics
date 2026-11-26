@@ -1886,18 +1886,20 @@ class TestSingleFanOutMeasure(unittest.TestCase):
         self.assertTrue(report["evaluated"])
         self.assertTrue(report["detected"])
         self.assertTrue(report["blocking"])
+        (finding,) = report["findings"]
+        # The sketch of the fix is tests/test_fan_trap_examples.py's business.
+        example = finding.pop("example")
+        self.assertEqual(example["shape"], "semi_join")
         self.assertEqual(
-            report["findings"],
-            [
-                {
-                    "kind": "measure_across_fan_out",
-                    "measure_table": "orders",
-                    "fan_out_table": "order_items",
-                    "tables": ["order_items", "orders"],
-                    "relationship": "order_items.order_id -> orders.id",
-                    "assumed": False,
-                }
-            ],
+            finding,
+            {
+                "kind": "measure_across_fan_out",
+                "measure_table": "orders",
+                "fan_out_table": "order_items",
+                "tables": ["order_items", "orders"],
+                "relationship": "order_items.order_id -> orders.id",
+                "assumed": False,
+            },
         )
 
     def test_allow_fan_out_downgrades_to_a_warning(self):
