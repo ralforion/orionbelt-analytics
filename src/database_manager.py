@@ -999,7 +999,7 @@ class DatabaseManager:
             if user_login is not None:
                 # The signed-in user, never a principal the key names.
                 self.user_login = user_login
-                self.auth_identity = user_login.user
+                self.auth_identity = user_login.identity
             else:
                 self.auth_identity = _bigquery_principal(
                     credentials_path, credentials_json

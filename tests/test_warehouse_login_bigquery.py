@@ -149,7 +149,8 @@ async def test_a_bigquery_login_is_the_users_own_connection(monkeypatch):
         )
         managers.append(manager)
     alice, bob = managers
-    assert alice.auth_identity == ALICE
+    assert alice.auth_identity.startswith(f"{ALICE}#dialect=bigquery")
+    assert f"workforce_provider={PROVIDER}" in alice.auth_identity
     assert _get_connection_fingerprint(alice) != _get_connection_fingerprint(bob)
     first = _FakeDriver.given[0]
     assert first["credentials_path"] is None
