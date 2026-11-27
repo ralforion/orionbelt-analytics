@@ -90,3 +90,18 @@ def test_its_requests_carry_the_client_name_first(bigquery_http):
 
     agent = bigquery_http.requests[0]["headers"]["User-Agent"]
     assert agent.startswith(f"{CLIENT_NAME} gl-python/")
+
+
+def test_a_project_id_with_hyphens_connects(bigquery_http):
+    """Google's project IDs are like my-project-123; nearly all have hyphens."""
+    assert BigQueryDriver().connect(project_id="my-project-123", dataset="d")
+    assert [r["method"] for r in bigquery_http.requests] == ["POST"]
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ["-leading", "trailing-", "semi;colon", "example.com:legacy", "with space"],
+)
+def test_a_project_id_that_is_none_is_refused(bigquery_http, project_id):
+    assert not BigQueryDriver().connect(project_id=project_id, dataset="d")
+    assert bigquery_http.requests == []
