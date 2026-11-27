@@ -533,7 +533,9 @@ class ConfigManager:
                 f"Must be one of: {', '.join(sorted(valid_transports))}"
             )
 
-        self.get_auth_config().validate()
+        auth = self.get_auth_config()
+        auth.validate()
+        self._validate_user_logins(auth.mode)
 
         # Validate port range
         if not (1 <= config.mcp_server_port <= 65535):
@@ -543,6 +545,32 @@ class ConfigManager:
             )
 
         logger.info("Server configuration validated successfully")
+
+    @staticmethod
+    def _validate_user_logins(auth_mode: str) -> None:
+        """Refuse a database set to log in as the user that cannot.
+
+        Raises:
+            ValueError: ``DB_<NAME>_AUTH=user`` without ``MCP_AUTH=jwt``, on a
+                database that cannot, or without what it needs. An unusable
+                ``OBA_DATABASES`` is left to ``connect_database`` to report, as
+                it is today.
+        """
+        from .database_registry import (
+            DatabaseConfigError,
+            LoginConfigError,
+            configured_databases,
+        )
+        from .warehouse_login import check_sources
+
+        try:
+            entries = configured_databases()
+        except LoginConfigError:
+            raise
+        except DatabaseConfigError:
+            return
+        for warning in check_sources(entries, auth_mode):
+            logger.warning(warning)
 
     def validate_db_config(self, db_type: str) -> dict[str, Any]:
         """Validate database configuration for a specific type."""

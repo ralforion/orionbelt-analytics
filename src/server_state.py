@@ -39,6 +39,7 @@ from .paths import (
 )
 from .session import ConnectionRuntime, SessionData
 from .utils import is_stateless_era, utc_now
+from .warehouse_login import UserLogin
 from .workspace import workspace_identity
 
 logger = logging.getLogger(__name__)
@@ -239,6 +240,11 @@ def adopt_legacy_workspace(
     Returns:
         Names of the directories that were adopted, for the log.
     """
+    if isinstance(getattr(db_manager, "user_login", None), UserLogin):
+        # A connection that logs in as the user is that user's own. A workspace
+        # from before -- shared, built on the service login -- would hand them
+        # the service account's view of the schema.
+        return []
     legacy_id = _legacy_connection_fingerprint(db_manager)
     if not legacy_id or legacy_id == connection_id:
         return []
@@ -1010,6 +1016,28 @@ def get_session_data(ctx: Context) -> SessionData:
         "connect_database and pass the connection handle it returns as the "
         "`connection` argument of every following call."
     )
+
+
+def peek_session_data(ctx: Context) -> SessionData | None:
+    """The session this request belongs to, if it already exists; never creates one.
+
+    Resolved as :func:`get_session_data` resolves it, but without its side
+    effects: no session is created for a new transport session, and nothing
+    raises -- a request that belongs to no session, or to another user's,
+    gets None.
+    """
+    user = current_user()
+    handle = _requested_handle.get()
+    if handle is not None:
+        session = _server_state.peek_handle(handle)
+        return session if session is not None and session.owner == user else None
+    session_id = _transport_session_id(ctx)
+    if session_id is not None:
+        session = _server_state.peek_session(session_id)
+        return session if session is not None and session.owner == user else None
+    if _sessionless_fallback_enabled():
+        return _server_state.sole_session(owner=user)
+    return None
 
 
 def _sessionless_fallback_enabled() -> bool:

@@ -227,6 +227,16 @@ def user_key(token: AccessToken | None) -> str | None:
     return f"{token.claims.get('iss', '')}|{subject}"
 
 
+def current_bearer() -> str | None:
+    """The current request's verified bearer token, as the client sent it.
+
+    What a connection that logs in as the user exchanges for a warehouse
+    token. None outside a request, or without authentication. Never log it.
+    """
+    token = get_access_token()
+    return token.token if token is not None and token.token else None
+
+
 def current_user() -> str | None:
     """The authenticated caller of the current request, or None if anonymous.
 

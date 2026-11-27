@@ -7,24 +7,57 @@ from typing import Any
 from fastmcp import Context
 
 from ..async_utils import run_db
+from ..auth import current_bearer, current_user
 from ..constants import SUPPORTED_DB_TYPES
 from ..database_manager import DatabaseManager
 from ..database_registry import (
     DatabaseConfigError,
+    DatabaseEntry,
     configured_databases,
     find_database,
     unnamed_entry,
 )
-from ..exceptions import ConnectionError, ValidationError
+from ..exceptions import ConnectionError, SignInError, ValidationError
 from ..handler_context import HandlerContext
 from ..lifecycle.metadata import mutate_workspace_metadata
 from ..paths import OUTPUT_DIR
 from ..session import ConnectionRuntime, SessionData
 from ..utils import notify_client, utc_now
+from ..warehouse_login import (
+    DataSourceSignInError,
+    LoginSource,
+    SignInInteractionRequiredError,
+    SignInRequiredError,
+    UserLogin,
+)
 from ..workspace import detect_workspace, format_workspace_summary
 from .workspace import _format_restore_summary, _restore_workspace_core
 
 logger = logging.getLogger(__name__)
+
+
+async def _sign_in(entry: DatabaseEntry) -> UserLogin | dict[str, Any]:
+    """Log in to *entry* as the caller, before connecting: their login, or why not.
+
+    The caller's verified token is exchanged for a warehouse token now, so a
+    caller who may not use the database is told before anything connects.
+    """
+    user = current_user()
+    login = UserLogin(LoginSource.from_entry(entry), user or "")
+    try:
+        if user is None:
+            raise SignInRequiredError(
+                f"Database '{entry.name}' runs queries as the signed-in user; "
+                "connect with the identity provider's access token (an MCP "
+                "client signed in to this server), not without one."
+            )
+        await login.renew(user, current_bearer())
+    except DataSourceSignInError as error:
+        claims = (
+            error.claims if isinstance(error, SignInInteractionRequiredError) else None
+        )
+        return SignInError(error.message, error.code, claims).to_response()
+    return login
 
 
 def _restore_lock(
@@ -78,7 +111,20 @@ async def connect_database(
                 f"Invalid database type '{db_type}'. "
                 f"Use one of: {', '.join(SUPPORTED_DB_TYPES)}."
             ).to_response()
-        entry = unnamed_entry(db_type)
+        # A type with named connections is those connections: its unprefixed
+        # variables are only their shared defaults, and connecting with them
+        # would step around how each one signs in (DB_<NAME>_AUTH=user).
+        of_type = [e for e in configured if e.db_type == db_type]
+        if len(of_type) == 1:
+            entry = of_type[0]
+        elif of_type:
+            names = ", ".join(e.name for e in of_type)
+            return ValidationError(
+                f"Several {db_type} databases are configured: {names}. Pass "
+                "database=<name>; list_databases says what each holds."
+            ).to_response()
+        else:
+            entry = unnamed_entry(db_type)
     elif len(configured) == 1:
         entry = configured[0]
     else:
@@ -303,16 +349,26 @@ async def connect_database(
     elif db_type == "databricks":
         server_hostname = env("DATABRICKS_SERVER_HOSTNAME")
         http_path = env("DATABRICKS_HTTP_PATH")
-        access_token = env("DATABRICKS_ACCESS_TOKEN")
         catalog = env("DATABRICKS_CATALOG", "hive_metastore")
         schema = env("DATABRICKS_SCHEMA", "default")
         configured_schema = schema
+        user_login: UserLogin | None = None
+        access_token: str | None = None
+        if entry.logs_in_as_user:
+            # Each user's own token, not the server's: none is configured.
+            signed_in = await _sign_in(entry)
+            if not isinstance(signed_in, UserLogin):
+                return signed_in
+            user_login = signed_in
+        else:
+            access_token = env("DATABRICKS_ACCESS_TOKEN")
 
         required_params = {
             "DATABRICKS_SERVER_HOSTNAME": server_hostname,
             "DATABRICKS_HTTP_PATH": http_path,
-            "DATABRICKS_ACCESS_TOKEN": access_token,
         }
+        if user_login is None:
+            required_params["DATABRICKS_ACCESS_TOKEN"] = access_token
         missing_params = [k for k, v in required_params.items() if not v]
         if missing_params:
             return ValidationError(
@@ -324,9 +380,10 @@ async def connect_database(
             db_manager.connect_databricks,
             server_hostname=str(server_hostname),
             http_path=str(http_path),
-            access_token=str(access_token),
+            access_token=access_token,
             catalog=catalog,
             schema=schema,
+            user_login=user_login,
         )
         db_name = f"{catalog}.{schema}"
 

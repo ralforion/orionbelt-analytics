@@ -245,6 +245,9 @@ class DatabaseManager:
         # schema cache or its workspace. Kept off connection_info, which is
         # shown and written to disk; only a digest reaches the fingerprint.
         self.auth_identity: str | None = None
+        # The signed-in user's warehouse sign-in, for a connection that logs
+        # in as the user (DB_<NAME>_AUTH=user); renewed before every call.
+        self.user_login: Any = None
 
         # Security and performance
         self._credential_manager = SecureCredentialManager()
@@ -342,6 +345,7 @@ class DatabaseManager:
         # Whatever the previous connection signed in as no longer applies;
         # the connect method that called this records the new identity.
         self.auth_identity = None
+        self.user_login = None
         self._metadata_cache.clear()
         logger.debug("Activated new driver; metadata cache invalidated")
 
@@ -557,6 +561,12 @@ class DatabaseManager:
                 params["access_token"],
                 params.get("catalog", "hive_metastore"),
                 params.get("schema", "default"),
+                # A user login reconnects with its own renewed token.
+                **(
+                    {"user_login": params["user_login"]}
+                    if params.get("user_login") is not None
+                    else {}
+                ),
             )
         elif params["type"] == "mysql":
             success = self.connect_mysql(
@@ -1021,11 +1031,18 @@ class DatabaseManager:
         self,
         server_hostname: str,
         http_path: str,
-        access_token: str,
+        access_token: str | None,
         catalog: str = "hive_metastore",
         schema: str = "default",
+        user_login: Any = None,
     ) -> bool:
-        """Connect to Databricks SQL."""
+        """Connect to Databricks SQL.
+
+        With *user_login* (a :class:`~src.warehouse_login.UserLogin`), as the
+        signed-in user: every connection opens with that user's current
+        warehouse token, and the connection is theirs -- its identity is the
+        user, so no other user shares its runtime, schema cache or workspace.
+        """
         from .drivers.databricks import DatabricksDriver
 
         driver = DatabricksDriver(
@@ -1035,7 +1052,8 @@ class DatabaseManager:
         success = driver.connect(
             server_hostname=server_hostname,
             http_path=http_path,
-            access_token=access_token,
+            access_token=None if user_login is not None else access_token,
+            token_provider=user_login.token if user_login is not None else None,
             catalog=catalog,
             schema=schema,
         )
@@ -1059,15 +1077,25 @@ class DatabaseManager:
                 "type": "databricks",
                 "server_hostname": server_hostname,
                 "http_path": http_path,
-                "access_token": access_token,
+                # A user login keeps no token here: it renews its own.
+                "access_token": None if user_login is not None else access_token,
                 "catalog": catalog,
                 "schema": schema,
+                "user_login": user_login,
             }
-            # The user behind the token, so a rotated token keeps its
-            # workspace; the token itself when the warehouse will not say.
-            self.auth_identity = self._query_principal(
-                "SELECT current_user() AS principal"
-            ) or self._credential_digest(access_token)
+            if user_login is not None:
+                # The signed-in user (issuer and subject) and how the
+                # connection signs in -- never the warehouse token, which
+                # changes every hour and would rename the workspace, and never
+                # a name the warehouse reports.
+                self.user_login = user_login
+                self.auth_identity = user_login.identity
+            else:
+                # The user behind the token, so a rotated token keeps its
+                # workspace; the token itself when the warehouse will not say.
+                self.auth_identity = self._query_principal(
+                    "SELECT current_user() AS principal"
+                ) or self._credential_digest(str(access_token))
         return success
 
     def connect_mysql(
@@ -1714,4 +1742,5 @@ class DatabaseManager:
         self._last_connection_params = None
         self._dremio_rest_connection = None
         self.auth_identity = None
+        self.user_login = None
         logger.info("Database connection closed and parameters cleared")
