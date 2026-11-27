@@ -60,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   right answers through.
 
 ### Fixed
+- **BigQuery project IDs with hyphens** -- nearly all of them, Google's IDs
+  being like `my-project-123` -- were refused as invalid identifiers, so most
+  projects could not be connected to at all. They are accepted now, hyphens
+  not at either end; a legacy domain-scoped ID (`example.com:project`) is
+  still refused.
 - **Databricks connections**: databricks-sql-connector 4.0 moved its
   SQLAlchemy dialect into a package of its own, so with the 4.x connector the
   dependency resolves to, `create_engine("databricks://")` had no dialect to
