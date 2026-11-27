@@ -32,6 +32,11 @@ from .constants import SUPPORTED_DB_TYPES
 
 DATABASES_VARIABLE = "OBA_DATABASES"
 
+#: ``DB_<NAME>_AUTH``: how a named connection signs in to its database.
+SERVICE_LOGIN = "service"
+USER_LOGIN = "user"
+LOGIN_MODES = (SERVICE_LOGIN, USER_LOGIN)
+
 # The variable whose presence means a type is configured without a name.
 _PRESENCE_VARIABLES: dict[str, tuple[str, ...]] = {
     "postgresql": ("POSTGRES_HOST",),
@@ -122,6 +127,35 @@ class DatabaseEntry:
                 return value
         return self.environ.get(variable, default)
 
+    def login_setting(self, variable: str) -> str | None:
+        """A sign-in setting of this connection's own: ``DB_<NAME>_<VARIABLE>``.
+
+        Never the unprefixed variable, unlike :meth:`getenv`, and never for a
+        connection without a name: a bare ``AUTH`` or ``OAUTH_SCOPE`` in the
+        environment is too easy to collide with, and must not switch every
+        database to logging in as the user.
+
+        Args:
+            variable: ``AUTH``, ``OAUTH_SCOPE``, ...
+
+        Returns:
+            The value, stripped, or None when it is not set or empty.
+        """
+        if not self.prefix:
+            return None
+        value = self.environ.get(f"{self.prefix}{variable}", "").strip()
+        return value or None
+
+    @property
+    def login(self) -> str:
+        """``user`` when queries run as the signed-in user, else ``service``."""
+        return (self.login_setting("AUTH") or SERVICE_LOGIN).lower()
+
+    @property
+    def logs_in_as_user(self) -> bool:
+        """Whether queries on it run as the signed-in user (``DB_<NAME>_AUTH=user``)."""
+        return self.login == USER_LOGIN
+
     def describe(self) -> dict[str, str]:
         """What may be shown about it: name, type, description and target.
 
@@ -131,6 +165,10 @@ class DatabaseEntry:
         shown = {"name": self.name, "type": self.db_type}
         if self.description:
             shown["description"] = self.description
+        if self.logs_in_as_user:
+            # The model should know a user's grants apply, and that a caller
+            # without a token is refused.
+            shown["login"] = "as the signed-in user"
         for variable in _DISPLAY_VARIABLES.get(self.db_type, ()):
             value = self.getenv(variable)
             if value:
@@ -141,6 +179,14 @@ class DatabaseEntry:
 
 class DatabaseConfigError(ValueError):
     """The named connections in the environment are not usable as written."""
+
+
+class LoginConfigError(DatabaseConfigError):
+    """A named connection's ``DB_<NAME>_AUTH`` is no login mode.
+
+    Stops the server at startup: read as the default, it would leave a
+    database on the service login its operator meant to turn off.
+    """
 
 
 def configured_databases(
@@ -202,6 +248,14 @@ def configured_databases(
             raise DatabaseConfigError(
                 f"Database '{name}' has unsupported type '{db_type}' "
                 f"({prefix}TYPE); use one of {', '.join(SUPPORTED_DB_TYPES)}"
+            )
+        login = env.get(f"{prefix}AUTH", "").strip().lower() or SERVICE_LOGIN
+        if login not in LOGIN_MODES:
+            # Fail closed: a typo must not leave a source on the service login
+            # its operator meant to turn off.
+            raise LoginConfigError(
+                f"Database '{name}' has unknown {prefix}AUTH='{login}'; use one "
+                f"of {', '.join(LOGIN_MODES)}"
             )
         entries.append(
             DatabaseEntry(

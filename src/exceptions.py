@@ -5,6 +5,7 @@ that replace ad-hoc string-based error_type fields.
 """
 
 from enum import StrEnum
+from typing import ClassVar
 
 
 class ErrorType(StrEnum):
@@ -25,6 +26,7 @@ class ErrorType(StrEnum):
     SESSION = "session_required"
     UNKNOWN_CONNECTION = "unknown_connection"
     BUSY = "connection_busy"
+    SIGN_IN = "data_source_sign_in"
 
 
 class OrionBeltError(Exception):
@@ -121,3 +123,45 @@ class ConnectionBusyError(OrionBeltError):
     """
 
     error_type = ErrorType.BUSY
+
+
+class SignInError(OrionBeltError):
+    """Logging in to a database as the user failed; what the user must do.
+
+    The response carries the sign-in ``code`` (``SIGN_IN_REQUIRED``,
+    ``DATA_SOURCE_SIGN_IN_REFUSED``, ``DATA_SOURCE_SIGN_IN_INTERACTION_REQUIRED``,
+    ``DATA_SOURCE_SIGN_IN_UNAVAILABLE``) and, for an identity provider that
+    wants the user at its sign-in page, its claims challenge.
+    """
+
+    error_type = ErrorType.SIGN_IN
+
+    _SUGGESTIONS: ClassVar[dict[str, list[str]]] = {
+        "SIGN_IN_REQUIRED": [
+            "This database runs queries as the signed-in user: sign in to the "
+            "server with your identity provider, then try again."
+        ],
+        "DATA_SOURCE_SIGN_IN_INTERACTION_REQUIRED": [
+            "Sign in again in your MCP client (multi-factor authentication, a "
+            "consent or an access policy asks for it), then try again."
+        ],
+        "DATA_SOURCE_SIGN_IN_REFUSED": [
+            "Your account may not have access to this database; ask its "
+            "administrator."
+        ],
+        "DATA_SOURCE_SIGN_IN_UNAVAILABLE": [
+            "The database's sign-in service did not answer; try again shortly."
+        ],
+    }
+
+    def __init__(self, message: str, code: str, claims: str | None = None):
+        super().__init__(message, suggestions=list(self._SUGGESTIONS.get(code, [])))
+        self.code = code
+        self.claims = claims
+
+    def to_response(self) -> dict:
+        response = super().to_response()
+        response["code"] = self.code
+        if self.claims:
+            response["claims"] = self.claims
+        return response
