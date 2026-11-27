@@ -20,8 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token, or one the warehouse refuses, gets a sign-in error with a code
   (`SIGN_IN_REQUIRED`, `DATA_SOURCE_SIGN_IN_REFUSED`, ...). Startup refuses
   a connection that cannot log in as the user. Setting names and codes are
-  those of OrionBelt Semantic Layer; Snowflake and BigQuery follow. See
-  docs/warehouse-sso.md.
+  those of OrionBelt Semantic Layer. See docs/warehouse-sso.md.
+- **Warehouse single sign-on for Snowflake** (External OAuth): the identity
+  provider issues the Snowflake token, asked by this server's own client
+  there (`MCP_AUTH_CLIENT_ID`, `MCP_AUTH_CLIENT_SECRET` or
+  `_SECRET_FILE`) through Entra ID's on-behalf-of flow or the standard
+  token exchange of Okta and Keycloak (`DB_<NAME>_OAUTH_EXCHANGE`,
+  `_OAUTH_SCOPE`, `_OAUTH_AUDIENCE`). The token says who connects; each
+  connection the pool opens reads the current one. The token endpoint is
+  read from the issuer's discovery document when a login needs it.
 - **Scopes from any claim, scopes per tool, and OIDC discovery** for
   `MCP_AUTH=jwt`. `MCP_AUTH_SCOPE_CLAIMS` names the claims that carry scopes
   or roles (default `scope,scp,roles`; a dot reaches into an object, as

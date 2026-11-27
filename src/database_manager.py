@@ -518,6 +518,12 @@ class DatabaseManager:
                 params["database"],
                 params.get("schema", "PUBLIC"),
                 params.get("role"),
+                # A user login reconnects with its own renewed token.
+                **(
+                    {"user_login": params["user_login"]}
+                    if params.get("user_login") is not None
+                    else {}
+                ),
             )
         elif params["type"] == "clickhouse":
             success = self.connect_clickhouse(
@@ -737,24 +743,33 @@ class DatabaseManager:
     def connect_snowflake(
         self,
         account: str,
-        username: str,
-        password: str,
+        username: str | None,
+        password: str | None,
         warehouse: str,
         database: str,
         schema: str = "PUBLIC",
         role: str | None = None,
+        user_login: Any = None,
     ) -> bool:
-        """Connect to Snowflake database with enhanced security and reliability."""
+        """Connect to Snowflake database with enhanced security and reliability.
+
+        With *user_login* (a :class:`~src.warehouse_login.UserLogin`), as the
+        signed-in user, by External OAuth: no user or password, the user's
+        current token on every connection, and the connection theirs alone.
+        """
         from .drivers.snowflake import SnowflakeDriver
 
         driver = SnowflakeDriver(
             pool_size=self._connection_pool_size,
             max_overflow=self._max_overflow,
         )
+        if user_login is not None:
+            username = password = None
         success = driver.connect(
             account=account,
             username=username,
             password=password,
+            token_provider=user_login.token if user_login is not None else None,
             warehouse=warehouse,
             database=database,
             schema=schema,
@@ -783,7 +798,13 @@ class DatabaseManager:
                 "database": database,
                 "schema": schema,
                 "role": role,
+                "user_login": user_login,
             }
+            if user_login is not None:
+                # The signed-in user and how the connection signs in, as for
+                # Databricks: never the token.
+                self.user_login = user_login
+                self.auth_identity = user_login.identity
         return success
 
     def connect_clickhouse(

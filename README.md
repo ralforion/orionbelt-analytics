@@ -273,7 +273,7 @@ and checks only the SHA and comment format.
 | -------------------------------------------------- | ----------------------------------------------------------------------------- |
 | [Tools Reference](docs/tools-reference.md)         | Full parameter docs, return values, and usage examples                        |
 | [Configuration](docs/configuration.md)             | Environment variables, transport setup, troubleshooting                       |
-| [Warehouse SSO](docs/warehouse-sso.md)             | Running each user's queries as that user (Databricks)                         |
+| [Warehouse SSO](docs/warehouse-sso.md)             | Running each user's queries as that user (Databricks, Snowflake)              |
 | [GraphRAG](docs/graphrag.md)                       | Graph-based schema intelligence and OBML workflow                             |
 | [OBQC Overview](docs/obqc-overview.md)             | Short explanation of how OBQC works inside OrionBelt Analytics                |
 | [OBQC](docs/obqc.md)                               | Validation rules, severity levels, blocking behavior, annotation requirements |

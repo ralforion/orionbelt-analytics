@@ -12,7 +12,7 @@ guide serves both.
 | Database | How the user's token becomes a warehouse token | This release |
 | --- | --- | --- |
 | Databricks | OAuth token federation: an RFC 8693 exchange at the workspace's `/oidc/v1/token` | yes |
-| Snowflake | External OAuth: the identity provider issues it (Entra ID on-behalf-of, or RFC 8693 at Okta or Keycloak) | not yet |
+| Snowflake | External OAuth: the identity provider issues it (Entra ID on-behalf-of, or RFC 8693 at Okta or Keycloak) | yes |
 | BigQuery | Workforce identity federation at Google's security token service | not yet |
 
 Other databases keep the service login.
@@ -42,16 +42,36 @@ DB_FINANCE_DATABRICKS_SCHEMA=gold
 | --- | --- |
 | `DB_<NAME>_AUTH` | `service` (default) or `user` |
 | `DB_<NAME>_OAUTH_CLIENT_ID` | Databricks: only for a service-principal federation policy |
+| `DB_<NAME>_OAUTH_EXCHANGE` | Snowflake: `entra_obo` (Entra ID's on-behalf-of flow) or `token_exchange` (RFC 8693: Okta, Keycloak) |
+| `DB_<NAME>_OAUTH_SCOPE` | Snowflake: what to ask for, e.g. `api://<Snowflake app ID>/session:role-any`, `session:role:ANALYST`; required for `entra_obo` |
+| `DB_<NAME>_OAUTH_AUDIENCE` | Snowflake with `token_exchange`: Okta's authorization server audience, Keycloak's target client |
+
+Snowflake's token is issued by the identity provider, asked by this server as
+its own confidential client there -- the client the users' tokens are issued
+for, so the one `MCP_AUTH_AUDIENCE` names (Entra ID and Keycloak exchange only
+for that client):
+
+| Setting | Meaning |
+| --- | --- |
+| `MCP_AUTH_CLIENT_ID` | Our client at the identity provider |
+| `MCP_AUTH_CLIENT_SECRET` or `MCP_AUTH_CLIENT_SECRET_FILE` | Its secret; a file for mounted secrets. Never logged |
+| `MCP_AUTH_TOKEN_ENDPOINT` | The identity provider's token endpoint; read from its discovery document when not set |
 
 The server does not start when a connection with `AUTH=user`:
 
 - runs without `MCP_AUTH=jwt` (there is no user to log in as);
 - is a database that cannot log in as the user in this release;
-- lacks `DATABRICKS_SERVER_HOSTNAME` or `DATABRICKS_HTTP_PATH`;
+- lacks `DATABRICKS_SERVER_HOSTNAME` or `DATABRICKS_HTTP_PATH` (Databricks);
+- lacks an `OAUTH_EXCHANGE` it knows, our client (`MCP_AUTH_CLIENT_ID` and
+  its secret), the scope Entra's flow needs, or `SNOWFLAKE_ACCOUNT`,
+  `SNOWFLAKE_WAREHOUSE` and `SNOWFLAKE_DATABASE` (Snowflake);
+- needs the identity provider's token endpoint, and neither
+  `MCP_AUTH_TOKEN_ENDPOINT` nor the discovery document names one;
 - has an `AUTH` value that is neither `service` nor `user`.
 
-A `DATABRICKS_ACCESS_TOKEN` it would otherwise read is ignored, and the log
-says so.
+The credentials it would otherwise read -- `DATABRICKS_ACCESS_TOKEN`,
+`SNOWFLAKE_USERNAME`, `SNOWFLAKE_PASSWORD` -- are ignored, and the log says
+so.
 
 ## Databricks
 
@@ -69,6 +89,40 @@ ID as `DB_<NAME>_OAUTH_CLIENT_ID`.
 The server asks for the `all-apis` scope. The token sits in no connection
 string: it is set as each connection opens, and Databricks connections are not
 pooled, so every query reads the current one.
+
+## Snowflake
+
+Snowflake trusts the identity provider through an **External OAuth security
+integration**, which names its issuer, its key set, the audience of the
+Snowflake tokens, and which token claim matches which Snowflake user, for
+example:
+
+```sql
+CREATE SECURITY INTEGRATION oba_external_oauth
+  TYPE = EXTERNAL_OAUTH
+  ENABLED = TRUE
+  EXTERNAL_OAUTH_TYPE = AZURE  -- or OKTA, CUSTOM
+  EXTERNAL_OAUTH_ISSUER = 'https://sts.windows.net/<tenant>/'
+  EXTERNAL_OAUTH_JWS_KEYS_URL = 'https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys'
+  EXTERNAL_OAUTH_AUDIENCE_LIST = ('api://<Snowflake app ID>')
+  EXTERNAL_OAUTH_TOKEN_USER_MAPPING_CLAIM = 'upn'
+  EXTERNAL_OAUTH_SNOWFLAKE_USER_MAPPING_ATTRIBUTE = 'login_name';
+```
+
+See Snowflake's External OAuth documentation for your identity provider; the
+values above are Entra ID's shape. Every user who signs in needs a Snowflake
+user whose login name matches the claim.
+
+- **Entra ID** (`entra_obo`): register a Snowflake resource application with
+  a `session:role-any` (or per-role) scope, give our client permission to it,
+  and set `DB_<NAME>_OAUTH_SCOPE=api://<Snowflake app ID>/session:role-any`.
+- **Okta, Keycloak** (`token_exchange`): allow our client the token exchange
+  for the Snowflake audience, and set `DB_<NAME>_OAUTH_AUDIENCE` (and a
+  `session:role:<ROLE>` scope where the integration expects one).
+
+`SNOWFLAKE_ROLE`, when set, is still requested; otherwise the user's default
+role applies. The connection pool is kept: each connection it opens, or
+reopens when the check on checkout finds one gone, reads the current token.
 
 ## Who the connection is
 

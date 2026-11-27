@@ -7,7 +7,7 @@ from typing import Any
 from fastmcp import Context
 
 from ..async_utils import run_db
-from ..auth import current_bearer, current_user
+from ..auth import current_bearer, current_user, sign_in_client
 from ..constants import SUPPORTED_DB_TYPES
 from ..database_manager import DatabaseManager
 from ..database_registry import (
@@ -43,7 +43,15 @@ async def _sign_in(entry: DatabaseEntry) -> UserLogin | dict[str, Any]:
     caller who may not use the database is told before anything connects.
     """
     user = current_user()
-    login = UserLogin(LoginSource.from_entry(entry), user or "")
+    # Our own client at the identity provider, for a database whose token it
+    # issues (Snowflake); the others exchange at the warehouse.
+    idp, token_endpoint = sign_in_client()
+    login = UserLogin(
+        LoginSource.from_entry(entry),
+        user or "",
+        idp=idp,
+        token_endpoint=token_endpoint,
+    )
     try:
         if user is None:
             raise SignInRequiredError(
@@ -194,22 +202,32 @@ async def connect_database(
 
     elif db_type == "snowflake":
         account = env("SNOWFLAKE_ACCOUNT")
-        username = env("SNOWFLAKE_USERNAME")
-        password = env("SNOWFLAKE_PASSWORD")
         warehouse = env("SNOWFLAKE_WAREHOUSE")
         database = env("SNOWFLAKE_DATABASE")
         schema = env("SNOWFLAKE_SCHEMA", "PUBLIC")
         # Unset leaves the role to the user's default role in Snowflake.
         role = env("SNOWFLAKE_ROLE") or None
         configured_schema = schema
+        snowflake_login: UserLogin | None = None
+        username = password = None
+        if entry.logs_in_as_user:
+            # External OAuth: the user's token says who connects.
+            signed_in = await _sign_in(entry)
+            if not isinstance(signed_in, UserLogin):
+                return signed_in
+            snowflake_login = signed_in
+        else:
+            username = env("SNOWFLAKE_USERNAME")
+            password = env("SNOWFLAKE_PASSWORD")
 
         required_params = {
             "SNOWFLAKE_ACCOUNT": account,
-            "SNOWFLAKE_USERNAME": username,
-            "SNOWFLAKE_PASSWORD": password,
             "SNOWFLAKE_WAREHOUSE": warehouse,
             "SNOWFLAKE_DATABASE": database,
         }
+        if snowflake_login is None:
+            required_params["SNOWFLAKE_USERNAME"] = username
+            required_params["SNOWFLAKE_PASSWORD"] = password
         missing_params = [k for k, v in required_params.items() if not v]
         if missing_params:
             return ValidationError(
@@ -220,12 +238,13 @@ async def connect_database(
         success = await run_db(
             db_manager.connect_snowflake,
             account=str(account),
-            username=str(username),
-            password=str(password),
+            username=username,
+            password=password,
             warehouse=str(warehouse),
             database=str(database),
             schema=schema,
             role=role,
+            user_login=snowflake_login,
         )
         db_name = str(database)
 
